@@ -26,7 +26,8 @@ app_license = "mit"
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/ai_erpnext/css/ai_erpnext.css"
-# app_include_js = "/assets/ai_erpnext/js/ai_erpnext.js"
+# Bundled (content-hashed URL) so browsers never run a stale cached copy.
+app_include_js = "ai_erpnext.bundle.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/ai_erpnext/css/ai_erpnext.css"
@@ -260,3 +261,11 @@ doc_events = {
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
+# AI Document Entry is a custom (DB) DocType, and Frappe ignores doctype_js for custom
+# DocTypes, so its form script (ai_document_entry.js) is loaded via app_include_js above.
+
+after_migrate = ["ai_erpnext.setup_doctypes.ensure_ai_document_entry_schema"]
+
+# Other apps may add AI document definitions: list of modules calling
+# ai_erpnext.registry.document_registry.register() on import.
+ai_document_definitions = []

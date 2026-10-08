@@ -72,3 +72,63 @@ def create_ai_provider_settings():
             "permissions": [{"role": "System Manager", "read": 1, "write": 1, "create": 1}]
         })
         doc.insert()
+
+
+# --------------------------------------------------------------------------------------
+# Review/mapping fields on AI Document Entry (idempotent; run from after_migrate)
+# --------------------------------------------------------------------------------------
+AI_DOCUMENT_ENTRY_FIELDS = [
+	# (fieldname, definition, insert_after)
+	("created_document", {"label": "Created Document", "fieldtype": "Dynamic Link", "options": "target_doctype", "read_only": 1}, "target_doctype"),
+	("requires_review", {"label": "Requires Review", "fieldtype": "Check", "default": "0", "read_only": 1}, "created_document"),
+	("duplicate", {"label": "Possible Duplicate", "fieldtype": "Check", "default": "0", "read_only": 1}, "requires_review"),
+	("mapping_results", {"label": "Mapping Results", "fieldtype": "Code", "options": "JSON", "read_only": 1}, "mapped_data"),
+	("validation_results", {"label": "Validation Results", "fieldtype": "Code", "options": "JSON", "read_only": 1}, "mapping_results"),
+	("review_overrides", {"label": "Review Corrections", "fieldtype": "Code", "options": "JSON", "read_only": 1, "hidden": 1}, "validation_results"),
+]
+
+
+def ensure_ai_document_entry_schema():
+	if not frappe.db.exists("DocType", "AI Document Entry"):
+		return
+	from ai_erpnext.constants import DocumentStatus
+
+	doc = frappe.get_doc("DocType", "AI Document Entry")
+	if not doc.custom:
+		return
+	changed = False
+	by_name = {f.fieldname: f for f in doc.fields}
+
+	status = by_name.get("status")
+	if status:
+		options = [o for o in (status.options or "").split("\n") if o]
+		missing = [s for s in DocumentStatus.ALL if s not in options]
+		if missing:
+			status.options = "\n".join(options + missing)
+			changed = True
+
+	for fieldname, definition, after in AI_DOCUMENT_ENTRY_FIELDS:
+		field = by_name.get(fieldname)
+		if field:
+			for key, value in definition.items():
+				if str(field.get(key) or "") != str(value):
+					field.set(key, value)
+					changed = True
+			continue
+		new_field = doc.append("fields", {"fieldname": fieldname, **definition})
+		# move right after `after`
+		doc.fields.remove(new_field)
+		index = next((i for i, f in enumerate(doc.fields) if f.fieldname == after), len(doc.fields) - 1)
+		doc.fields.insert(index + 1, new_field)
+		by_name[fieldname] = new_field
+		changed = True
+
+	if changed:
+		for i, f in enumerate(doc.fields, start=1):
+			f.idx = i
+		doc.save()
+
+	# The form UI now lives in public/js/ai_document_entry.js (app_include_js); the old
+	# DB Client Script would add a second, unvalidated button.
+	if frappe.db.get_value("Client Script", "AI Document Entry UI", "enabled"):
+		frappe.db.set_value("Client Script", "AI Document Entry UI", "enabled", 0)

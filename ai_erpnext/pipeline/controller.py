@@ -61,13 +61,20 @@ def run_ai_pipeline(doc_name):
         doc.extracted_data = json.dumps(extracted, indent=4)
         
         print("\n[AI PIPELINE]: Mapping extracted data to ERPNext Masters...")
-        mapper = ERPNextMapper()
-        mapped = mapper.map_document(extracted)
-        
-        doc.mapped_data = json.dumps(mapped, indent=4)
-        doc.status = "Processed"
-        print(f"[AI PIPELINE]: Successfully processed AI Document Entry: {doc.name}\n")
-        logger.info(f"Successfully mapped document {doc.name}")
+        # Registry-driven master mapping + validation. Sets target_doctype, mapped_data,
+        # mapping_results, validation_results and the review status. A mapping failure
+        # must never discard the extraction, so it is handled separately.
+        from ai_erpnext.pipeline.review_service import apply_mapping
+        try:
+            apply_mapping(doc)
+        except Exception as map_error:
+            logger.exception(f"Mapping failed for {doc.name}")
+            frappe.log_error(title=f"AI mapping failed for {doc.name}")
+            doc.status = "Needs Review"
+            doc.requires_review = 1
+            doc.error_log = f"Mapping failed: {map_error}"
+        print(f"[AI PIPELINE]: Successfully processed AI Document Entry: {doc.name} -> {doc.status}\n")
+        logger.info(f"Successfully mapped document {doc.name} -> {doc.status}")
         
     except Exception as e:
         print(f"\n[AI PIPELINE ERROR]: {str(e)}\n")
