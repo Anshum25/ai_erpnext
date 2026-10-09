@@ -63,6 +63,15 @@ class SalesInvoiceAdapter(BaseAdapter):
 			"items": [],
 		}
 
+		# Prompt B2 also lists tax components (e.g. CGST + SGST) under "taxes"; use their
+		# sum only when the document-level tax_amount is missing.
+		taxes = data.get("taxes")
+		if canonical["tax_amount"] is None and isinstance(taxes, list):
+			amounts = [parse_number(t.get("amount")) for t in taxes if isinstance(t, dict)]
+			amounts = [a for a in amounts if a is not None]
+			if amounts:
+				canonical["tax_amount"] = sum(amounts)
+
 		for idx, row in enumerate(items_raw[:MAX_ITEMS], start=1):
 			if not isinstance(row, dict):
 				continue

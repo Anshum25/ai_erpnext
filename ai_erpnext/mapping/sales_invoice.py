@@ -13,6 +13,17 @@ from ai_erpnext.mapping.uom import UOMMatcher
 from ai_erpnext.mapping.warehouse import WarehouseMatcher
 
 
+class TaxTemplateMatcher(BaseMatcher):
+	"""Existing Sales Taxes and Charges Template of the invoice's company (chosen by the user)."""
+
+	doctype = "Sales Taxes and Charges Template"
+	title_field = "title"
+	base_filters = {"disabled": 0}
+
+	def __init__(self, company=None):
+		super().__init__({"company": company} if company else None)
+
+
 class BaseDocumentMapper:
 	"""Shared plumbing for per-document mappers (override handling, result bookkeeping)."""
 
@@ -122,6 +133,12 @@ class SalesInvoiceMapper(BaseDocumentMapper):
 		}
 		if warehouse.status in FieldStatus.RESOLVED:
 			mapped["set_warehouse"] = warehouse.name
+
+		if self.overrides.get("taxes_and_charges"):
+			template_matcher = TaxTemplateMatcher(company_name)
+			template = self.resolve("taxes_and_charges", template_matcher, lambda: MatchResult(doctype=template_matcher.doctype))
+			if template.matched:
+				mapped["taxes_and_charges"] = template.name
 
 		for row in canonical["items"]:
 			mapped["items"].append(self._map_item(row, company_name, mapped.get("set_warehouse")))

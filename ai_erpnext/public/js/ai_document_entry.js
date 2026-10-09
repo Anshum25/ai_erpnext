@@ -10,6 +10,16 @@ frappe.ui.form.on("AI Document Entry", {
 
 	refresh(frm) {
 		const doc = frm.doc;
+		if (!doc.__islocal && doc.status === "Failed" && !doc.created_document) {
+			frm.add_custom_button(__("Retry Extraction"), () =>
+				frappe.call({
+					method: "ai_erpnext.api.extraction.retry_extraction",
+					args: { entry: doc.name },
+					freeze: true,
+				}).then(() => frm.reload_doc())
+			).addClass("btn-primary");
+			return;
+		}
 		if (doc.__islocal || !doc.extracted_data || ["Pending", "Failed"].includes(doc.status)) return;
 
 		if (doc.created_document) {

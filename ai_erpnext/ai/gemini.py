@@ -1,4 +1,5 @@
 from .provider import LLMProvider
+from .errors import AIProviderError, classify, log_ai_event
 import json
 from google import genai
 from google.genai import types
@@ -15,7 +16,9 @@ class GeminiProvider(LLMProvider):
             mime_type=mime_type,
         )
         
-        for attempt in range(4):
+        started = time.perf_counter()
+        meta = {"provider": "Gemini", "model": "gemini-3.6-flash"}
+        for attempt in range(4):  # bounded: at most 3 retries, only for 503
             try:
                 response = self.client.models.generate_content(
                     model='gemini-3.6-flash',
@@ -24,10 +27,22 @@ class GeminiProvider(LLMProvider):
                         response_mime_type="application/json",
                     )
                 )
-                return json.loads(response.text)
+                break
             except Exception as e:
-                if "503" in str(e) and attempt < 3:
+                if getattr(e, "code", None) == 503 and attempt < 3:
                     time.sleep(2 ** attempt)
                     continue
-                raise e
+                error = classify(e)
+                log_ai_event(**meta, status="error", category=error.category, http_status=error.status_code,
+                    elapsed_ms=round((time.perf_counter() - started) * 1000), retries=attempt)
+                raise error from None
+        try:
+            data = json.loads(response.text)
+        except (TypeError, ValueError):
+            data = None
+        if not isinstance(data, dict):
+            log_ai_event(**meta, status="error", category="invalid_response", retries=attempt)
+            raise AIProviderError("invalid_response")
+        log_ai_event(**meta, status="ok", elapsed_ms=round((time.perf_counter() - started) * 1000), retries=attempt)
+        return data
 

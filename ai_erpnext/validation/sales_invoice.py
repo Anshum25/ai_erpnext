@@ -31,8 +31,9 @@ class SalesInvoiceValidator(BaseValidator):
 		self._validate_items(report, mapped, results)
 		self._validate_dates(report, mapped)
 		self._validate_currency(report, mapped)
+		self._validate_party_currency(report, mapped)
 		validate_totals(report, canonical)
-		self._validate_taxes(report, canonical)
+		self._validate_taxes(report, canonical, mapped)
 		self._validate_duplicates(report, mapped, canonical)
 		return report
 
@@ -122,7 +123,30 @@ class SalesInvoiceValidator(BaseValidator):
 		else:
 			report.warning("foreign_currency", f"Invoice in {currency}; exchange rate {rate} to {company_currency} will be applied", "currency")
 
-	def _validate_taxes(self, report, canonical):
+	def _validate_party_currency(self, report, mapped):
+		"""Mirror ERPNext's rule (AccountsController.validate_party_account_currency) so the
+		user is asked before confirming instead of ERPNext rejecting the draft afterwards."""
+		customer, company, currency = mapped.get("customer"), mapped.get("company"), mapped.get("currency")
+		if not (customer and company and currency):
+			return
+		from erpnext.accounts.party import get_party_account, get_party_gle_currency
+		from erpnext.accounts.utils import get_account_currency
+
+		gle_currency = get_party_gle_currency("Customer", customer, company)
+		if gle_currency and gle_currency != currency:
+			report.error("party_currency_mismatch",
+				f"Customer {customer} already has accounting entries in {gle_currency} for {company}, so ERPNext only allows invoices in {gle_currency} (the invoice is in {currency}).",
+				"currency")
+			return
+		account = get_party_account("Customer", customer, company)
+		account_currency = get_account_currency(account) if account else None
+		multi = frappe.db.get_single_value("Accounts Settings", "allow_multi_currency_invoices_against_single_party_account")
+		if not gle_currency and account_currency and account_currency != currency and not multi:
+			report.error("party_currency_mismatch",
+				f"Customer {customer}'s receivable account {account} is in {account_currency}, but the invoice is in {currency}. ERPNext requires them to match.",
+				"currency")
+
+	def _validate_taxes(self, report, canonical, mapped=None):
 		rate, amount = canonical.get("tax_rate"), canonical.get("tax_amount")
 		if rate is not None and rate > 1:
 			rate = rate / 100.0
@@ -131,6 +155,9 @@ class SalesInvoiceValidator(BaseValidator):
 			if base is None:
 				base = sum(flt(r.get("amount")) for r in canonical.get("items", []))
 			amount = flt(base) * rate
+		if mapped and mapped.get("taxes_and_charges"):
+			report.warning("taxes_template", f"Taxes from template {mapped['taxes_and_charges']} will be calculated by ERPNext; compare with the document's tax.", "taxes")
+			return
 		if flt(amount) > 0:
 			rate_txt = f" ({flt(rate * 100, 2)}%)" if rate is not None else ""
 			report.warning(

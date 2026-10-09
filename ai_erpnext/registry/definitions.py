@@ -35,6 +35,7 @@ SALES_INVOICE = register(
 			"due_date",
 			"currency",
 			"set_warehouse",
+			"taxes_and_charges",
 		),
 		supported_item_fields=(
 			"item_code",

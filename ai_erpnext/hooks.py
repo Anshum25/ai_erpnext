@@ -264,7 +264,10 @@ doc_events = {
 # AI Document Entry is a custom (DB) DocType, and Frappe ignores doctype_js for custom
 # DocTypes, so its form script (ai_document_entry.js) is loaded via app_include_js above.
 
-after_migrate = ["ai_erpnext.setup_doctypes.ensure_ai_document_entry_schema"]
+after_migrate = ["ai_erpnext.setup_doctypes.after_migrate"]
+
+# Close and trim expired assistant conversations (runs when the scheduler is enabled).
+scheduler_events = {"daily": ["ai_erpnext.chat.session.cleanup_expired_sessions"]}
 
 # Other apps may add AI document definitions: list of modules calling
 # ai_erpnext.registry.document_registry.register() on import.

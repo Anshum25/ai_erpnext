@@ -11,6 +11,10 @@ from ai_erpnext.pipeline.review_service import apply_mapping, review_payload, se
 def create_document(entry, corrections=None, acknowledge_errors=0, acknowledge_duplicate=0):
 	"""Re-validate and create the target document as a Draft. Never submits."""
 	doc = get_entry(entry)
+	# Serialise confirmations of the same entry (double click, two tabs, client retry):
+	# the row lock makes a concurrent request wait, then see created_document and stop.
+	frappe.db.get_value("AI Document Entry", doc.name, "name", for_update=True)
+	doc.reload()
 	ensure_not_created(doc)
 	if corrections:
 		set_overrides(doc, corrections)

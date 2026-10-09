@@ -132,3 +132,35 @@ def ensure_ai_document_entry_schema():
 	# DB Client Script would add a second, unvalidated button.
 	if frappe.db.get_value("Client Script", "AI Document Entry UI", "enabled"):
 		frappe.db.set_value("Client Script", "AI Document Entry UI", "enabled", 0)
+
+
+# --------------------------------------------------------------------------------------
+# AI Chat Session: server-side state for the conversational assistant (idempotent)
+# --------------------------------------------------------------------------------------
+def ensure_ai_chat_session_doctype():
+	if frappe.db.exists("DocType", "AI Chat Session"):
+		return
+	frappe.get_doc({
+		"doctype": "DocType",
+		"name": "AI Chat Session",
+		"module": "AI",
+		"custom": 1,
+		"autoname": "hash",
+		"track_changes": 0,
+		"fields": [
+			{"fieldname": "title", "label": "Title", "fieldtype": "Data", "read_only": 1, "in_list_view": 1},
+			{"fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Open\nClosed", "default": "Open", "in_list_view": 1},
+			{"fieldname": "active_entry", "label": "Active AI Document Entry", "fieldtype": "Link", "options": "AI Document Entry", "read_only": 1},
+			{"fieldname": "last_activity", "label": "Last Activity", "fieldtype": "Datetime", "read_only": 1},
+			{"fieldname": "messages", "label": "Messages", "fieldtype": "Long Text", "read_only": 1, "hidden": 1},
+			{"fieldname": "state", "label": "State", "fieldtype": "Long Text", "read_only": 1, "hidden": 1},
+		],
+		# Same role as AI Document Entry; each user only sees their own conversations.
+		"permissions": [{"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "if_owner": 1}],
+	}).insert()
+	frappe.db.commit()
+
+
+def after_migrate():
+	ensure_ai_document_entry_schema()
+	ensure_ai_chat_session_doctype()

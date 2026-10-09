@@ -10,6 +10,8 @@ class SalesInvoiceBuilder(BaseDocumentBuilder):
 		# Rates come from the source document, not from pricing rules.
 		doc.ignore_pricing_rule = 1
 		doc.update_stock = 0
+		if doc.get("taxes_and_charges") and not doc.get("taxes"):
+			doc.set_taxes()  # standard ERPNext: copy rows from the chosen template
 		lines = [f"Created from AI Document Entry {context.get('entry')}" if context.get("entry") else "Created by AI Document Entry"]
 		invoice_number = (context.get("canonical") or {}).get("invoice_number")
 		if invoice_number:

@@ -16,6 +16,8 @@ from ai_erpnext.validation.base import ValidationReport
 from ai_erpnext.validation.validator import validate_outcome
 
 DATE_OVERRIDE_KEYS = ("posting_date", "due_date")
+# Optional link overrides that have no mapping result until chosen (validated by the mapper).
+EXTRA_LINK_OVERRIDE_KEYS = ("taxes_and_charges",)
 
 
 def load_json(value, default=None):
@@ -109,7 +111,7 @@ def set_overrides(doc, corrections):
 		if key in DATE_OVERRIDE_KEYS:
 			if value and not parse_date(value).ok:
 				frappe.throw(_("Invalid date for {0}: {1}").format(key, value))
-		elif not (isinstance(results.get(key), dict) and results[key].get("doctype")):
+		elif key not in EXTRA_LINK_OVERRIDE_KEYS and not (isinstance(results.get(key), dict) and results[key].get("doctype")):
 			frappe.throw(_("Field {0} cannot be corrected").format(key))
 		if value:
 			overrides[key] = value
