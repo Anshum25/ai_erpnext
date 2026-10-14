@@ -86,14 +86,16 @@ class OpenAIProvider(LLMProvider):
 		log_ai_event(**meta, status="ok")
 		return data
 
-	def complete_json(self, system: str, messages: list, max_tokens: int = 900) -> dict:
+	def complete_json(self, system: str, messages: list, max_tokens: int = 900, sdk_retries=None) -> dict:
 		"""Text-only chat completion returning one JSON object (used by the chat router).
-		Same safety rules as extraction: no content logging, bounded retries, safe errors."""
+		Same safety rules as extraction: no content logging, bounded retries, safe errors.
+		sdk_retries=0 lets the caller own the retry policy so retries never multiply."""
 		self._requests, self._last_status = 0, None
 		started = time.perf_counter()
 		meta = {"provider": self.provider_name, "model": self.model}
+		client = self.client if sdk_retries is None else self.client.with_options(max_retries=sdk_retries)
 		try:
-			response = self.client.chat.completions.create(
+			response = client.chat.completions.create(
 				model=self.model,
 				messages=[{"role": "system", "content": system}, *messages],
 				response_format={"type": "json_object"},
@@ -115,7 +117,7 @@ class OpenAIProvider(LLMProvider):
 			data = None
 		if not isinstance(data, dict):
 			log_ai_event(**meta, status="error", category="invalid_response")
-			raise AIProviderError("invalid_response")
+			raise AIProviderError("invalid_response", status_code=self._last_status, failed_generation=content)
 		log_ai_event(**meta, status="ok")
 		return data
 

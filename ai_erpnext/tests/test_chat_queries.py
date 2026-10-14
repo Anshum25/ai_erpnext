@@ -93,7 +93,7 @@ class TestChatQueries(IntegrationTestCase):
 	def test_ai_unavailable_is_reported_honestly(self):
 		with mock.patch(ROUTE, side_effect=AIProviderError("rate_limited")):
 			r = chat.send_message(session=self.s, text="Good morning")
-		self.assertIn("AI request limit reached", self.last(r)["text"])
+		self.assertIn("request limit was reached", self.last(r)["text"])
 
 	def test_unsupported_action_is_not_executed(self):
 		r, _ = self.ask("Delete all draft invoices", {"mode": "unsupported", "reply": "I can't delete records."})

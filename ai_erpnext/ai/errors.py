@@ -30,11 +30,17 @@ _QUOTA_HINTS = ("per day", "(tpd)", "(rpd)", "daily", "quota", "insufficient", "
 
 
 class AIProviderError(Exception):
-	"""Provider failure with a safe message. str(error) is always user-safe."""
+	"""Provider failure with a safe message. str(error) is always user-safe.
 
-	def __init__(self, category, status_code=None):
+	retry_after: seconds the provider asked us to wait (from headers), if known.
+	failed_generation: the model output a JSON-mode provider rejected (memory only; never logged or shown raw).
+	"""
+
+	def __init__(self, category, status_code=None, retry_after=None, failed_generation=None):
 		self.category = category if category in USER_MESSAGES else "unknown"
 		self.status_code = status_code
+		self.retry_after = retry_after
+		self.failed_generation = failed_generation
 		self.user_message = USER_MESSAGES[self.category]
 		super().__init__(self.user_message)
 
@@ -56,7 +62,11 @@ def classify(exc) -> AIProviderError:
 		if isinstance(exc, openai.APIConnectionError):
 			return AIProviderError("network")
 		if isinstance(exc, openai.APIStatusError):
-			return _from_status(exc.status_code, _text(exc))
+			error = _from_status(exc.status_code, _text(exc))
+			error.retry_after = _retry_after(getattr(getattr(exc, "response", None), "headers", None))
+			if error.category == "invalid_response":
+				error.failed_generation = _failed_generation(getattr(exc, "body", None))
+			return error
 
 	try:
 		import httpx
@@ -81,6 +91,46 @@ def _text(exc):
 	if body is not None:
 		parts.append(json.dumps(body, default=str) if not isinstance(body, str) else body)
 	return " ".join(parts).lower()
+
+
+def _failed_generation(body):
+	if isinstance(body, dict):
+		err = body.get("error") if isinstance(body.get("error"), dict) else body
+		value = err.get("failed_generation")
+		return value if isinstance(value, str) else None
+	return None
+
+
+def _duration(value):
+	"""Parse "7.66s", "1m26.4s", "2h3m", "450ms" or a plain number of seconds."""
+	value = str(value or "").strip()
+	if not value:
+		return None
+	try:
+		return float(value)
+	except ValueError:
+		pass
+	import re
+
+	total, found = 0.0, False
+	for number, unit in re.findall(r"([\d.]+)\s*(ms|h|m|s)", value):
+		found = True
+		total += float(number) * {"ms": 0.001, "s": 1, "m": 60, "h": 3600}[unit]
+	return total if found else None
+
+
+def _retry_after(headers):
+	"""Seconds to wait before retrying, from standard or rate-limit reset headers (None if unknown)."""
+	if not headers:
+		return None
+	if headers.get("retry-after-ms"):
+		ms = _duration(headers.get("retry-after-ms"))
+		return ms / 1000 if ms is not None else None
+	for name in ("retry-after", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+		seconds = _duration(headers.get(name))
+		if seconds is not None:
+			return seconds
+	return None
 
 
 def _from_status(status, text):

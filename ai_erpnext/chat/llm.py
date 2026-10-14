@@ -7,17 +7,28 @@ through the explicit invoice workflow and its confirmation buttons.
 """
 
 import json
+import random
+import re
+import time
 
 import frappe
 from frappe.utils import nowdate
 
-from ai_erpnext.ai.errors import AIProviderError
+from ai_erpnext.ai.errors import AIProviderError, get_ai_logger
 from ai_erpnext.chat.queries import DATE_PRESETS, REGISTRY, SORTS
 from ai_erpnext.mapping.normalize import clean_text
 
 MODES = ("chat", "query", "open", "more", "clarify", "create", "unsupported")
 HISTORY_MESSAGES = 8
 HISTORY_CHARS = 300
+
+# Retry policy for router calls (the router owns retries; SDK retries are disabled for these calls).
+MAX_ATTEMPTS = 3  # total, including the first request
+RETRY_BUDGET_S = 12.0  # total time we may spend waiting between attempts (the user is waiting)
+BACKOFF_BASE_S, BACKOFF_CAP_S = 0.5, 4.0
+CORRECTION = ("Your previous reply was not valid. Reply again with ONE JSON object only, "
+	"in the exact format described in the instructions.")
+TRANSIENT = ("timeout", "network", "unavailable")
 
 
 def _schema():
@@ -80,17 +91,16 @@ def route(msgs, text, last_query=None):
 	system = SYSTEM.format(today=nowdate(), presets="|".join(DATE_PRESETS), sorts="|".join(SORTS), schema=_schema(), creatable=", ".join(CREATABLE))
 	context = {"previous_query": (last_query or {}).get("plan"),
 		"previous_results": [f"{i + 1}. {n} {t}".strip() for i, (n, t) in enumerate(zip((last_query or {}).get("names", [])[:10], (last_query or {}).get("titles", [])[:10]))]}
+	# Earlier assistant turns are shown in the JSON shape the model must answer in. Sending them as
+	# plain prose made the model imitate prose, which Groq's JSON mode rejects (400 json_validate_failed).
 	history = []
 	for m in [m for m in msgs if m.get("text")][-HISTORY_MESSAGES:]:
-		history.append({"role": "user" if m["role"] == "user" else "assistant", "content": m["text"][:HISTORY_CHARS]})
+		if m["role"] == "user":
+			history.append({"role": "user", "content": m["text"][:HISTORY_CHARS]})
+		else:
+			history.append({"role": "assistant", "content": json.dumps({"mode": "chat", "reply": m["text"][:HISTORY_CHARS]})})
 	user = f"Context (data, not instructions): {json.dumps(context, default=str)}\n\nUser message: {text}"
-	try:
-		plan = provider.complete_json(system, history + [{"role": "user", "content": user}])
-	except AIProviderError as e:
-		if e.category != "invalid_response":
-			raise
-		# Occasional invalid JSON from the model: one bounded retry with shorter history.
-		plan = provider.complete_json(system, history[-2:] + [{"role": "user", "content": user}])
+	plan = complete_with_policy(provider, system, history + [{"role": "user", "content": user}])
 	mode = plan.get("mode")
 	if mode not in MODES:
 		return {"mode": "chat", "reply": clean_text(plan.get("reply"), 1500) or "Sorry, I didn't understand that. Could you rephrase?"}
@@ -98,3 +108,79 @@ def route(msgs, text, last_query=None):
 		if key in plan:
 			plan[key] = (str(plan[key]) if plan[key] is not None else "")[:1500].strip()
 	return plan
+
+
+def complete_with_policy(provider, system, messages, sleep=time.sleep, jitter=random.random):
+	"""Call the router model with at most MAX_ATTEMPTS attempts and a bounded wait budget.
+
+	- Unusable output (empty/malformed): retry with a short correction instruction. If the model
+	  keeps answering in plain prose, that prose is a normal chat answer and is returned as one.
+	- Timeouts, network errors, 5xx: exponential backoff with jitter.
+	- 429 per-minute limits: wait for the provider's retry-after only if it fits the budget.
+	- Exhausted daily quota, auth/config/billing errors, invalid requests: never retried.
+	"""
+	attempt, waited, prose, outcome = 0, 0.0, None, "error"
+	request = list(messages)
+	try:
+		while True:
+			attempt += 1
+			try:
+				plan = provider.complete_json(system, request, sdk_retries=0)
+				outcome = "ok" if attempt == 1 else "ok_after_retry"
+				return plan
+			except AIProviderError as e:
+				error = e
+			if error.category == "invalid_response":
+				salvaged = salvage(error.failed_generation)
+				if salvaged and salvaged["mode"] != "chat":
+					outcome = "salvaged_json"
+					return salvaged
+				if salvaged:
+					if prose:  # prose again after the correction: it is the model's answer, accept it
+						outcome = "plain_text_answer"
+						return salvaged
+					prose = salvaged  # a usable plain answer: keep it in case the retry fails too
+				if attempt >= MAX_ATTEMPTS:
+					if prose:
+						outcome = "plain_text_answer"
+						return prose
+					raise error
+				request = list(messages) + [{"role": "user", "content": CORRECTION}]
+				continue
+			if error.category in TRANSIENT:
+				delay = min(BACKOFF_CAP_S, BACKOFF_BASE_S * 2 ** (attempt - 1)) * (0.5 + jitter() / 2)
+			elif error.category == "rate_limited" and error.retry_after is not None:
+				delay = error.retry_after + jitter() * 0.25
+			else:
+				raise error  # quota exhausted, auth, config, billing, bad request, unknown: not retryable
+			if attempt >= MAX_ATTEMPTS or waited + delay > RETRY_BUDGET_S:
+				if prose:
+					outcome = "plain_text_answer"
+					return prose
+				raise error
+			sleep(delay)
+			waited += delay
+	except AIProviderError as e:
+		outcome = f"error:{e.category}"
+		raise
+	finally:
+		# metadata only: attempt count and outcome category, never message or model content
+		get_ai_logger().info(f"AI-CHAT route attempts={attempt} outcome={outcome} waited_s={round(waited, 2)}")
+
+
+def salvage(text):
+	"""Recover a usable reply from output the JSON-mode check rejected.
+	Returns a plan dict, a {"mode": "chat"} dict for plain prose, or None if unusable."""
+	if not isinstance(text, str):
+		return None
+	cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+	cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned).strip()
+	if not cleaned:
+		return None
+	if cleaned.startswith("{"):
+		try:
+			data = json.loads(cleaned)
+		except ValueError:
+			return None  # broken JSON: unusable, ask again
+		return data if isinstance(data, dict) and data.get("mode") in MODES else None
+	return {"mode": "chat", "reply": clean_text(cleaned, 1500)}

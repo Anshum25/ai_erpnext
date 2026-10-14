@@ -142,10 +142,10 @@ $(document).ready(function () {
 					<button type="button" class="ai-icon-btn" data-act="attach" aria-label="Attach invoice image (JPG, PNG or WEBP)" title="Attach image">${ICON.clip}</button>
 					<input type="file" class="ai-file" accept="image/png,image/jpeg,image/webp" hidden />
 					<label class="ai-sr" for="ai-input">Message</label>
-					<textarea id="ai-input" rows="1" placeholder="Ask about your ERPNext data, or attach an invoice image…"></textarea>
+					<textarea id="ai-input" rows="1" placeholder="Ask anything"></textarea>
 					<button type="submit" class="ai-send" aria-label="Send message">${ICON.send}</button>
 				</div>
-				<div class="ai-hint">Enter to send · Shift+Enter for a new line · Drafts are never submitted automatically</div>
+			
 			</form>
 		</section>
 		<button type="button" id="ai-bot-btn" class="ai-launcher" aria-label="Open AI Assistant" aria-expanded="false" aria-controls="ai-chat-panel">${ICON.chat}</button>
@@ -259,7 +259,7 @@ $(document).ready(function () {
 			$row.append(`<img class="ai-thumb" src="${esc(m.attachment.file_url)}" alt="Attached invoice image ${esc(m.attachment.file_name)}" loading="lazy">`);
 		}
 		if (m.source === "erpnext") $row.append('<span class="ai-source erpnext">From your ERPNext data</span>');
-		if (m.source === "general") $row.append('<span class="ai-source">General answer · not from your ERPNext data</span>');
+		if (m.source === "general") $row.append('<span class="ai-source">General answer</span>');
 		if (m.text) $row.append(`<div class="ai-bubble">${lines(m.text)}</div>`);
 		if (m.card) $row.append(renderCard(m.card, m.id));
 		if (m.suggestions && m.suggestions.length) $row.append(renderSuggestions(m.suggestions));

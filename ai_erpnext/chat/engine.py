@@ -262,10 +262,7 @@ def _general(ctx, text):
 		m = CREATE_DOC_RE.match(text)
 		if m:  # creation works without the AI service: start the guided form with no prefill
 			return forms.start(ctx, forms.match_doctype(m.group(1)))
-		if e.category == "config":
-			ctx.say("Chat and data questions need the AI service, which isn't configured. You can still attach invoice images.")
-		else:
-			ctx.say(f"{e.user_message} (Chat and data questions use the AI service.)")
+		ctx.say(CHAT_ERRORS.get(e.category, CHAT_ERRORS["unknown"]))
 		return
 	mode = plan["mode"]
 	if mode == "chat":
@@ -291,6 +288,23 @@ def _general(ctx, text):
 		_more(ctx)
 	elif mode == "query":
 		_run_query(ctx, plan.get("query"))
+
+
+# Chat-specific wording for AI router failures (the shared provider messages talk about extraction).
+CHAT_ERRORS = {
+	"timeout": "The AI service is responding slowly right now. Please try again in a moment.",
+	"network": "I couldn't reach the AI service. Please check the connection and try again.",
+	"unavailable": "The AI service is temporarily unavailable. Please try again in a moment.",
+	"rate_limited": "The AI request limit was reached. Please wait a minute and try again.",
+	"quota_exhausted": "Today's AI usage limit has been reached, so chat and data questions are paused until it resets. "
+		"You can still create records by typing, for example, “create purchase invoice”.",
+	"auth": "The AI service isn't configured correctly. Please contact the administrator.",
+	"config": "The AI service isn't configured correctly. Please contact the administrator.",
+	"billing": "The AI service account needs attention. Please contact the administrator.",
+	"invalid_response": "The AI couldn't produce a usable answer this time. Please rephrase your question or try again.",
+	"bad_request": "The AI service couldn't process that request. Please rephrase it.",
+	"unknown": "Something went wrong with the AI service. Please try again.",
+}
 
 
 def _run_query(ctx, raw_plan, page_of=None):
