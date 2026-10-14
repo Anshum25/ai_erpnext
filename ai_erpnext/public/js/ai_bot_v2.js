@@ -335,7 +335,7 @@ $(document).ready(function () {
 			const body = (card.items.rows || []).map((r) => `<tr>${ic.map((c) => `<td>${esc(r[c.key])}</td>`).join("")}</tr>`).join("");
 			$c.append(`<div class="ai-items"><table><thead><tr>${ic.map((c) => `<th scope="col">${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`);
 		} else if (card.items && card.items.length) {
-			const body = card.items.map((it, i) => `<tr><td>${i + 1}</td><td>${esc(it.name)}${it.matched || it.code ? `<span class="ai-note">${esc(it.matched || it.code)}</span>` : ""}${it.status ? pill(it.status) : ""}</td>
+			const body = card.items.map((it, i) => `<tr><td>${i + 1}</td><td>${esc(it.name)}${it.matched || it.code ? `<span class="ai-note">${esc(it.matched || it.code)}</span>` : ""}${it.warehouse ? `<span class="ai-note">Warehouse: ${esc(it.warehouse)}${it.warehouse_note ? ` (${esc(it.warehouse_note)})` : ""}</span>` : ""}${it.status ? pill(it.status) : ""}</td>
 				<td class="num">${esc(it.qty)}</td><td>${esc(it.uom)}</td><td class="num">${esc(it.rate)}</td><td class="num">${esc(it.amount)}</td></tr>`).join("");
 			$c.append(`<div class="ai-items"><table><thead><tr><th scope="col">#</th><th scope="col">Item</th><th scope="col" class="num">Qty</th>
 				<th scope="col">UOM</th><th scope="col" class="num">Rate</th><th scope="col" class="num">Amount</th></tr></thead><tbody>${body}</tbody></table></div>`);

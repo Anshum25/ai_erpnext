@@ -288,7 +288,7 @@ def _on_text(ctx, text):
 
 	pending = ctx.st.get("pending")
 	if pending:
-		search_kinds = ("customer", "item", "uom", "company", "currency", "warehouse", "master_field", "form_field", "form_item")
+		search_kinds = ("customer", "item", "uom", "company", "currency", "warehouse", "master_field", "form_field", "form_item", "form_warehouse")
 		is_general = GENERAL_CUE_RE.match(text) and not (pending["kind"] in search_kinds and re.match(r"^\s*(find|search)\b", text, re.I))
 		if not is_general:
 			return _answer(ctx, pending, text, from_text=True)

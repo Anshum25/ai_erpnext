@@ -6,6 +6,10 @@ real ERPNext data, shows a summary and creates the record only after explicit co
 Transactions are always created as Draft through the standard insert() (normal permissions
 and ERPNext validation); nothing is submitted. Missing customers, suppliers and items can be
 created on the way with the same flow, after their own confirmation.
+
+Before the preview, chat/requirements.py checks what ERPNext will additionally require (row
+warehouses, fields a site made mandatory) using ERPNext's own defaulting, so the chat asks for
+missing values instead of failing on Create. insert() remains the final authority.
 """
 
 import re
@@ -14,6 +18,7 @@ import uuid
 import frappe
 from frappe.utils import flt, nowdate, strip_html
 
+from ai_erpnext.chat import requirements
 from ai_erpnext.mapping.customer import CustomerMatcher
 from ai_erpnext.mapping.item import ItemMatcher
 from ai_erpnext.mapping.normalize import clean_text, normalize_name, parse_date, parse_number
@@ -28,6 +33,9 @@ COMPANY = F("company", "Company", "link", doctype="Company", default="company")
 CUSTOMER = F("customer", "Customer", "link", doctype="Customer", filters={"disabled": 0}, master="Customer", prompt="Which customer is this for?")
 SUPPLIER = F("supplier", "Supplier", "link", doctype="Supplier", filters={"disabled": 0}, master="Supplier", prompt="Which supplier is this from?")
 WAREHOUSE = {"doctype": "Warehouse", "filters": {"is_group": 0, "disabled": 0, "company": "$company"}}
+# One warehouse for all stock rows. Not asked up front: only when a stock row has no valid
+# default (see _requirements), and it can be changed with "change warehouse to ...".
+SET_WAREHOUSE = F("set_warehouse", "Warehouse", "link", required=False, ask=False, **WAREHOUSE)
 
 SPECS = {
 	"Sales Invoice": {"party": "customer", "items": "selling", "header": [CUSTOMER, COMPANY,
@@ -38,19 +46,17 @@ SPECS = {
 		F("due_date", "Due date", "date", required=False)]},
 	"Sales Order": {"party": "customer", "items": "selling", "header": [CUSTOMER, COMPANY,
 		F("transaction_date", "Order date", "date", default="today"),
-		F("delivery_date", "Delivery date", "date", prompt="When should it be delivered?")]},
+		F("delivery_date", "Delivery date", "date", prompt="When should it be delivered?"), SET_WAREHOUSE]},
 	"Purchase Order": {"party": "supplier", "items": "buying", "header": [SUPPLIER, COMPANY,
 		F("transaction_date", "Order date", "date", default="today"),
-		F("schedule_date", "Required by", "date", prompt="By when do you need the items?")]},
+		F("schedule_date", "Required by", "date", prompt="By when do you need the items?"), SET_WAREHOUSE]},
 	"Quotation": {"party": "party_name", "items": "selling", "fixed": {"quotation_to": "Customer"}, "header": [
 		F("party_name", "Customer", "link", doctype="Customer", filters={"disabled": 0}, master="Customer", prompt="Which customer is the quotation for?"),
 		COMPANY, F("transaction_date", "Quotation date", "date", default="today"), F("valid_till", "Valid till", "date", required=False)]},
 	"Delivery Note": {"party": "customer", "items": "selling", "header": [CUSTOMER, COMPANY,
-		F("posting_date", "Posting date", "date", default="today"),
-		F("set_warehouse", "Warehouse", "link", prompt="Which warehouse are the items delivered from?", **WAREHOUSE)]},
+		F("posting_date", "Posting date", "date", default="today"), SET_WAREHOUSE]},
 	"Purchase Receipt": {"party": "supplier", "items": "buying", "header": [SUPPLIER, COMPANY,
-		F("posting_date", "Posting date", "date", default="today"),
-		F("set_warehouse", "Warehouse", "link", prompt="Which warehouse are the items received into?", **WAREHOUSE)]},
+		F("posting_date", "Posting date", "date", default="today"), SET_WAREHOUSE]},
 	"Customer": {"party": None, "items": None, "title": "customer_name", "header": [
 		F("customer_name", "Customer name", "data", prompt="What is the customer's name?"),
 		F("customer_type", "Customer type", "select", default="Company", ask=False),
@@ -136,12 +142,14 @@ def cancel(ctx):
 def next_step(ctx):
 	form = ctx.st["forms"][-1]
 	spec = SPECS[form["doctype"]]
-	for f in spec["header"]:
+	for f in _fields(form):
 		wanted = f["ask"] or f["fieldname"] in form.get("force_ask", [])
 		if wanted and f["fieldname"] not in form["values"] and f["fieldname"] not in form.get("skipped", []):
 			return _ask_field(ctx, form, f)
 	if spec["items"] and not form["items_done"]:
 		return _items_step(ctx, form)
+	if _requirements(ctx, form):
+		return
 	return _ask_confirm(ctx, form)
 
 
@@ -155,7 +163,7 @@ def answer(ctx, pending, value, from_text):
 			return next_step(ctx)
 		return cancel(ctx)
 	if kind == "form_field":
-		field = _field(form["doctype"], key)
+		field = _field(form["doctype"], key, form)
 		if value == "__skip__" and not field["required"]:
 			form.setdefault("skipped", []).append(key)
 			return next_step(ctx)
@@ -169,6 +177,8 @@ def answer(ctx, pending, value, from_text):
 		return next_step(ctx)
 	if kind == "form_item":
 		return _answer_item(ctx, form, key, value, from_text, pending)
+	if kind == "form_warehouse":
+		return _answer_warehouse(ctx, form, pending, value, from_text)
 	if kind == "form_more_items":
 		if value == "__more__" or re.search(r"\b(yes|add|another|more)\b", value or "", re.I):
 			form["draft_item"] = {}
@@ -179,9 +189,11 @@ def answer(ctx, pending, value, from_text):
 			return _ask_more(ctx, form)
 		return next_step(ctx)
 	if kind == "form_confirm":
-		if value == "__create__" or re.match(r"^\s*(yes|y|ok|okay|confirm|create|go ahead|do it|sure)\b", value or "", re.I):
-			return _create(ctx, form)
-		if value == "__retry__":
+		if value in ("__create__", "__retry__") or re.match(r"^\s*(yes|y|ok|okay|confirm|create|go ahead|do it|sure|retry)\b", value or "", re.I):
+			# Re-check on the server with the values as they are now (the user may have corrected some,
+			# or a record may have changed since the preview), then create.
+			if _requirements(ctx, form):
+				return
 			return _create(ctx, form)
 		ctx.say("Please choose Create or Cancel, or tell me what to change (for example “change customer to …”).")
 		return _ask_confirm(ctx, form)
@@ -205,7 +217,7 @@ def correction(ctx, text):
 		form["draft_item"] = {}
 		ctx.st["pending"] = None
 		return next_step(ctx) or True
-	m = re.match(r"^\s*(?:please\s+)?(?:change|set|update|make)?\s*(?:row|line|item)\s*#?(\d+)\s+(qty|quantity|rate|price|item)\s*(?:to|as|=|:|is)?\s+(.+?)\s*$", text, re.I)
+	m = re.match(r"^\s*(?:please\s+)?(?:change|set|update|make|use)?\s*(?:row|line|item)\s*#?(\d+)\s+(qty|quantity|rate|price|item|warehouse)\s*(?:to|as|=|:|is)?\s+(.+?)\s*$", text, re.I)
 	if m:
 		idx, what, value = int(m.group(1)) - 1, m.group(2).lower(), m.group(3)
 		if not 0 <= idx < len(form["items"]):
@@ -224,12 +236,21 @@ def correction(ctx, text):
 				ctx.say("The rate must be a number of 0 or more.")
 				return True
 			row["rate"] = rate
+		elif what == "warehouse":
+			if not requirements.needs_warehouse(form["doctype"], row["item_code"]):
+				ctx.say(f"Row {idx + 1} ({row.get('item_name') or row['item_code']}) doesn't need a warehouse on a {form['doctype']}.")
+				return True
+			status, found, _display = _resolve_link(SET_WAREHOUSE, form, value, from_text=True)
+			if status != "ok":
+				ctx.say(f"I couldn't find a single warehouse of {form['values'].get('company')} matching “{value}”.")
+				return True
+			row["warehouse"] = found
 		else:
 			res = _resolve_item(form, value)
 			if res[0] != "ok":
 				ctx.say(f"I couldn't find a single item matching “{value}”.")
 				return True
-			row.update(item_code=res[1], item_name=res[2])
+			row.update(item_code=res[1], item_name=res[2], warehouse=None, default_warehouse=None)
 		ctx.say(f"Updated row {idx + 1}.")
 		ctx.st["pending"] = None
 		return next_step(ctx) or True
@@ -249,8 +270,14 @@ def correction(ctx, text):
 # ------------------------------------------------------------------------------------------------
 # Header fields
 # ------------------------------------------------------------------------------------------------
-def _field(doctype, fieldname):
-	return next((f for f in SPECS[doctype]["header"] if f["fieldname"] == fieldname), None)
+def _fields(form):
+	"""The spec's header fields plus fields this site made mandatory (added when found missing)."""
+	return SPECS[form["doctype"]]["header"] + form.get("extra", [])
+
+
+def _field(doctype, fieldname, form=None):
+	fields = _fields(form) if form else SPECS[doctype]["header"]
+	return next((f for f in fields if f["fieldname"] == fieldname), None)
 
 
 def _field_by_label(form, label):
@@ -259,7 +286,7 @@ def _field_by_label(form, label):
 	spec = SPECS[form["doctype"]]
 	if label in ("party", "customer", "supplier") and spec["party"]:
 		fieldname = spec["party"]
-	for f in spec["header"]:
+	for f in _fields(form):
 		if f["fieldname"] == fieldname or normalize_name(f["label"]) == label or f["fieldname"].replace("_", " ") == label:
 			return f
 	return None
@@ -352,6 +379,12 @@ def _set(ctx, form, f, raw, from_text):
 			return "That date could be read two ways. Please use YYYY-MM-DD." if parsed.ambiguous else "Please give the date as YYYY-MM-DD."
 		form["values"][name] = form["labels"][name] = parsed.value
 		return None
+	if f["type"] == "number":
+		number = parse_number(value)
+		if number is None:
+			return f"Please give the {f['label'].lower()} as a number."
+		form["values"][name] = form["labels"][name] = number
+		return None
 	if f["type"] == "select":
 		opts = [o for o in (frappe.get_meta(form["doctype"]).get_field(name).options or "").split("\n") if o]
 		match = next((o for o in opts if o.lower() == value.lower()), None)
@@ -372,8 +405,12 @@ def _set(ctx, form, f, raw, from_text):
 	status, found, display = _resolve_link(f, form, value, from_text)
 	if status == "ok":
 		form["values"][name], form["labels"][name] = found, display
-		if name == "company" and "set_warehouse" in form["values"]:
-			form["values"].pop("set_warehouse")  # warehouse belongs to a company
+		if name in ("company", "set_warehouse"):
+			if name == "company":
+				form["values"].pop("set_warehouse", None)  # warehouses belong to a company
+				form["labels"].pop("set_warehouse", None)
+			for row in form.get("items") or []:  # a header warehouse applies to every stock row
+				row.update(warehouse=None, default_warehouse=None)
 		return None
 	if status == "ambiguous":
 		_ask_field(ctx, form, f, search=value, candidates=found, text=f"Several {f['label'].lower()} records match “{value}”. Which one?")
@@ -560,20 +597,154 @@ def _start_master(ctx, form, master, name, return_to):
 	return start(ctx, master, values=values, return_to=return_to)
 
 
+# ------------------------------------------------------------------------------------------------
+# What ERPNext needs beyond the collected fields (checked before every preview and retry)
+# ------------------------------------------------------------------------------------------------
+def _requirements(ctx, form):
+	"""Re-check the collected values and ask for anything ERPNext will still need.
+
+	Returns True if a question was asked (the caller must not show the preview yet)."""
+	doctype, spec = form["doctype"], SPECS[form["doctype"]]
+	company = form["values"].get("company")
+	# 1. Everything collected is checked again: a record may have been disabled, the company changed...
+	for f in _fields(form):
+		value = form["values"].get(f["fieldname"])
+		if f["type"] == "link" and value not in (None, "") and not _link_ok(f, form, value):
+			form["values"].pop(f["fieldname"], None)
+			form["labels"].pop(f["fieldname"], None)
+			form.setdefault("force_ask", []).append(f["fieldname"])
+			where = f" for {company}" if company and "company" in (f.get("filters") or {}) else ""
+			ctx.say(f"{f['label']} “{value}” can't be used{where}. Please choose another.")
+			next_step(ctx)
+			return True
+	for idx, row in enumerate(form.get("items") or [], start=1):
+		if not _item_ok(form, row["item_code"]):
+			form["items"].pop(idx - 1)
+			form["items_done"] = False
+			ctx.say(f"Row {idx}: item {row['item_code']} can't be used here any more, so I removed it.")
+			next_step(ctx)
+			return True
+		if row.get("warehouse") and not _link_ok(SET_WAREHOUSE, form, row["warehouse"]):
+			ctx.say(f"Row {idx}: “{row['warehouse']}” isn't a warehouse of {company} that you can use.")
+			row["warehouse"] = None
+
+	# 2. ERPNext's own defaulting on an unsaved copy: which rows get a valid default warehouse
+	report = requirements.inspect(_doc_dict(form, check=True))
+	need = []
+	for idx, row in enumerate(form.get("items") or [], start=1):
+		if not _needs_warehouse(form, row):
+			row["default_warehouse"] = None
+			continue
+		default = report["defaults"].get(idx)
+		usable = default and not row.get("no_default") and _link_ok(SET_WAREHOUSE, form, default)
+		row["default_warehouse"] = default if usable else None
+		if not _row_warehouse(form, row):
+			need.append(idx)
+	if need:
+		_ask_warehouse(ctx, form, need)
+		return True
+
+	# 3. Mandatory fields still empty after ERPNext's defaulting that the chat can collect:
+	#    fields of this form, and fields the site made mandatory with a Custom Field.
+	meta = frappe.get_meta(doctype)
+	for fieldname in report["missing"]:
+		if form["values"].get(fieldname) not in (None, ""):
+			continue
+		f = _field(doctype, fieldname, form)
+		if not f and (meta.get_field(fieldname) or {}).get("is_custom_field"):
+			f = requirements.collectible_field(doctype, fieldname)
+			if f:
+				form.setdefault("extra", []).append(f)
+		if f:
+			if fieldname in form.get("skipped", []):
+				form["skipped"].remove(fieldname)
+			form.setdefault("force_ask", []).append(fieldname)
+			next_step(ctx)
+			return True
+	return False
+
+
+def _needs_warehouse(form, row):
+	return bool(row.get("needs_warehouse")) or requirements.needs_warehouse(form["doctype"], row["item_code"])
+
+
+def _row_warehouse(form, row, include_default=True):
+	"""The warehouse a row will be created with: chosen for the row, chosen for all rows, or ERPNext's default."""
+	if not _needs_warehouse(form, row):
+		return None
+	return row.get("warehouse") or form["values"].get("set_warehouse") or (row.get("default_warehouse") if include_default else None)
+
+
+def _link_ok(f, form, value):
+	try:
+		return bool(frappe.get_list(f["doctype"], filters={**_filters(f, form), "name": value}, pluck="name", limit_page_length=1))
+	except frappe.PermissionError:
+		frappe.local.message_log = []
+		return False
+
+
+def _item_ok(form, code):
+	flags = ITEM_FILTERS[SPECS[form["doctype"]]["items"]]
+	return bool(frappe.get_list("Item", filters={"name": code, "disabled": 0, **flags}, pluck="name", limit_page_length=1))
+
+
+def _ask_warehouse(ctx, form, rows, candidates=None, text=None):
+	items = [form["items"][i - 1] for i in rows]
+	names = ", ".join(dict.fromkeys(it.get("item_name") or it["item_code"] for it in items))
+	which = f"row {rows[0]} ({names})" if len(rows) == 1 else f"rows {', '.join(map(str, rows))} ({names})"
+	company = form["values"].get("company")
+	names = candidates if candidates is not None else _suggestions("Warehouse", _filters(SET_WAREHOUSE, form), limit=8)
+	if not names:
+		ctx.say(f"ERPNext requires a warehouse for {which}, but there's no warehouse of {company} that you can use. "
+			"Create one in ERPNext (Stock > Warehouse) or change the company, then say “retry”.")
+		return ctx.ask("form_confirm", "Nothing was created yet.",
+			options=[{"label": "Retry", "value": "__retry__"}, {"label": "Cancel", "value": "__cancel__", "style": "secondary"}])
+	prompt = text or (requirements.WAREHOUSE_RULES[form["doctype"]].format(items=which)
+		+ f" ERPNext requires a warehouse for stock items, and no default warehouse of {company} applies.")
+	ctx.ask("form_warehouse", prompt + " Pick one or type a name to search.", key="warehouse",
+		options=[{"label": n, "value": n} for n in names], input="text")
+	ctx.st["pending"]["rows"] = rows
+
+
+def _answer_warehouse(ctx, form, pending, value, from_text):
+	rows = [r for r in pending.get("rows") or [] if 1 <= r <= len(form["items"])]
+	status, found, _display = _resolve_link(SET_WAREHOUSE, form, value, from_text)
+	if status == "ambiguous":
+		return _ask_warehouse(ctx, form, rows, candidates=found, text=f"Several warehouses match “{value}”. Which one?")
+	if status != "ok":
+		ctx.say(f"I couldn't find a warehouse of {form['values'].get('company')} called “{value}”.")
+		return _ask_warehouse(ctx, form, rows)
+	for r in rows:
+		form["items"][r - 1]["warehouse"] = found
+	return next_step(ctx)
+
+
+# ------------------------------------------------------------------------------------------------
+# Confirmation and creation
+# ------------------------------------------------------------------------------------------------
 def _ask_confirm(ctx, form):
 	spec, doctype = SPECS[form["doctype"]], form["doctype"]
 	rows = [{"label": f["label"], "value": form["labels"].get(f["fieldname"], form["values"].get(f["fieldname"]))}
-		for f in spec["header"] if form["values"].get(f["fieldname"]) not in (None, "")]
+		for f in _fields(form) if form["values"].get(f["fieldname"]) not in (None, "")]
 	card = {"type": "form_preview", "title": f"New {doctype}" + ("" if doctype in MASTERS else " (Draft)"), "rows": rows}
 	if spec["items"]:
 		if not form["items"]:
 			form["items_done"] = False
 			ctx.say("A document needs at least one item.")
 			return next_step(ctx)
-		card["items"] = [{"name": i.get("item_name") or i["item_code"], "code": i["item_code"], "qty": i["qty"], "uom": i.get("uom"),
-			"rate": flt(i["rate"], 2), "amount": flt(i["qty"] * i["rate"], 2)} for i in form["items"]]
+		card["items"] = []
+		for i in form["items"]:
+			item = {"name": i.get("item_name") or i["item_code"], "code": i["item_code"], "qty": i["qty"], "uom": i.get("uom"),
+				"rate": flt(i["rate"], 2), "amount": flt(i["qty"] * i["rate"], 2)}
+			warehouse = _row_warehouse(form, i)
+			if warehouse:
+				item["warehouse"] = warehouse
+				item["warehouse_note"] = "ERPNext default" if warehouse == i.get("default_warehouse") and not (i.get("warehouse") or form["values"].get("set_warehouse")) else None
+			card["items"].append(item)
 		card["note"] = (f"Items total {flt(sum(i['qty'] * i['rate'] for i in form['items']), 2)} before taxes. ERPNext fills accounts, currency, "
 			"price list and taxes from your settings and calculates the final totals.")
+		if any(it.get("warehouse_note") for it in card["items"]):
+			card["note"] += " Warehouses marked “ERPNext default” come from your item or stock settings; say “row 1 warehouse …” to change one."
 	label = f"Create {doctype}" if doctype in MASTERS else f"Create draft {doctype}"
 	text = f"Here's the {doctype.lower()}. Shall I create it" + ("?" if doctype in MASTERS else " as a Draft? It will not be submitted.") \
 		+ " You can still change anything, e.g. “change " + (spec["party"] or spec["header"][0]["fieldname"]).replace("_", " ") + " to …”" \
@@ -581,8 +752,13 @@ def _ask_confirm(ctx, form):
 	ctx.ask("form_confirm", text, options=[{"label": label, "value": "__create__"}, {"label": "Cancel", "value": "__cancel__", "style": "secondary"}], card=card)
 
 
-def _doc_dict(form):
+def _doc_dict(form, check=False):
+	"""The document to insert. check=True: the copy for requirements.inspect, where ERPNext's
+	own defaulting must fill row warehouses, so defaults found earlier are not passed in."""
 	spec, values = SPECS[form["doctype"]], dict(form["values"])
+	# Applied to stock rows below. Passing it as the header value would make ERPNext copy it
+	# onto rows that don't need a warehouse (services, non-stock items).
+	values.pop("set_warehouse", None)
 	if form["doctype"] == "Item" and not values.get("item_name"):
 		values["item_name"] = values.get("item_code")
 	doc = {"doctype": form["doctype"], **values, **spec.get("fixed", {})}
@@ -596,8 +772,9 @@ def _doc_dict(form):
 				row["schedule_date"] = values.get("schedule_date")
 			if form["doctype"] == "Sales Order":
 				row["delivery_date"] = values.get("delivery_date")
-			if form["doctype"] in ("Delivery Note", "Purchase Receipt") and values.get("set_warehouse"):
-				row["warehouse"] = values["set_warehouse"]
+			warehouse = _row_warehouse(form, i, include_default=not check)
+			if warehouse:
+				row["warehouse"] = warehouse
 			rows.append(row)
 		doc["items"] = rows
 	return doc
@@ -612,24 +789,10 @@ def _create(ctx, form):
 		doc.insert()  # standard permissions + ERPNext validation; never submit()
 		if doc.meta.is_submittable and doc.docstatus != 0:
 			raise frappe.ValidationError("Created documents must stay Draft")
-	except frappe.MandatoryError as e:
-		frappe.db.rollback(save_point="ai_chat_form")
-		frappe.local.message_log = []
-		missing = [m.strip() for m in str(e).split(":")[-1].split(",")]
-		known = [m for m in missing if _field(doctype, m)]
-		for m in known:
-			form["values"].pop(m, None)
-			form.setdefault("force_ask", []).append(m)
-			if m in form.get("skipped", []):
-				form["skipped"].remove(m)
-		if known:
-			ctx.say("ERPNext needs a few more details.")
-			return next_step(ctx)
-		return _failed(ctx, form, f"ERPNext requires fields I can't collect here: {', '.join(missing)}. Please create it in ERPNext.")
 	except Exception as e:
+		# nothing of the failed attempt remains; the form (everything the user entered) is kept
 		frappe.db.rollback(save_point="ai_chat_form")
-		frappe.local.message_log = []
-		return _failed(ctx, form, strip_html(str(e) or "unknown error")[:300])
+		return _rejected(ctx, form, requirements.explain(e, doctype))
 
 	ctx.st["forms"].pop()
 	ctx.st["pending"] = None
@@ -657,6 +820,42 @@ def _create(ctx, form):
 			"rows": [{"label": "ID", "value": doc.name}, {"label": "Party", "value": party}, {"label": "Date", "value": str(date)},
 				{"label": "Grand total", "value": f"{flt(doc.get('grand_total'), 2)} {doc.get('currency') or ''}".strip()},
 				{"label": "Status", "value": status}]})
+
+
+def _rejected(ctx, form, info):
+	"""ERPNext refused the document: ask for what it needs when the chat can collect it."""
+	doctype = form["doctype"]
+	if info["kind"] == "mandatory":
+		asked = []
+		for fieldname in info["fields"]:
+			f = _field(doctype, fieldname, form)
+			if not f:
+				f = requirements.collectible_field(doctype, fieldname)
+				if f:
+					form.setdefault("extra", []).append(f)
+			if f:
+				form["values"].pop(fieldname, None)
+				form.setdefault("force_ask", []).append(fieldname)
+				if fieldname in form.get("skipped", []):
+					form["skipped"].remove(fieldname)
+				asked.append(f["label"])
+		if asked:
+			ctx.say(f"ERPNext needs a few more details: {', '.join(asked)}.")
+			return next_step(ctx)
+		return _failed(ctx, form, f"{info['message']} These values can't be set from the chat; please complete the document in ERPNext.")
+	if info["kind"] == "warehouse" and SPECS[doctype]["items"]:
+		rows = [r for r in info["rows"] if 1 <= r <= len(form["items"])]
+		rows = rows or [i for i, row in enumerate(form["items"], start=1) if row["item_code"] in info["message"]]
+		if rows:
+			for r in rows:
+				row = form["items"][r - 1]
+				row["needs_warehouse"] = True  # ERPNext said so, whatever our own rules thought
+				if row.get("default_warehouse") and not row.get("warehouse"):
+					row["no_default"] = True  # don't offer the default ERPNext just refused
+				row["warehouse"] = None
+			ctx.say(f"ERPNext didn't accept the {doctype}: {info['message']}")
+			return _ask_warehouse(ctx, form, rows)
+	return _failed(ctx, form, info["message"])
 
 
 def erpnext_notes():
