@@ -1,77 +1,129 @@
+"""Schema for the app's DocTypes.
+
+The DocTypes are DB-level (custom=1) DocTypes, so they are not created by the standard
+DocType sync. Everything here is idempotent and runs after install and after every
+migrate: a clean site gets the full schema, an existing site only gets what is missing.
+"""
+
 import frappe
-from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+
+MODULE = "AI"
+
+AI_DOCUMENT_ENTRY = {
+	"doctype": "DocType",
+	"name": "AI Document Entry",
+	"module": MODULE,
+	"custom": 1,
+	"autoname": "AI-DOC-.YYYY.-.#####",
+	"fields": [
+		{"fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Pending\nProcessed\nFailed\nSubmitted", "default": "Pending"},
+		{"fieldname": "file", "label": "File", "fieldtype": "Attach"},
+		{"fieldname": "target_doctype", "label": "Target DocType", "fieldtype": "Link", "options": "DocType"},
+		{"fieldname": "extracted_data", "label": "Extracted Data", "fieldtype": "Code", "options": "JSON"},
+		{"fieldname": "mapped_data", "label": "Mapped Data", "fieldtype": "Code", "options": "JSON"},
+		{"fieldname": "error_log", "label": "Error Log", "fieldtype": "Text"},
+	],
+	"permissions": [{"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1}],
+}
+
+PROVIDERS = ("Gemini", "OpenAI", "Groq", "Nvidia NIM", "OpenRouter")
+
+AI_PROVIDER_SETTINGS = {
+	"doctype": "DocType",
+	"name": "AI Provider Settings",
+	"module": MODULE,
+	"custom": 1,
+	"issingle": 1,
+	"fields": [
+		{"fieldname": "provider", "label": "Provider", "fieldtype": "Select", "options": "\n".join(PROVIDERS), "default": "Gemini"},
+		{"fieldname": "api_key", "label": "API Key", "fieldtype": "Password"},
+	],
+	"permissions": [{"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1}],
+}
+
+AI_PROVIDER_SETTINGS_FIELDS = [
+	# (fieldname, definition, insert_after)
+	("base_url", {"label": "Base URL", "fieldtype": "Data"}, "api_key"),
+	("model", {"label": "Model Name", "fieldtype": "Data"}, "base_url"),
+	# Optional text-only model for the chat router (same provider and key). Empty: Model Name is used.
+	("text_model", {"label": "Chat Model (Text Only)", "fieldtype": "Data",
+		"description": "Optional. Used for chat routing so ordinary chat does not go to the image model. Empty: Model Name is used for both."}, "model"),
+	# Paid fallback for an exhausted Groq daily quota. Off unless an administrator enables it.
+	("fallback_section", {"label": "Quota Fallback", "fieldtype": "Section Break", "collapsible": 1}, "text_model"),
+	("fallback_enabled", {"label": "Use Fallback When Groq Daily Quota Is Exhausted", "fieldtype": "Check", "default": "0",
+		"description": "Only a Groq daily-quota error switches to the fallback, for one request. Other errors never do."}, "fallback_section"),
+	("fallback_provider", {"label": "Fallback Provider", "fieldtype": "Select", "options": "\nOpenAI"}, "fallback_enabled"),
+	("fallback_model", {"label": "Fallback Model", "fieldtype": "Data", "default": "gpt-4.1-mini"}, "fallback_provider"),
+	("fallback_base_url", {"label": "Fallback Base URL", "fieldtype": "Data", "description": "Leave empty for the provider's default endpoint."}, "fallback_model"),
+	("fallback_api_key", {"label": "Fallback API Key", "fieldtype": "Password"}, "fallback_base_url"),
+	("fallback_daily_limit", {"label": "Fallback Requests Per Day", "fieldtype": "Int", "default": "20",
+		"description": "Hard cap on fallback requests per site per day. 0 disables the fallback."}, "fallback_api_key"),
+]
+
+
+def ensure_schema():
+	"""Create or upgrade every DocType of the app (idempotent)."""
+	_create_if_missing(AI_DOCUMENT_ENTRY)
+	ensure_ai_document_entry_schema()
+	_create_if_missing(AI_PROVIDER_SETTINGS)
+	ensure_ai_provider_settings_schema()
+	ensure_ai_chat_session_doctype()
+
 
 def create_doctypes():
-    create_ai_document_entry()
-    create_client_script()
-    create_ai_provider_settings()
-    create_ai_entry_page()
-    frappe.db.commit()
-    print("DocTypes created successfully")
+	"""Kept for old manual setup instructions; same as ensure_schema()."""
+	ensure_schema()
+	frappe.db.commit()
 
-def create_ai_document_entry():
-    if not frappe.db.exists("DocType", "AI Document Entry"):
-        doc = frappe.get_doc({
-            "doctype": "DocType",
-            "name": "AI Document Entry",
-            "module": "AI",
-            "custom": 1,
-            "autoname": "AI-DOC-.YYYY.-.#####",
-            "fields": [
-                {"fieldname": "status", "label": "Status", "fieldtype": "Select", "options": "Pending\nProcessed\nFailed\nSubmitted", "default": "Pending"},
-                {"fieldname": "file", "label": "File", "fieldtype": "Attach"},
-                {"fieldname": "target_doctype", "label": "Target DocType", "fieldtype": "Link", "options": "DocType"},
-                {"fieldname": "extracted_data", "label": "Extracted Data", "fieldtype": "Code", "options": "JSON"},
-                {"fieldname": "mapped_data", "label": "Mapped Data", "fieldtype": "Code", "options": "JSON"},
-                {"fieldname": "error_log", "label": "Error Log", "fieldtype": "Text"}
-            ],
-            "permissions": [{"role": "System Manager", "read": 1, "write": 1, "create": 1}]
-        })
-        doc.insert()
 
-def create_client_script():
-    if not frappe.db.exists("Client Script", "AI Document Entry UI"):
-        doc = frappe.get_doc({
-            "doctype": "Client Script",
-            "name": "AI Document Entry UI",
-            "dt": "AI Document Entry",
-            "module": "AI",
-            "script": '''
-frappe.ui.form.on('AI Document Entry', {
-    refresh: function(frm) {
-        if (frm.doc.status === 'Processed' && frm.doc.mapped_data) {
-            frm.add_custom_button(__('Review & Create Document'), function() {
-                // Route to the target document with mapped data
-                try {
-                    let data = JSON.parse(frm.doc.mapped_data);
-                    frappe.route_options = data;
-                    frappe.set_route('Form', data.doctype, 'new-' + data.doctype.toLowerCase().replace(/ /g, '-'));
-                } catch(e) {
-                    frappe.msgprint("Error parsing mapped data.");
-                }
-            }).addClass('btn-primary');
-        }
-    }
-});
-'''
-        })
-        doc.insert()
+def _create_if_missing(definition):
+	if not frappe.db.exists("DocType", definition["name"]):
+		frappe.get_doc(frappe.parse_json(frappe.as_json(definition))).insert()
 
-def create_ai_provider_settings():
-    if not frappe.db.exists("DocType", "AI Provider Settings"):
-        doc = frappe.get_doc({
-            "doctype": "DocType",
-            "name": "AI Provider Settings",
-            "module": "AI",
-            "custom": 1,
-            "issingle": 1,
-            "fields": [
-                {"fieldname": "provider", "label": "Provider", "fieldtype": "Select", "options": "Gemini\nOpenAI", "default": "Gemini"},
-                {"fieldname": "api_key", "label": "API Key", "fieldtype": "Password"}
-            ],
-            "permissions": [{"role": "System Manager", "read": 1, "write": 1, "create": 1}]
-        })
-        doc.insert()
+
+def _add_fields(doc, fields):
+	"""Add or update (fieldname, definition, insert_after) fields on a custom DocType. Returns True if changed."""
+	changed = False
+	by_name = {f.fieldname: f for f in doc.fields}
+	for fieldname, definition, after in fields:
+		field = by_name.get(fieldname)
+		if field:
+			for key, value in definition.items():
+				if str(field.get(key) or "") != str(value):
+					field.set(key, value)
+					changed = True
+			continue
+		new_field = doc.append("fields", {"fieldname": fieldname, **definition})
+		# move right after `after`
+		doc.fields.remove(new_field)
+		index = next((i for i, f in enumerate(doc.fields) if f.fieldname == after), len(doc.fields) - 1)
+		doc.fields.insert(index + 1, new_field)
+		by_name[fieldname] = new_field
+		changed = True
+	if changed:
+		for i, f in enumerate(doc.fields, start=1):
+			f.idx = i
+	return changed
+
+
+def _add_select_options(field, options):
+	current = [o for o in (field.options or "").split("\n") if o]
+	missing = [o for o in options if o not in current]
+	if missing:
+		field.options = "\n".join(current + missing)
+	return bool(missing)
+
+
+def ensure_ai_provider_settings_schema():
+	if not frappe.db.exists("DocType", "AI Provider Settings"):
+		return
+	doc = frappe.get_doc("DocType", "AI Provider Settings")
+	if not doc.custom:
+		return
+	provider = next((f for f in doc.fields if f.fieldname == "provider"), None)
+	changed = _add_select_options(provider, PROVIDERS) if provider else False
+	if _add_fields(doc, AI_PROVIDER_SETTINGS_FIELDS) or changed:
+		doc.save()
 
 
 # --------------------------------------------------------------------------------------
@@ -100,32 +152,12 @@ def ensure_ai_document_entry_schema():
 	by_name = {f.fieldname: f for f in doc.fields}
 
 	status = by_name.get("status")
-	if status:
-		options = [o for o in (status.options or "").split("\n") if o]
-		missing = [s for s in DocumentStatus.ALL if s not in options]
-		if missing:
-			status.options = "\n".join(options + missing)
-			changed = True
-
-	for fieldname, definition, after in AI_DOCUMENT_ENTRY_FIELDS:
-		field = by_name.get(fieldname)
-		if field:
-			for key, value in definition.items():
-				if str(field.get(key) or "") != str(value):
-					field.set(key, value)
-					changed = True
-			continue
-		new_field = doc.append("fields", {"fieldname": fieldname, **definition})
-		# move right after `after`
-		doc.fields.remove(new_field)
-		index = next((i for i, f in enumerate(doc.fields) if f.fieldname == after), len(doc.fields) - 1)
-		doc.fields.insert(index + 1, new_field)
-		by_name[fieldname] = new_field
+	if status and _add_select_options(status, DocumentStatus.ALL):
+		changed = True
+	if _add_fields(doc, AI_DOCUMENT_ENTRY_FIELDS):
 		changed = True
 
 	if changed:
-		for i, f in enumerate(doc.fields, start=1):
-			f.idx = i
 		doc.save()
 
 	# The form UI now lives in public/js/ai_document_entry.js (app_include_js); the old
@@ -143,7 +175,7 @@ def ensure_ai_chat_session_doctype():
 	frappe.get_doc({
 		"doctype": "DocType",
 		"name": "AI Chat Session",
-		"module": "AI",
+		"module": MODULE,
 		"custom": 1,
 		"autoname": "hash",
 		"track_changes": 0,
@@ -158,9 +190,11 @@ def ensure_ai_chat_session_doctype():
 		# Same role as AI Document Entry; each user only sees their own conversations.
 		"permissions": [{"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1, "if_owner": 1}],
 	}).insert()
-	frappe.db.commit()
+
+
+def after_install():
+	ensure_schema()
 
 
 def after_migrate():
-	ensure_ai_document_entry_schema()
-	ensure_ai_chat_session_doctype()
+	ensure_schema()

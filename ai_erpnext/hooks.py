@@ -8,7 +8,8 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# required_apps = []
+# The app maps documents to ERPNext DocTypes (Sales Invoice, Customer, Item, ...).
+required_apps = ["erpnext"]
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -88,6 +89,7 @@ app_include_js = "ai_erpnext.bundle.js"
 
 # before_install = "ai_erpnext.install.before_install"
 # after_install = "ai_erpnext.install.after_install"
+after_install = "ai_erpnext.setup_doctypes.after_install"
 
 # Uninstallation
 # ------------
@@ -147,7 +149,8 @@ app_include_js = "ai_erpnext.bundle.js"
 
 doc_events = {
 	"AI Document Entry": {
-		"before_save": "ai_erpnext.pipeline.controller.process_ai_document"
+		"validate": "ai_erpnext.pipeline.controller.validate_ai_document",
+		"before_save": "ai_erpnext.pipeline.controller.process_ai_document",
 	}
 }
 
@@ -176,6 +179,7 @@ doc_events = {
 # -------
 
 # before_tests = "ai_erpnext.install.before_tests"
+before_tests = "ai_erpnext.tests.bootstrap.before_tests"
 
 # Extend DocType Class
 # ------------------------------

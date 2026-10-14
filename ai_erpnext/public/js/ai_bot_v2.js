@@ -8,6 +8,7 @@ $(document).ready(function () {
 
 	const API = "ai_erpnext.api.chat.";
 	const MAX_BYTES = 10 * 1024 * 1024;
+	const UPLOAD_KEY = "ai_agent_pending_upload:" + ((frappe.session && frappe.session.user) || "");
 	const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 	const POLL_MS = 2500;
 	const POLL_LIMIT_MS = 10 * 60 * 1000;
@@ -164,6 +165,7 @@ $(document).ready(function () {
 		$btn.attr("aria-expanded", "true");
 		if (store.get("ai_agent_expanded") === "1") setExpanded(true);
 		if (!S.loaded) loadSession(); else scrollToEnd();
+		if (S.loaded && S.busy && !S.pollTimer) { S.pollStarted = Date.now(); schedulePoll(); }  // resume after the poll limit
 		setTimeout(() => $input.trigger("focus"), 50);
 	}
 	function closePanel() {
@@ -197,7 +199,7 @@ $(document).ready(function () {
 		});
 	}
 	function loadSession() {
-		call("get_session", { session: S.session }, (r) => { S.loaded = true; resetLog(); apply(r); }, null);
+		call("get_session", { session: S.session }, (r) => { S.loaded = true; resetLog(); apply(r); restoreAttachment(); }, null);
 	}
 	function send(payload) {
 		S.lastPayload = payload;
@@ -222,7 +224,7 @@ $(document).ready(function () {
 			S.pollTimer = null;
 			if (!S.busy) return;
 			if (Date.now() - S.pollStarted > POLL_LIMIT_MS) {
-				systemNote("Still working on it. Reopen the assistant later to see the result.");
+				systemNote("Still working on it. Check again in a moment.", () => { S.pollStarted = Date.now(); schedulePoll(); });
 				return;
 			}
 			frappe.call({ method: API + "poll", type: "POST", args: { session: S.session, since: S.lastId },
@@ -423,7 +425,7 @@ $(document).ready(function () {
 	$root.on("click", '[data-act="attach"]', () => $file.trigger("click"));
 	$file.on("change", function () { const f = this.files && this.files[0]; this.value = ""; if (f) setAttachment(f); });
 	$root.on("click", '[data-act="remove"]', clearAttachment);
-	$root.on("click", '[data-act="retry-upload"]', () => { if (S.attachment) upload(S.attachment); });
+	$root.on("click", '[data-act="retry-upload"]', () => { if (S.attachment && S.attachment.file) upload(S.attachment); });
 
 	function setAttachment(file) {
 		clearAttachment();
@@ -437,9 +439,10 @@ $(document).ready(function () {
 	function clearAttachment() {
 		if (S.attachment) {
 			if (S.attachment.xhr) S.attachment.xhr.abort();
-			if (S.attachment.preview) URL.revokeObjectURL(S.attachment.preview);
+			if (S.attachment.preview && S.attachment.preview.startsWith("blob:")) URL.revokeObjectURL(S.attachment.preview);
 		}
 		S.attachment = null;
+		store.set(UPLOAD_KEY, "");
 		$attach.prop("hidden", true);
 		updateComposer();
 	}
@@ -462,7 +465,11 @@ $(document).ready(function () {
 			att.uploading = false; att.xhr = null;
 			let url = null;
 			try { url = JSON.parse(xhr.responseText).message.file_url; } catch (e) { url = null; }
-			if (xhr.status === 200 && url) { att.file_url = url; $bar.css("width", "100%"); $state.text("Ready to send"); }
+			if (xhr.status === 200 && url) {
+				att.file_url = url; $bar.css("width", "100%"); $state.text("Ready to send");
+				// an uploaded but unsent image survives a page reload (the File already exists on the server)
+				store.set(UPLOAD_KEY, JSON.stringify({ file_url: url, name: att.file.name }));
+			}
 			else uploadFailed();
 			updateComposer();
 		};
@@ -471,6 +478,18 @@ $(document).ready(function () {
 		xhr.setRequestHeader("X-Frappe-CSRF-Token", frappe.csrf_token);
 		xhr.setRequestHeader("Accept", "application/json");
 		xhr.send(fd);
+		updateComposer();
+	}
+	function restoreAttachment() {
+		let saved = null;
+		try { saved = JSON.parse(store.get(UPLOAD_KEY) || "null"); } catch (e) { saved = null; }
+		if (!saved || !saved.file_url || S.attachment) return;
+		S.attachment = { file: null, preview: saved.file_url, uploading: false, file_url: saved.file_url, xhr: null };
+		$attach.prop("hidden", false).find("img").attr("src", saved.file_url).attr("alt", `Preview of ${saved.name || "attachment"}`);
+		$attach.find(".ai-attach-name").text(saved.name || "Attachment");
+		$attach.find(".ai-progress > div").css("width", "100%");
+		$attach.find(".ai-attach-state").removeClass("ai-attach-err").text("Ready to send");
+		$attach.find('[data-act="retry-upload"]').prop("hidden", true);
 		updateComposer();
 	}
 	function uploadFailed() {

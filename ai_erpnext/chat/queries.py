@@ -5,6 +5,11 @@ validated here against an explicit allowlist of DocTypes, fields, operations and
 then executed with Frappe's permission-aware get_list/get_doc. Nothing here writes to the
 database, and no model-generated SQL is ever executed. Result text and numbers are built
 here from real query results, never by the model.
+
+Company isolation: get_list already applies the user's User Permissions. On top of that,
+every query on a DocType with a company field is explicitly limited to the companies the
+user may read (or to the one company the user named, if it is one of those), so a plan can
+never widen the scope and a restricted user gets "nothing you can access" instead of data.
 """
 
 import datetime
@@ -120,7 +125,8 @@ def validate(plan):
 		raise QueryError(f"I can't do “{op.replace('_', ' ')}” for {doctype}.")
 
 	filters = plan.get("filters") if isinstance(plan.get("filters"), dict) else {}
-	q = {"doctype": doctype, "operation": op, "party": clean_text(filters.get("party"), 140) if spec.party_field else None,
+	q = {"doctype": doctype, "operation": op, "company": _match_company(doctype, filters.get("company")),
+		"party": clean_text(filters.get("party"), 140) if spec.party_field else None,
 		"search": clean_text(filters.get("search"), 140), "name": clean_text(filters.get("name"), 140),
 		"status": _match_status(doctype, filters.get("status")), "docstatus": None, "date": None,
 		"sort": plan.get("sort") if plan.get("sort") in SORTS else "newest",
@@ -156,6 +162,48 @@ def _match_doctype(value):
 		if value in (dt.lower(), dt.lower().rstrip("s")):
 			return dt
 	return None
+
+
+def has_company(doctype):
+	return bool(frappe.get_meta(doctype).has_field("company"))
+
+
+def permitted_companies():
+	"""Companies the user may read (User Permissions applied), or None if that can't be listed
+	(the user has no read access on Company); get_list's own User Permission check still applies then."""
+	try:
+		return frappe.get_list("Company", pluck="name", limit=0, order_by="name asc")
+	except frappe.PermissionError:
+		frappe.local.message_log = []
+		return None
+
+
+def _match_company(doctype, value):
+	value = clean_text(value, 140)
+	if not value:
+		return None
+	if not has_company(doctype):
+		return None  # masters such as Customer or Item are shared by all companies
+	allowed = permitted_companies()
+	if allowed is not None:
+		rows = frappe.get_list("Company", filters={"name": ["in", allowed or [""]]}, fields=["name", "company_name", "abbr"], limit=0)
+		match = [r.name for r in rows if value.lower() in (r.name.lower(), (r.company_name or "").lower(), (r.abbr or "").lower())]
+		if len(match) == 1:
+			return match[0]
+	# Same answer whether the company doesn't exist or isn't permitted: nothing leaks.
+	raise QueryError(f"I couldn't find a company “{value}” that you have access to.")
+
+
+def _company_filter(q):
+	"""[filters, note] limiting a query to the requested company or to all permitted companies."""
+	if not has_company(q["doctype"]):
+		return [], None
+	if q.get("company"):
+		return [["company", "=", q["company"]]], f"company {q['company']}"
+	allowed = permitted_companies()
+	if allowed is None:
+		return [], None
+	return [["company", "in", allowed or [""]]], None
 
 
 def _match_status(doctype, value):
@@ -248,6 +296,10 @@ def _base_filters(q):
 	elif frappe.get_meta(q["doctype"]).is_submittable:
 		filters.append(["docstatus", "<", 2])
 		notes.append("draft and submitted (cancelled excluded)")
+	company_filters, company_note = _company_filter(q)
+	filters += company_filters
+	if company_note:
+		notes.append(company_note)
 	if q["status"]:
 		filters.append([spec.status_field, "=", q["status"]])
 		notes.append(f"status {q['status']}")
@@ -326,11 +378,12 @@ def _count(q):
 def _details(q):
 	doctype, spec = q["doctype"], REGISTRY[q["doctype"]]
 	name = q["name"]
-	rows = frappe.get_list(doctype, filters={"name": name}, pluck="name", limit_page_length=1) if name else []
+	scope = _company_filter(q)[0]
+	rows = frappe.get_list(doctype, filters=[["name", "=", name], *scope], pluck="name", limit_page_length=1) if name else []
 	if not rows:
 		term = name or q["search"] or q["party"]
-		rows = frappe.get_list(doctype, or_filters=[[f, "like", f"%{term}%"] for f in spec.search_fields], fields=["name", spec.title],
-			limit_page_length=6, order_by="modified desc")
+		rows = frappe.get_list(doctype, filters=scope or None, or_filters=[[f, "like", f"%{term}%"] for f in spec.search_fields],
+			fields=["name", spec.title], limit_page_length=6, order_by="modified desc")
 		if not rows:
 			return {"text": f"I couldn't find a {doctype} matching “{term}” that you can access.", "names": [], "titles": []}
 		if len(rows) > 1:
@@ -354,7 +407,8 @@ def _details(q):
 		card["items"] = {"columns": [{"key": f, "label": child_meta.get_label(f)} for f in cfields],
 			"rows": [{f: _jsonable(r.get(f)) for f in cfields} for r in doc.get(spec.child[0])[:25]]}
 	if doctype == "Customer" and frappe.has_permission("Sales Invoice", "read"):
-		outstanding = frappe.get_list("Sales Invoice", filters={"customer": doc.name, "docstatus": 1, "outstanding_amount": [">", 0]},
+		outstanding = frappe.get_list("Sales Invoice", filters=[["customer", "=", doc.name], ["docstatus", "=", 1], ["outstanding_amount", ">", 0],
+			*_company_filter({"doctype": "Sales Invoice", "company": None})[0]],
 			fields=["currency", {"SUM": "outstanding_amount", "as": "total"}, {"COUNT": "*", "as": "n"}], group_by="currency")
 		card["rows"].append({"label": "Outstanding (submitted Sales Invoices)",
 			"value": "; ".join(f"{flt(o['total'], 2)} {o['currency']} in {o['n']} invoice(s)" for o in outstanding) or "None"})
@@ -385,7 +439,8 @@ def _sales_summary(q):
 
 
 def _outstanding_by_customer(q):
-	rows = frappe.get_list("Sales Invoice", filters={"docstatus": 1, "outstanding_amount": [">", 0]},
+	rows = frappe.get_list("Sales Invoice", filters=[["docstatus", "=", 1], ["outstanding_amount", ">", 0],
+		*_company_filter(dict(q, doctype="Sales Invoice"))[0]],
 		fields=["customer", "customer_name", "currency", {"SUM": "outstanding_amount", "as": "total"}, {"COUNT": "*", "as": "n"}],
 		group_by="customer, customer_name, currency", order_by="total desc", limit_page_length=q["limit"])
 	if not rows:

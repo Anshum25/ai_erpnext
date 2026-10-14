@@ -12,15 +12,15 @@ from .provider import LLMProvider
 class OpenAIProvider(LLMProvider):
 	"""OpenAI-compatible chat completions provider (used for OpenAI, Groq, OpenRouter, ...).
 
-	Never logs the model response, the image or request headers. Retries are bounded by
-	the SDK (MAX_RETRIES, honouring the provider's retry-after) and every failure is raised
-	as an AIProviderError with a user-safe message. There is no fallback to another provider.
+	Never logs the model response, the image or request headers. Every failure is raised as
+	an AIProviderError with a user-safe message. Providers built by ai.providers pass
+	max_retries=0 so that ai.policy is the only retry layer; fallback rules live in ai.providers.
 	"""
 
 	TIMEOUT_SECONDS = 90  # per attempt
-	MAX_RETRIES = 2  # SDK retries 408/409/429/5xx and connection errors with backoff
+	MAX_RETRIES = 2  # SDK default when max_retries is not given (408/409/429/5xx and connection errors)
 
-	def __init__(self, api_key: str, base_url: str = None, model: str = "gpt-4o", provider_name: str = None):
+	def __init__(self, api_key: str, base_url: str = None, model: str = "gpt-4o", provider_name: str = None, max_retries: int | None = None):
 		self.model = model
 		self.provider_name = provider_name or "openai-compatible"
 		self._requests = 0
@@ -32,7 +32,7 @@ class OpenAIProvider(LLMProvider):
 			api_key=api_key,
 			base_url=base_url,
 			timeout=self.TIMEOUT_SECONDS,
-			max_retries=self.MAX_RETRIES,
+			max_retries=self.MAX_RETRIES if max_retries is None else max_retries,
 			http_client=http_client,
 		)
 

@@ -180,3 +180,19 @@ def log_ai_event(**fields):
 	line = " ".join(f"{k}={fields[k]}" for k in _SAFE_FIELDS if fields.get(k) is not None)
 	level = logging.INFO if fields.get("status") == "ok" else logging.WARNING
 	get_ai_logger().log(level, "AI-EXTRACT " + line)
+
+
+def log_safe_error(title, exc, reference_doctype=None, reference_name=None):
+	"""Error Log entry with the code path only.
+
+	frappe.log_error() without a message stores the traceback *with local variables*, which
+	here would include extracted invoice data. This keeps file/line/function frames and the
+	exception type, never variable values or the exception message.
+	"""
+	import traceback
+
+	import frappe
+
+	frames = "".join(traceback.format_tb(exc.__traceback__)) if exc.__traceback__ else ""
+	frappe.log_error(title=title, message=f"{frames}{type(exc).__name__} (message omitted: may contain document data)",
+		reference_doctype=reference_doctype, reference_name=reference_name)

@@ -13,8 +13,7 @@ from frappe.utils import nowdate
 
 from ai_erpnext.api import chat
 from ai_erpnext.pipeline.review_service import apply_mapping
-
-IMAGE_URL = "/files/sales-invoice-template-1x.webp"  # existing File owned by Administrator
+from ai_erpnext.tests.fixtures import test_file
 
 
 def extraction(customer="AICHAT Buyer", items=None, supplier="Some Other Seller Pvt", date=None, **extra):
@@ -42,6 +41,7 @@ class TestChatAgent(IntegrationTestCase):
 		frappe.get_doc({"doctype": "Item", "item_code": "AICHAT-ITEM", "item_name": "AICHAT Widget", "item_group": ig,
 			"stock_uom": "Nos", "is_stock_item": 0, "is_sales_item": 1}).insert()
 		cls.company = frappe.defaults.get_user_default("Company") or frappe.db.get_single_value("Global Defaults", "default_company")
+		cls.image_url = test_file("png")
 
 	def setUp(self):
 		frappe.set_user("Administrator")
@@ -68,7 +68,7 @@ class TestChatAgent(IntegrationTestCase):
 		return frappe.get_doc("AI Document Entry", frappe.db.get_value("AI Chat Session", self.s, "active_entry"))
 
 	def upload_and_extract(self, data, text="Create a Sales Invoice from this image"):
-		r = self.send(text=text, file_url=IMAGE_URL)
+		r = self.send(text=text, file_url=self.image_url)
 		self.assertTrue(r["busy"])
 		entry = self.entry()
 		self.assertEqual(entry.status, "Pending")
@@ -248,7 +248,7 @@ class TestChatAgent(IntegrationTestCase):
 			frappe.set_user("Administrator")
 
 	def test_provider_failure_offers_retry(self):
-		self.send(text="invoice", file_url=IMAGE_URL)
+		self.send(text="invoice", file_url=self.image_url)
 		entry = self.entry()
 		entry.status = "Failed"
 		entry.error_log = "AI request limit reached. Please wait and try again."
@@ -264,9 +264,7 @@ class TestChatAgent(IntegrationTestCase):
 
 	def test_attachment_validation(self):
 		self.assertIn("couldn't access", self.texts(self.send(file_url="/private/files/not-mine.png")))
-		pdf = frappe.db.get_value("File", {"file_url": ["like", "%.pdf"], "owner": "Administrator"}, "file_url")
-		if pdf:
-			self.assertIn("PDF files aren't supported", self.texts(self.send(file_url=pdf)))
+		self.assertIn("PDF files aren't supported", self.texts(self.send(file_url=test_file("pdf"))))
 		self.enqueue.assert_not_called()
 
 	def test_document_text_cannot_issue_instructions(self):
@@ -280,7 +278,7 @@ class TestChatAgent(IntegrationTestCase):
 	def test_new_image_during_operation_asks_before_replacing(self):
 		self.upload_and_extract(extraction(customer="AICHAT Fresh Customer Y"))
 		first = self.entry().name
-		self.send(text="another one", file_url=IMAGE_URL)
+		self.send(text="another one", file_url=self.image_url)
 		self.assertEqual(self.pending()["kind"], "replace_operation")
 		self.answer("__keep__")
 		self.assertEqual(self.entry().name, first)

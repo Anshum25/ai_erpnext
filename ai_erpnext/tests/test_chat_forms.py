@@ -198,7 +198,7 @@ class TestChatForms(IntegrationTestCase):
 		self.assertIn("never submit", self.last_text())
 
 	def test_duplicate_master_names_are_refused(self):
-		self.say("create customer", create_plan("Customer", {"customer_name": "AIF Existing Buyer"}))
+		self.say("create customer AIF Existing Buyer", create_plan("Customer", {"customer_name": "AIF Existing Buyer"}))
 		self.assertIn("already exists", " ".join(m.get("text") or "" for m in chat.get_session(self.s)["messages"][-3:]))
 		self.assertEqual(self.pending()["key"], "customer_name")
 

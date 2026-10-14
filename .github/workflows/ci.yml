@@ -83,15 +83,22 @@ jobs:
       - name: Setup
         run: |
           pip install frappe-bench
-          bench init --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
+          # Pin Frappe to the release line the app targets (the default branch is develop).
+          bench init --skip-redis-config-generation --skip-assets --frappe-branch version-16 --python "$(which python)" ~/frappe-bench
 
       - name: Install
         working-directory: /home/runner/frappe-bench
         run: |
+          # ai_erpnext requires ERPNext (hooks.required_apps); it must be installed first.
+          bench get-app --branch version-16 erpnext https://github.com/frappe/erpnext
           bench get-app ai_erpnext $GITHUB_WORKSPACE
           bench setup requirements --dev
           bench new-site --db-root-password root --admin-password admin test_site
+          bench --site test_site install-app erpnext
           bench --site test_site install-app ai_erpnext
+          # A second run of the schema hooks must be a no-op (after_migrate on an installed site).
+          bench --site test_site migrate
+          bench --site test_site list-apps
           bench build
         env:
           CI: 'Yes'

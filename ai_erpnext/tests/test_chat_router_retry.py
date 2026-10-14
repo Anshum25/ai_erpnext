@@ -12,6 +12,7 @@ import httpx
 import openai
 from frappe.tests import IntegrationTestCase
 
+from ai_erpnext.ai import policy
 from ai_erpnext.ai.errors import AIProviderError, classify
 from ai_erpnext.ai.openai_provider import OpenAIProvider
 from ai_erpnext.api import chat
@@ -87,7 +88,7 @@ class TestRouterRetryPolicy(IntegrationTestCase):
 		p = FakeProvider(err("timeout"), CHAT_PLAN)
 		result, sleeps = run_policy(p)
 		self.assertEqual((result, len(p.calls)), (CHAT_PLAN, 2))
-		self.assertEqual(sleeps, [llm.BACKOFF_BASE_S])  # base * 2^0, full jitter factor 1.0
+		self.assertEqual(sleeps, [policy.BACKOFF_BASE_S])  # base * 2^0, full jitter factor 1.0
 
 	def test_5xx_stops_at_attempt_limit_within_budget(self):
 		p = FakeProvider(*[err("unavailable", status_code=503)] * 5)

@@ -24,6 +24,7 @@ from ai_erpnext.constants import DocumentStatus, FieldStatus
 from ai_erpnext.mapping.adapters import SalesInvoiceAdapter
 from ai_erpnext.mapping.mapper import map_document
 from ai_erpnext.pipeline import processor
+from ai_erpnext.tests.fixtures import test_file
 from ai_erpnext.validation.validator import validate_outcome
 
 SENTINEL = "ZZSENTINEL-CUSTOMER-4471"  # must never appear in any log output
@@ -81,6 +82,7 @@ class TestExtractionSafety(IntegrationTestCase):
 		cls.company_currency = frappe.get_cached_value(
 			"Company", frappe.defaults.get_user_default("Company") or frappe.db.get_single_value("Global Defaults", "default_company"),
 			"default_currency")
+		cls.image_url = test_file("png")
 
 	# --- Prompt B2 contract ----------------------------------------------------------
 	def test_prompt_b2_is_the_benchmarked_version(self):
@@ -209,7 +211,7 @@ class TestExtractionSafety(IntegrationTestCase):
 	# --- pipeline: safe failure, no fallback, no reprocessing --------------------------------
 	def _entry(self, status):
 		name = frappe.get_doc({"doctype": "AI Document Entry", "status": "Processed",
-			"file": "/files/sales-invoice-template-1x.webp"}).insert().name
+			"file": self.image_url}).insert().name
 		frappe.db.set_value("AI Document Entry", name, "status", status)
 		return name
 
@@ -293,6 +295,6 @@ class TestExtractionSafety(IntegrationTestCase):
 
 	def test_saving_pending_entry_enqueues_deduplicated_job(self):
 		with mock.patch("frappe.enqueue") as enqueue:
-			doc = frappe.get_doc({"doctype": "AI Document Entry", "status": "Pending", "file": "/files/sales-invoice-template-1x.webp"}).insert()
+			doc = frappe.get_doc({"doctype": "AI Document Entry", "status": "Pending", "file": self.image_url}).insert()
 		self.assertEqual(enqueue.call_args.kwargs["job_id"], f"ai-extract-{doc.name}")
 		self.assertTrue(enqueue.call_args.kwargs["deduplicate"])

@@ -126,7 +126,10 @@ def handle_message(ctx, text=None, file_url=None, action=None, client_id=None):
 		processed.append(client_id)
 
 	text = clean_text(text, MAX_TEXT) if text else None
-	action = action if isinstance(action, dict) else (json.loads(action) if action else None)
+	action = _parse_action(action)
+	if action is False:
+		ctx.say("That button press couldn't be read. Please try again.")
+		return _reask_if_pending(ctx)
 
 	if file_url:
 		attachment = _attachment(file_url)
@@ -158,11 +161,26 @@ def handle_message(ctx, text=None, file_url=None, action=None, client_id=None):
 	return _on_text(ctx, text)
 
 
+def _parse_action(action):
+	"""A button press from the browser: dict, JSON object string, None (no action) or False (unreadable)."""
+	if not action:
+		return None
+	if isinstance(action, dict):
+		return action
+	try:
+		action = json.loads(action) if isinstance(action, str) and len(action) <= 4000 else None
+	except ValueError:
+		return False
+	return action if isinstance(action, dict) else False
+
+
 def poll(ctx):
 	"""Advance an extraction that finished in the background worker."""
 	if ctx.st.get("phase") != "extracting":
 		return
 	entry = _entry(ctx)
+	if entry and entry.status == "Pending":
+		_resume_if_lost(ctx, entry)
 	if not entry or entry.status == "Pending":
 		return
 	if entry.status == "Failed":
@@ -173,6 +191,43 @@ def poll(ctx):
 	ctx.st["phase"] = "collecting"
 	_announce(ctx, entry)
 	advance(ctx)
+
+
+STALE_EXTRACTION_S = 180  # a Pending entry without a queued or running job for this long was lost
+LOST_EXTRACTION = "Reading the invoice didn't finish (the background job stopped). Please retry."
+
+
+def _resume_if_lost(ctx, entry):
+	"""Resume an extraction whose background job disappeared (worker restart, crashed job).
+
+	A running job is left alone. A job that vanished or crashed is queued again once
+	(deduplicated, so never twice in parallel). If it is lost again, or sits in the queue
+	without a worker picking it up, the entry is marked Failed and the user gets the normal
+	Retry/Cancel choice instead of an endless "reading the invoice".
+	"""
+	from frappe.utils import now_datetime, time_diff_in_seconds
+	from frappe.utils.background_jobs import get_job_status
+	from rq.job import JobStatus
+
+	from ai_erpnext.ai.errors import get_ai_logger
+	from ai_erpnext.pipeline.controller import enqueue_extraction, extraction_job_id
+
+	job = get_job_status(extraction_job_id(entry.name))
+	if job == JobStatus.STARTED:
+		return  # still running; bounded by the job timeout
+	requeued = ctx.st.get("requeued") == entry.name
+	since = ctx.st.get("requeued_at") if requeued else entry.modified
+	if time_diff_in_seconds(now_datetime(), since) < STALE_EXTRACTION_S:
+		return
+	if job != JobStatus.QUEUED and not requeued:
+		ctx.st.update({"requeued": entry.name, "requeued_at": str(now_datetime())})
+		get_ai_logger().warning(f"AI-CHAT extraction_requeued doc={entry.name} job_status={job}")
+		enqueue_extraction(entry.name)
+		return
+	get_ai_logger().warning(f"AI-CHAT extraction_lost doc={entry.name} job_status={job}")
+	entry.status = "Failed"
+	entry.error_log = LOST_EXTRACTION
+	entry.save()
 
 
 # --------------------------------------------------------------------------------------------
@@ -254,21 +309,29 @@ def _reask_if_pending(ctx):
 # --------------------------------------------------------------------------------------------
 def _general(ctx, text):
 	from ai_erpnext.ai.errors import AIProviderError
-	from ai_erpnext.chat import llm
+	from ai_erpnext.chat import llm, shortcuts
 
-	try:
-		plan = llm.route(ctx.msgs[:-1], text, ctx.st.get("last_query"))
-	except AIProviderError as e:
-		m = CREATE_DOC_RE.match(text)
-		if m:  # creation works without the AI service: start the guided form with no prefill
-			return forms.start(ctx, forms.match_doctype(m.group(1)))
-		ctx.say(CHAT_ERRORS.get(e.category, CHAT_ERRORS["unknown"]))
-		return
+	# Unambiguous messages are handled without an AI call (see chat/shortcuts.py).
+	plan = shortcuts.match(text, ctx.st.get("last_query"))
+	m = CREATE_DOC_RE.match(text)
+	if plan is None and m and not text[m.end():].strip(" .!?"):
+		plan = {"mode": "create", "doctype": m.group(1)}  # "create purchase invoice" and nothing else
+	via = "shortcut" if plan else "model"
+	if plan is None:
+		try:
+			plan = llm.route(ctx.msgs[:-1], text, ctx.st.get("last_query"))
+		except AIProviderError as e:
+			_count_route(ctx, "model", "error")
+			if m:  # creation works without the AI service: start the guided form with no prefill
+				return forms.start(ctx, forms.match_doctype(m.group(1)))
+			ctx.say(CHAT_ERRORS.get(e.category, CHAT_ERRORS["unknown"]))
+			return
 	mode = plan["mode"]
+	_count_route(ctx, via, mode)
 	if mode == "chat":
 		ctx.say(plan.get("reply") or "How can I help?", source="general")
 	elif mode == "clarify":
-		ctx.say(plan.get("question") or "Could you give me a bit more detail?")
+		ctx.say(plan.get("question") or "Could you give me a bit more detail?", source="clarify")
 	elif mode == "create":
 		doctype = forms.match_doctype(plan.get("doctype") or "")
 		if not doctype:
@@ -288,6 +351,16 @@ def _general(ctx, text):
 		_more(ctx)
 	elif mode == "query":
 		_run_query(ctx, plan.get("query"))
+
+
+def _count_route(ctx, via, mode):
+	"""Per-conversation counters of how free-text messages were routed (model calls vs shortcuts)."""
+	from ai_erpnext.ai.errors import get_ai_logger
+
+	metrics = ctx.st.setdefault("metrics", {})
+	key = "model_routes" if via == "model" else "shortcut_routes"
+	metrics[key] = int(metrics.get(key) or 0) + 1
+	get_ai_logger().info(f"AI-CHAT routed via={via} mode={mode}")
 
 
 # Chat-specific wording for AI router failures (the shared provider messages talk about extraction).
@@ -314,7 +387,8 @@ def _run_query(ctx, raw_plan, page_of=None):
 		q = page_of or queries.validate(raw_plan)
 		result = queries.execute(q)
 	except queries.QueryClarify as c:
-		ctx.say(c.question, suggestions=c.options or None)
+		# the question text holds only the user's own terms; record names stay in the suggestions
+		ctx.say(c.question, suggestions=c.options or None, source="clarify")
 		return
 	except queries.QueryError as e:
 		ctx.say(str(e))

@@ -90,8 +90,10 @@ def _legacy_mapping(doc, outcome):
 		extracted = dict(load_json(doc.extracted_data, {}) or {})
 		extracted["document_type"] = outcome.target_doctype
 		return ERPNextMapper().map_document(extracted)
-	except Exception:
-		frappe.log_error(title="AI legacy mapping failed")
+	except Exception as e:
+		from ai_erpnext.ai.errors import log_safe_error
+
+		log_safe_error("AI legacy mapping failed", e, "AI Document Entry", doc.name)
 		return None
 
 

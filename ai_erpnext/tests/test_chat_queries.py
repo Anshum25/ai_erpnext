@@ -18,9 +18,9 @@ from ai_erpnext.ai.errors import AIProviderError
 from ai_erpnext.api import chat
 from ai_erpnext.chat import queries
 from ai_erpnext.pipeline.review_service import apply_mapping
+from ai_erpnext.tests.fixtures import test_file
 
 ROUTE = "ai_erpnext.chat.llm.route"
-IMAGE_URL = "/files/sales-invoice-template-1x.webp"
 
 
 def plan_query(**query):
@@ -47,6 +47,7 @@ class TestChatQueries(IntegrationTestCase):
 		cls.not_due = cls.make_si("AIQ Alpha Traders", 200, add_days(today, -2), add_days(today, 10), submit=True)
 		cls.draft_past_due = cls.make_si("AIQ Beta Retail", 300, add_days(today, -20), add_days(today, -5), submit=False)
 		cls.today_si = cls.make_si("AIQ Beta Retail", 50, today, today, submit=True)
+		cls.image_url = test_file("png")
 
 	@classmethod
 	def make_si(cls, customer, rate, posting, due, submit):
@@ -92,7 +93,7 @@ class TestChatQueries(IntegrationTestCase):
 
 	def test_ai_unavailable_is_reported_honestly(self):
 		with mock.patch(ROUTE, side_effect=AIProviderError("rate_limited")):
-			r = chat.send_message(session=self.s, text="Good morning")
+			r = chat.send_message(session=self.s, text="What is a cost center?")
 		self.assertIn("request limit was reached", self.last(r)["text"])
 
 	def test_unsupported_action_is_not_executed(self):
@@ -130,7 +131,7 @@ class TestChatQueries(IntegrationTestCase):
 		self.assertNotIn("card", self.last(r))
 
 	def test_overdue_uses_accounting_criteria(self):
-		r, _ = self.ask("List all overdue Sales Invoices", plan_query(doctype="Sales Invoice", operation="overdue", filters={"party": "AIQ"}))
+		r, _ = self.ask("List all overdue Sales Invoices for AIQ", plan_query(doctype="Sales Invoice", operation="overdue", filters={"party": "AIQ"}))
 		names = [row["_name"] for row in self.last(r)["card"]["rows"]]
 		self.assertEqual(names, [self.overdue])  # not the not-yet-due one, not the draft with a past due date
 		r, _ = self.ask("unpaid ones", plan_query(doctype="Sales Invoice", operation="unpaid", filters={"party": "AIQ"}))
@@ -163,7 +164,7 @@ class TestChatQueries(IntegrationTestCase):
 
 	# ---- follow-ups ---------------------------------------------------------------------------
 	def test_follow_up_open_and_paging(self):
-		r, _ = self.ask("Show me the last 2 Sales Invoices", plan_query(doctype="Sales Invoice", operation="list", filters={"party": "AIQ"}, limit=2))
+		r, _ = self.ask("Show me the last 2 Sales Invoices for AIQ", plan_query(doctype="Sales Invoice", operation="list", filters={"party": "AIQ"}, limit=2))
 		first_page = [row["_name"] for row in self.last(r)["card"]["rows"]]
 		self.assertTrue(self.last(r)["card"]["has_more"])
 		r, _ = self.ask("Open the second one", {"mode": "open", "index": 2})
@@ -176,7 +177,7 @@ class TestChatQueries(IntegrationTestCase):
 		self.assertIn("can't tell which record", self.last(r)["text"])
 
 	def test_follow_up_context_is_passed_to_router(self):
-		self.ask("Show me the last 10 Sales Invoices", plan_query(doctype="Sales Invoice", operation="list", filters={"party": "AIQ"}))
+		self.ask("Show me the last 10 Sales Invoices for AIQ", plan_query(doctype="Sales Invoice", operation="list", filters={"party": "AIQ"}))
 		r, route = self.ask("Only the unpaid ones", plan_query(doctype="Sales Invoice", operation="unpaid", filters={"party": "AIQ"}))
 		last_query = route.call_args.args[2]
 		self.assertEqual(last_query["plan"]["doctype"], "Sales Invoice")
@@ -213,7 +214,7 @@ class TestChatQueries(IntegrationTestCase):
 
 	# ---- invoice workflow regressions --------------------------------------------------------
 	def _upload(self, data):
-		chat.send_message(session=self.s, text="Create a Sales Invoice from this image", file_url=IMAGE_URL)
+		chat.send_message(session=self.s, text="Create a Sales Invoice from this image", file_url=self.image_url)
 		entry = frappe.get_doc("AI Document Entry", frappe.db.get_value("AI Chat Session", self.s, "active_entry"))
 		entry.extracted_data = json.dumps(data)
 		apply_mapping(entry)
