@@ -54,6 +54,7 @@ UNSUPPORTED = [
 	(r"\bpayments?\b", "Payments"),
 ]
 CANCEL_RE = re.compile(r"^\s*(cancel|stop|abort|discard|never\s*mind|forget it)\b", re.I)
+RESTART_RE = re.compile(r"^\s*(?:please\s+)?(?:start\s+(?:over|again|from\s+scratch)|restart|begin\s+again|reset)\b", re.I)
 HELP_RE = re.compile(r"^\s*(help|\?)\s*$", re.I)
 # While an invoice question is pending, these cues mean "a separate question", not an answer.
 GENERAL_CUE_RE = re.compile(r"^\s*(show|list|count|how many|how much|what|which|who|when|explain|summari[sz]e|tell me|give me|display|hi|hello|hey|good (morning|afternoon|evening)|thanks|thank you)\b", re.I)
@@ -63,8 +64,12 @@ WHY_RE = re.compile(r"^\s*(why\b|what'?s wrong|what is wrong|why was .* rejected
 YES_RE = re.compile(r"^\s*(yes|y|yeah|yep|ok|okay|sure|confirm|go ahead|proceed|do it|create( it)?( the)?( draft)?|continue)\b", re.I)
 NO_RE = re.compile(r"^\s*(no|n|nope)\b", re.I)
 CREATE_INVOICE_RE = re.compile(r"\b(create|make|raise|generate|prepare|draft)\b.*\binvoice\b", re.I)
-CREATE_DOC_RE = re.compile(r"^\s*(?:please\s+)?(?:create|make|raise|add|new|prepare|draft|generate)\s+(?:a\s+|an\s+|new\s+|draft\s+)*"
-	r"(sales invoice|purchase invoice|sales order|purchase order|quotation|delivery note|purchase receipt|customer|supplier|item)s?\b", re.I)
+_CREATE_NAMES = "|".join(sorted(["sales invoice", "purchase invoice", "sales order", "purchase order", "quotation", "delivery note",
+	"purchase receipt", "customer", "supplier", "item", *forms.DOCTYPE_ALIASES], key=len, reverse=True))
+CREATE_DOC_RE = re.compile(r"^\s*(?:please\s+)?(?:create|make|raise|add|new|prepare|draft|generate|start)\s+(?:a\s+|an\s+|new\s+|draft\s+)*"
+	r"(" + _CREATE_NAMES + r")s?\b", re.I)
+# A creation request anywhere in a longer message ("can you make a new po for Acme").
+CREATE_ANY_RE = re.compile(r"\b(?:create|make|raise|prepare|draft|generate|new)\s+(?:a\s+|an\s+|new\s+|draft\s+)*(" + _CREATE_NAMES + r")s?\b", re.I)
 CREATE_NEW_RE = re.compile(r"\b(create|add|make|new)\b", re.I)
 USE_EXISTING_RE = re.compile(r"\buse (the )?existing\b", re.I)
 FIELD_CORRECTION_RE = re.compile(
@@ -80,12 +85,26 @@ MASTER_ALIASES = {"customer name": "customer_name", "customer type": "customer_t
 	"stock uom": "stock_uom", "uom": "stock_uom", "unit": "stock_uom"}
 
 
+# Loop guard: the same question (kind, field and wording) asked this many times in a row,
+# each time right after the user answered it, is replaced by a recovery message that says
+# what is still missing and how to get out (the question stays open; nothing is discarded).
+LOOP_THRESHOLD = 3
+LOOP_RECOVERY = ("I still don't have a value I can use here, so let's do this differently. {question}\n"
+	"Pick one of the options or type the exact value. You can also say “cancel” to stop, or “start over” to begin again.")
+# A lookup question ("Which customer do you mean?") is asked again at most this many times.
+MAX_QUERY_ATTEMPTS = 2
+
+
 class Ctx:
 	def __init__(self, doc):
 		self.doc = doc
 		self.msgs = S.messages(doc)
 		self.st = S.state(doc)
 		self.start_seq = int(self.st.get("seq") or 0)
+		self.view = None  # (doctype, name) of the form the user has open, if readable
+		self.reasking = False  # True while re-asking a pending question after an unrelated message
+		# The question the user is replying to now (loop guard: only a re-ask of it counts as a repeat).
+		self.answering_sig = (self.st.get("ask_sig") or {}).get("sig") if self.st.get("pending") else None
 
 	def say(self, text=None, **extra):
 		return S.add_message(self.doc, self.msgs, self.st, "assistant", text, **extra)
@@ -94,7 +113,21 @@ class Ctx:
 		return S.add_message(self.doc, self.msgs, self.st, "user", text, **extra)
 
 	def ask(self, kind, text, key=None, options=None, input=None, **extra):
-		q = {"id": uuid.uuid4().hex[:12], "kind": kind, "key": key, "options": options or [], "input": input}
+		options = list(options or [])
+		sig = f"{kind}|{key}|{re.sub(r'[^a-z0-9]+', ' ', (text or '').lower()).strip()}"
+		last = self.st.get("ask_sig") or {}
+		repeat = sig == last.get("sig") == self.answering_sig and not self.reasking
+		count = int(last.get("count") or 1) + 1 if repeat else (int(last.get("count") or 1) if sig == last.get("sig") else 1)
+		self.answering_sig = None  # several questions in one reply: only the first can be a repeat
+		self.st["ask_sig"] = {"sig": sig, "count": count}
+		if count >= LOOP_THRESHOLD:
+			from ai_erpnext.ai.errors import get_ai_logger
+
+			get_ai_logger().warning(f"AI-CHAT loop_detected kind={kind} repeats={count}")
+			text = LOOP_RECOVERY.format(question=text)
+			if not any(o.get("value") == "__cancel__" for o in options):
+				options.append({"label": "Cancel", "value": "__cancel__", "style": "secondary"})
+		q = {"id": uuid.uuid4().hex[:12], "kind": kind, "key": key, "options": options, "input": input}
 		self.st["pending"] = q
 		self.say(text, question={k: v for k, v in q.items() if k != "key"}, **extra)
 		return q
@@ -117,13 +150,20 @@ def greet_if_new(ctx):
 		ctx.say(GREETING)
 
 
-def handle_message(ctx, text=None, file_url=None, action=None, client_id=None):
+def handle_message(ctx, text=None, file_url=None, action=None, client_id=None, context=None):
 	client_id = clean_text(client_id, 64)
 	processed = ctx.st.setdefault("processed", [])
+	replies = ctx.st.setdefault("replies", {})
 	if client_id and client_id in processed:
-		return  # duplicate delivery of the same message (network retry, double click)
+		# Duplicate delivery of the same message (network retry, double click): nothing is processed
+		# again; the reply produced the first time is returned so the browser can show it.
+		if client_id in replies:
+			ctx.start_seq = int(replies[client_id])
+		return
 	if client_id:
 		processed.append(client_id)
+		replies[client_id] = ctx.start_seq
+	ctx.view = _view_context(context)
 
 	text = clean_text(text, MAX_TEXT) if text else None
 	action = _parse_action(action)
@@ -159,6 +199,29 @@ def handle_message(ctx, text=None, file_url=None, action=None, client_id=None):
 		return
 	ctx.user(text)
 	return _on_text(ctx, text)
+
+
+def _view_context(context):
+	"""(doctype, name) of the ERPNext form the user has open, when it is a record the chat can read.
+	The browser only sends its route; everything is re-checked here."""
+	from ai_erpnext.chat.queries import REGISTRY
+
+	if isinstance(context, str):
+		try:
+			context = json.loads(context) if len(context) <= 1000 else None
+		except ValueError:
+			context = None
+	route = context.get("route") if isinstance(context, dict) else None
+	if not (isinstance(route, list) and len(route) >= 3 and route[0] == "Form"):
+		return None
+	doctype, name = clean_text(route[1], 60), clean_text(route[2], 140)
+	if doctype not in REGISTRY or not name or name.startswith("new-"):
+		return None
+	try:
+		return (doctype, name) if frappe.db.exists(doctype, name) and frappe.has_permission(doctype, "read", name) else None
+	except Exception:
+		frappe.local.message_log = []
+		return None
 
 
 def _parse_action(action):
@@ -259,6 +322,8 @@ def _on_action(ctx, action):
 def _on_text(ctx, text):
 	if CANCEL_RE.match(text):
 		return _cancel(ctx)
+	if RESTART_RE.match(text):
+		return _restart(ctx)
 	if HELP_RE.match(text):
 		ctx.say(HELP)
 		return _reask_if_pending(ctx)
@@ -283,13 +348,22 @@ def _on_text(ctx, text):
 			kind = {"posting_date": "posting_date", "due_date": "due_date"}.get(key, key)
 			return _answer(ctx, {"kind": kind, "key": key}, m.group(2), from_text=True, correction=True)
 
-	if forms.active(ctx) and forms.correction(ctx, text):
+	if forms.active(ctx) and (forms.switch(ctx, text) or forms.correction(ctx, text)):
 		return
 
 	pending = ctx.st.get("pending")
+	if pending and pending["kind"].startswith("query_"):
+		# A lookup question is light: a new request replaces it instead of being forced into it.
+		if _is_new_request(text):
+			ctx.st["pending"] = None
+			return _general(ctx, text)
+		return _answer(ctx, pending, text, from_text=True)
 	if pending:
 		search_kinds = ("customer", "item", "uom", "company", "currency", "warehouse", "master_field", "form_field", "form_item", "form_warehouse")
-		is_general = GENERAL_CUE_RE.match(text) and not (pending["kind"] in search_kinds and re.match(r"^\s*(find|search)\b", text, re.I))
+		from ai_erpnext.chat import shortcuts
+
+		is_general = (GENERAL_CUE_RE.match(text) or CREATE_DOC_RE.match(text) or shortcuts.field_question(text)) and not (
+			pending["kind"] in search_kinds and re.match(r"^\s*(find|search)\b", text, re.I))
 		if not is_general:
 			return _answer(ctx, pending, text, from_text=True)
 		_general(ctx, text)
@@ -298,10 +372,29 @@ def _on_text(ctx, text):
 	return _general(ctx, text)
 
 
+def _is_new_request(text):
+	"""True if a message is a request of its own rather than the name/ID a lookup question asked for."""
+	from ai_erpnext.chat import capabilities, shortcuts
+
+	if "?" in text or len(text.split()) > 8 or GENERAL_CUE_RE.match(text) or CREATE_DOC_RE.match(text) or ACTION_RE.match(text):
+		return True
+	return bool(shortcuts.match(text) or capabilities.match(text))
+
+
 def _reask_if_pending(ctx):
-	if ctx.st.get("pending"):
+	pending = ctx.st.get("pending")
+	if not pending:
+		return
+	if pending["kind"].startswith("query_"):
+		ctx.st["pending"] = None  # lookup questions are not re-asked after another request
+		return
+	if forms.active(ctx):
+		ctx.say(f"Back to the {ctx.st['forms'][-1]['doctype']}:")
+	elif ctx.st.get("master"):
+		ctx.say(f"Back to the new {ctx.st['master']['doctype'].lower()}:")
+	else:
 		ctx.say("Back to the invoice:")
-		return _reask(ctx)
+	return _reask(ctx)
 
 
 # --------------------------------------------------------------------------------------------
@@ -309,7 +402,7 @@ def _reask_if_pending(ctx):
 # --------------------------------------------------------------------------------------------
 def _general(ctx, text):
 	from ai_erpnext.ai.errors import AIProviderError
-	from ai_erpnext.chat import llm, shortcuts
+	from ai_erpnext.chat import capabilities, llm, shortcuts
 
 	# Unambiguous messages are handled without an AI call (see chat/shortcuts.py).
 	plan = shortcuts.match(text, ctx.st.get("last_query"))
@@ -324,23 +417,41 @@ def _general(ctx, text):
 			_count_route(ctx, "model", "error")
 			if m:  # creation works without the AI service: start the guided form with no prefill
 				return forms.start(ctx, forms.match_doctype(m.group(1)))
-			ctx.say(CHAT_ERRORS.get(e.category, CHAT_ERRORS["unknown"]))
+			reason = CHAT_ERRORS.get(e.category, CHAT_ERRORS["unknown"])
+			guidance = capabilities.answer(text)
+			if guidance:  # known ERPNext questions are answered without the AI service, and the user is told why
+				ctx.say(f"{guidance}\n\n(Built-in guidance: {reason[0].lower() + reason[1:]})", source="guide")
+				return
+			ctx.say(reason)
 			return
 	mode = plan["mode"]
 	_count_route(ctx, via, mode)
 	if mode == "chat":
-		ctx.say(plan.get("reply") or "How can I help?", source="general")
+		reply = plan.get("reply") or "How can I help?"
+		about = capabilities.match(text)
+		if about and about[0] in ("how", "what", "after"):
+			reply += "\n\n" + capabilities.footer(about[1])  # what the chat itself can do, from the registry
+		ctx.say(reply, source="general")
+	elif mode == "clarify" and CREATE_ANY_RE.search(text) and forms.match_doctype(CREATE_ANY_RE.search(text).group(1)):
+		# A creation request is never clarified by the model in free text: the guided form asks,
+		# with the existing records as buttons and a separate "Create new".
+		return _start_form(ctx, forms.match_doctype(CREATE_ANY_RE.search(text).group(1)))
 	elif mode == "clarify":
-		ctx.say(plan.get("question") or "Could you give me a bit more detail?", source="clarify")
+		question = plan.get("question") or "Could you give me a bit more detail?"
+		previous = next((x for x in reversed(ctx.msgs[:-1]) if x["role"] == "assistant"), None)
+		if previous and previous.get("source") == "clarify" and _same_text(previous.get("text"), question):
+			# The model asked the same thing again although the user answered: don't repeat it.
+			ctx.say("I still can't tell exactly what you mean, so I won't ask the same question again. Please say it in one message, "
+				"for example “mobile number of customer Amit Patel”, “status of Sales Order SAL-ORD-2026-00001” or "
+				"“create purchase order”.")
+			return
+		ctx.say(question, source="clarify")
 	elif mode == "create":
 		doctype = forms.match_doctype(plan.get("doctype") or "")
 		if not doctype:
 			ctx.say(f"I can't create that from the chat. I can create: {', '.join(forms.CREATABLE)}.")
 			return
-		if ctx.st.get("phase") in ("extracting", "collecting") or forms.active(ctx):
-			ctx.say("Please finish or cancel the current record first (say “cancel”).")
-			return _reask_if_pending(ctx)
-		return forms.start(ctx, doctype, values=plan.get("values") if isinstance(plan.get("values"), dict) else None,
+		return _start_form(ctx, doctype, values=plan.get("values") if isinstance(plan.get("values"), dict) else None,
 			items=plan.get("items") if isinstance(plan.get("items"), list) else None)
 	elif mode == "unsupported":
 		ctx.say((plan.get("reply") or "I can't do that yet.") + " From the chat I can only create new Drafts of "
@@ -350,7 +461,46 @@ def _general(ctx, text):
 	elif mode == "more":
 		_more(ctx)
 	elif mode == "query":
-		_run_query(ctx, plan.get("query"))
+		query = plan.get("query")
+		if isinstance(query, dict) and isinstance(query.get("ref"), dict):
+			query = _resolve_ref(ctx, query)
+		_run_query(ctx, query)
+
+
+def _start_form(ctx, doctype, values=None, items=None):
+	if ctx.st.get("phase") in ("extracting", "collecting") or forms.active(ctx):
+		current = ctx.st["forms"][-1]["doctype"] if forms.active(ctx) else "invoice"
+		ctx.say(f"Please finish or cancel the current {current} first (say “cancel”)"
+			+ (f", or say “I meant {doctype}” to switch and keep what you entered." if forms.active(ctx) else "."))
+		return _reask_if_pending(ctx)
+	return forms.start(ctx, doctype, values=values, items=items)
+
+
+def _same_text(a, b):
+	norm = lambda v: re.sub(r"[^a-z0-9]+", " ", (v or "").lower()).strip()  # noqa: E731
+	return bool(norm(a)) and norm(a) == norm(b)
+
+
+def _resolve_ref(ctx, query):
+	"""Replace “this Sales Order” / “it” with the record meant: the form the user has open, else
+	the single record shown or created last. Unresolved: the plan asks which one."""
+	from ai_erpnext.chat.queries import REGISTRY
+
+	doctypes = [dt for dt in (query.get("ref") or {}).get("doctypes") or [] if dt in REGISTRY]
+	query = {k: v for k, v in query.items() if k != "ref"}
+	candidates = []
+	if ctx.view:
+		candidates.append(ctx.view)
+	last = ctx.st.get("last_query") or {}
+	if len(last.get("names") or []) == 1:
+		candidates.append((last.get("doctype"), last["names"][0]))
+	for created in (ctx.st.get("last_created"), ctx.st.get("created")):
+		if isinstance(created, dict):
+			candidates.append((created.get("doctype"), created.get("name")))
+	for doctype, name in candidates:
+		if doctype in doctypes and name:
+			return dict(query, doctype=doctype, filters={**(query.get("filters") or {}), "name": name})
+	return dict(query, doctype=doctypes[0] if len(doctypes) == 1 else "auto", filters={})
 
 
 def _count_route(ctx, via, mode):
@@ -380,16 +530,14 @@ CHAT_ERRORS = {
 }
 
 
-def _run_query(ctx, raw_plan, page_of=None):
+def _run_query(ctx, raw_plan, page_of=None, prepared=None, attempts=0):
 	from ai_erpnext.chat import queries
 
 	try:
-		q = page_of or queries.validate(raw_plan)
+		q = page_of or prepared or queries.validate(raw_plan)
 		result = queries.execute(q)
 	except queries.QueryClarify as c:
-		# the question text holds only the user's own terms; record names stay in the suggestions
-		ctx.say(c.question, suggestions=c.options or None, source="clarify")
-		return
+		return _query_clarify(ctx, c, attempts)
 	except queries.QueryError as e:
 		ctx.say(str(e))
 		return
@@ -404,9 +552,100 @@ def _run_query(ctx, raw_plan, page_of=None):
 		get_ai_logger().error(f"AI-CHAT query_failed error_type={type(e).__name__}")
 		ctx.say("I couldn't run that query. Please try rephrasing it.")
 		return
-	ctx.st["last_query"] = {"plan": q, "names": result.get("names", []), "titles": result.get("titles", []),
+	if result.get("not_found") and q["operation"] == "details" and not _operation_in_progress(ctx):
+		if attempts < MAX_QUERY_ATTEMPTS:
+			# Ask for the name again (bounded); the reply is applied to this same lookup.
+			question = ctx.ask("query_target", result["text"] + " Check the spelling and type the name or ID again, or ask something else.", input="text")
+			question["plan"], question["attempts"] = _retarget(q), attempts + 1
+			return
+		ctx.say(result["text"] + " I've stopped searching for it. Try part of the name (for example “find customer Amit”), "
+			"or open the list in ERPNext.")
+		return
+	plan = {k: v for k, v in q.items() if k != "pick"}  # a picked record name came from ERPNext, not from the user
+	ctx.st["last_query"] = {"plan": plan, "names": result.get("names", []), "titles": result.get("titles", []),
 		"doctype": result.get("result_doctype") or q["doctype"]}
 	ctx.say(result["text"], card=result.get("card"), source="erpnext")
+
+
+def _operation_in_progress(ctx):
+	"""An invoice or guided form is waiting for an answer; lookups must not take its question over."""
+	pending = ctx.st.get("pending")
+	return bool(pending and not pending["kind"].startswith("query_")) and (forms.active(ctx) or bool(ctx.st.get("entry"))
+		or bool(ctx.st.get("master")))
+
+
+def _retarget(q):
+	return dict(q, name=None, search=None, party=None, pick=None)
+
+
+def _query_clarify(ctx, c, attempts):
+	"""Turn a lookup clarification into a question bound to the lookup, so the reply completes it."""
+	if c.kind not in ("target", "pick", "period") or not c.plan or _operation_in_progress(ctx):
+		# Plain question (or an invoice/form question is open): no state; record names stay in the buttons/text.
+		labels = [o["label"] if isinstance(o, dict) else o for o in c.options]
+		suggestions = [o for o in c.options if isinstance(o, str)] or None
+		text = c.question + (("\nMatches: " + "; ".join(labels) + ". Ask again with the full name or ID.") if c.kind == "pick" else "")
+		ctx.say(text, suggestions=suggestions, source="clarify" if c.kind != "pick" else None)
+		return
+	options = [o for o in c.options if isinstance(o, dict)]
+	question = ctx.ask(f"query_{c.kind}", c.question, options=options, input="text" if c.kind != "period" else None)
+	question["plan"], question["attempts"] = c.plan, attempts
+
+
+ORDINAL_RE = re.compile(r"^\s*(?:no,?\s*)?(?:use\s+|pick\s+|choose\s+|take\s+)?(?:the\s+)?(?:number\s+|#\s*)?"
+	r"(?P<n>\d{1,2}|first|second|third|fourth|fifth|sixth|last)(?:st|nd|rd|th)?(?:\s+(?:one|option|customer|supplier|item|record|contact|warehouse))?\s*[.!]*\s*$", re.I)
+_ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6}
+
+
+# Questions whose typed answer may itself be a number or code: “1” is a value there, not option 1.
+LITERAL_ANSWERS = {("form_item", "qty"), ("form_item", "rate"), ("master_field", "item_code"), ("master_field", "customer_name"),
+	("form_field", "item_code"), ("form_field", "bill_no"), ("form_field", "customer_name"), ("form_field", "supplier_name")}
+
+
+def ordinal_option(pending, text):
+	"""The option a reply such as “2”, “the second one” or “no, use the second customer” picks."""
+	if (pending.get("kind"), pending.get("key")) in LITERAL_ANSWERS:
+		return None
+	m = ORDINAL_RE.match(text or "")
+	options = [o for o in pending.get("options") or [] if not str(o.get("value", "")).startswith("__")]
+	if not m or not options:
+		return None
+	n = m.group("n").lower()
+	index = len(options) if n == "last" else (_ORDINALS.get(n) or int(n))
+	return options[index - 1]["value"] if 1 <= index <= len(options) else None
+
+
+answer_term = forms.answer_term
+
+
+def _answer_query(ctx, pending, value, from_text):
+	from ai_erpnext.chat import queries
+
+	q, attempts = dict(pending.get("plan") or {}), int(pending.get("attempts") or 0)
+	if not q:
+		return ctx.say("That lookup has expired. Please ask again.")
+	if from_text:
+		value = _option_value(pending, value) or ordinal_option(pending, value) or value
+	if value == "__cancel__":
+		ctx.say("OK, I've stopped that lookup.")
+		return
+	kind = pending["kind"]
+	if kind == "query_period":
+		if value not in queries.DATE_PRESETS:
+			return _general(ctx, value)  # a period in other words: let the router read it
+		q["date"] = queries.preset_dates(q["doctype"], value)
+		return _run_query(ctx, None, prepared=q, attempts=attempts)
+	if value in [o["value"] for o in pending.get("options") or []] and "::" in value:
+		doctype, name = value.split("::", 1)  # one of the records offered (re-checked by the lookup)
+		return _run_query(ctx, None, prepared=dict(q, pick=[doctype, name]), attempts=attempts)
+	term = answer_term(value)
+	if not term:
+		return ctx.say("Please type the name or ID.")
+	m = re.match(r"^(?P<dt>customer|supplier|contact|item|warehouse|employee)\s+(?P<rest>.+)$", term, re.I)
+	if m and (q.get("auto") or q.get("doctype") == m.group("dt").title()):
+		q.update(doctype=m.group("dt").title(), auto=False)
+		term = m.group("rest")
+	return _run_query(ctx, None, prepared=dict(_retarget(q), search=clean_text(term, 140)), attempts=attempts)
 
 
 def _more(ctx):
@@ -480,6 +719,12 @@ def _start_extraction(ctx, file_url):
 
 
 def _cancel(ctx):
+	ctx.st["ask_sig"] = ctx.answering_sig = None
+	pending = ctx.st.get("pending")
+	if pending and pending["kind"].startswith("query_"):
+		ctx.st["pending"] = None
+		ctx.say("OK, I've stopped that lookup.")
+		return
 	if forms.active(ctx):
 		return forms.cancel(ctx)
 	if not ctx.st.get("entry") or ctx.st.get("phase") in (None, "done", "cancelled"):
@@ -488,6 +733,25 @@ def _cancel(ctx):
 		return
 	ctx.st.update({"phase": "cancelled", "pending": None, "master": None})
 	ctx.say("Cancelled. Nothing was created. Attach another invoice whenever you're ready.")
+
+
+def _restart(ctx):
+	"""“Start over”: the current record begins again from its first question; nothing is created."""
+	ctx.st["pending"] = None
+	ctx.st["ask_sig"] = ctx.answering_sig = None
+	if forms.active(ctx):
+		return forms.restart(ctx)
+	entry = _entry(ctx) if ctx.st.get("entry") else None
+	if entry and ctx.st.get("phase") == "collecting" and not entry.created_document:
+		# Drop the answers given so far; the extracted invoice is kept (no new AI request).
+		entry.review_overrides = None
+		apply_mapping(entry)
+		entry.save()
+		ctx.st.update({"master": None, "acks": {}, "company_confirmed": None, "doctype_confirmed": False})
+		ctx.say("Starting this invoice over: your earlier answers are cleared; what was read from the image is kept.")
+		return advance(ctx)
+	ctx.st["last_query"] = None
+	ctx.say("OK, starting fresh. What would you like to do?")
 
 
 def _retry(ctx):
@@ -531,11 +795,15 @@ def _reask(ctx):
 	pending = ctx.st.get("pending")
 	if pending:
 		ctx.st["pending"] = None
-		if forms.active(ctx):
-			return forms.next_step(ctx)
-		if ctx.st.get("master"):
-			return _master_next(ctx)
-		return advance(ctx)
+		ctx.reasking = True  # the same question again after an unrelated message is not a loop
+		try:
+			if forms.active(ctx):
+				return forms.next_step(ctx)
+			if ctx.st.get("master"):
+				return _master_next(ctx)
+			return advance(ctx)
+		finally:
+			ctx.reasking = False
 
 
 def _entry(ctx):
@@ -779,14 +1047,23 @@ def _ask_confirm(ctx, entry, mapped, validation):
 # Answers
 # --------------------------------------------------------------------------------------------
 def _option_value(pending, text):
+	"""The option a typed reply names: its label or value, or its position (“2”, “the second one”)."""
+	wanted = (text or "").strip().lower()
 	for o in pending.get("options") or []:
-		if text.strip().lower() in (str(o["value"]).lower(), str(o["label"]).lower()):
+		if wanted in (str(o["value"]).lower(), str(o["label"]).lower()):
 			return o["value"]
-	return None
+	term = (answer_term(text) or "").lower()
+	for o in pending.get("options") or []:
+		if term and term in (str(o["value"]).lower(), str(o["label"]).lower()):
+			return o["value"]
+	return ordinal_option(pending, text)
 
 
 def _answer(ctx, pending, value, from_text, correction=False):
 	kind = pending["kind"]
+	if kind.startswith("query_"):
+		ctx.st["pending"] = None
+		return _answer_query(ctx, pending, value, from_text)
 	if kind.startswith("form_") and forms.active(ctx):
 		if from_text:
 			value = _option_value(pending, value) or value

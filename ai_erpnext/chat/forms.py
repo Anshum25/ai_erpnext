@@ -10,6 +10,14 @@ created on the way with the same flow, after their own confirmation.
 Before the preview, chat/requirements.py checks what ERPNext will additionally require (row
 warehouses, fields a site made mandatory) using ERPNext's own defaulting, so the chat asks for
 missing values instead of failing on Create. insert() remains the final authority.
+
+Linked masters (customer, supplier, item, warehouse) are always chosen from existing records
+first: matching records are offered (with "Show more" when there are more), and "Create new
+..." is a separate, explicit choice, offered only for masters the chat can create and the
+user may create. A name that matches nothing is never created automatically. The form keeps
+everything already answered: corrections ("change quantity to 5", "use Finished Goods
+warehouse"), a change of document type ("I meant Purchase Receipt") and "start over" act on
+this state instead of starting a new conversation.
 """
 
 import re
@@ -80,6 +88,29 @@ ITEM_FILTERS = {"selling": {"is_sales_item": 1}, "buying": {"is_purchase_item": 
 LABEL_ALIASES = {"date": "posting_date", "invoice date": "posting_date", "order date": "transaction_date", "party": None,
 	"supplier invoice number": "bill_no", "bill number": "bill_no", "bill no": "bill_no", "required by": "schedule_date",
 	"required by date": "schedule_date", "delivery date": "delivery_date", "warehouse": "set_warehouse", "uom": "stock_uom", "unit": "stock_uom"}
+PAGE = 10  # existing records offered per question (then "Show more")
+# Short names people type for a document type ("create po").
+DOCTYPE_ALIASES = {"po": "Purchase Order", "so": "Sales Order", "pi": "Purchase Invoice", "si": "Sales Invoice",
+	"dn": "Delivery Note", "pr": "Purchase Receipt", "grn": "Purchase Receipt", "quote": "Quotation", "purchase bill": "Purchase Invoice",
+	"vendor": "Supplier", "client": "Customer", "product": "Item"}
+
+_DT_ALT = "|".join(sorted((re.escape(n) for n in [*(dt.lower() for dt in SPECS), *DOCTYPE_ALIASES]), key=len, reverse=True))
+SWITCH_RE = re.compile(r"^\s*(?:no,?\s*|sorry,?\s*|oops,?\s*)?(?:i\s+meant|i\s+mean|switch\s+to|change\s+(?:it|this)\s+(?:to|into)|make\s+(?:it|this)|"
+	r"it\s+should\s+be|(?:it'?s|it\s+is)\s+actually)\s+(?:a\s+|an\s+)?(?P<dt>" + _DT_ALT + r")s?(?:\s*,?\s*not\s+(?:a\s+|an\s+)?(?:" + _DT_ALT
+	+ r"))?\s*[.!]*\s*$", re.I)
+SWITCH_NOT_RE = re.compile(r"^\s*(?:no,?\s*)?(?:a\s+|an\s+)?(?P<dt>" + _DT_ALT + r")\s*,?\s*not\s+(?:a\s+|an\s+)?(?:" + _DT_ALT + r")\s*[.!]*\s*$", re.I)
+WAREHOUSE_RE = re.compile(r"^\s*(?:please\s+)?(?:use|set|change|make|update)\s+(?:the\s+)?(?:(?:target|source|accepted|default|set|receiving|delivery|"
+	r"rejected)\s+)?warehouse\s*(?:to|as|=|:|is)?\s+(?P<v>.+?)\s*[.!]*\s*$", re.I)
+USE_WAREHOUSE_RE = re.compile(r"^\s*(?:please\s+)?(?:use|set)\s+(?:the\s+)?(?P<v>.+?)\s+warehouse(?:\s+(?:for|on)\s+(?:all|every|the)\s+(?:rows|items))?\s*[.!]*\s*$", re.I)
+QTY_RATE_FIELD_RE = re.compile(r"^\s*(?:please\s+)?(?:change|set|update|make|use)\s+(?:the\s+)?(?P<what>qty|quantity|rate|price)\s*(?:to|as|=|:|is|of)?\s+(?P<v>.+?)\s*$", re.I)
+QTY_AND_RATE_RE = re.compile(r"^\s*(?:qty\s*|quantity\s*)?(?P<q>\d[\d,]*(?:\.\d+)?)\s*(?:units?|pcs|nos|pieces)?\s*(?:@|at|x|×|,|and|for|rate)\s*"
+	r"(?:rate\s*|price\s*)?(?:of\s*)?(?P<r>\d[\d,]*(?:\.\d+)?)\s*(?:each|per\s+unit|/\s*unit)?\s*$", re.I)
+
+
+def answer_term(text):
+	"""The name in a reply such as “Use Amit Patel.”, “it's palmer productions” or “no, the one called X”."""
+	text = re.sub(r"^\s*(?:no,?\s*)?(?:(?:please\s+)?use|it'?s|it\s+is|i\s+mean|i\s+meant|the\s+one\s+called|called|named)\s+", "", text or "", flags=re.I)
+	return text.strip(" .!\"'“”") or None
 
 
 # ------------------------------------------------------------------------------------------------
@@ -90,14 +121,17 @@ def active(ctx):
 
 
 def match_doctype(text):
-	value = normalize_name(text).rstrip("s")
+	name = normalize_name(text)
+	if DOCTYPE_ALIASES.get(name) or DOCTYPE_ALIASES.get(name.rstrip("s")):
+		return DOCTYPE_ALIASES.get(name) or DOCTYPE_ALIASES[name.rstrip("s")]
+	value = name.rstrip("s")
 	for dt in CREATABLE:
 		if value in (dt.lower(), dt.lower().rstrip("s")):
 			return dt
 	return None
 
 
-def start(ctx, doctype, values=None, items=None, return_to=None):
+def start(ctx, doctype, values=None, items=None, return_to=None, rows=None, intro=None):
 	if doctype not in SPECS:
 		ctx.say(f"I can't create {doctype} records from the chat. I can create: {', '.join(CREATABLE)}.")
 		return
@@ -116,16 +150,33 @@ def start(ctx, doctype, values=None, items=None, return_to=None):
 	notes = []
 	for key, raw in (values or {}).items():
 		field = _field(doctype, spec["party"] if key == "party" else key)
-		if field and clean_text(raw, 140):
-			error = _set(ctx, form, field, raw, from_text=True)
-			if error:
-				notes.append(error)
+		if not field or not clean_text(raw, 140):
+			continue
+		if field["type"] == "link":
+			# Pre-filled names are only accepted when they match one record; otherwise the field's
+			# question offers the matches (or a separate "Create new") instead of guessing.
+			status, found, display = _resolve_link(field, form, clean_text(raw, 140), from_text=True)
+			if status == "ok":
+				form["values"][field["fieldname"]], form["labels"][field["fieldname"]] = found, display
+			else:
+				form.setdefault("prefill", {})[field["fieldname"]] = {"search": clean_text(raw, 140), "candidates": found if status == "ambiguous" else None}
+			continue
+		error = _set(ctx, form, field, raw, from_text=True)
+		if error and error != "__asked__":
+			notes.append(error)
 	for it in (items or [])[:20]:
 		if isinstance(it, dict) and clean_text(it.get("item"), 140):
 			form["queued_items"].append({"text": clean_text(it.get("item"), 140), "qty": parse_number(it.get("qty")), "rate": parse_number(it.get("rate"))})
-	intro = f"Let's create a {'new ' if doctype in MASTERS else ''}{doctype}" + ("" if doctype in MASTERS else " (it will be saved as a Draft)") + ". I'll ask only for what's needed."
-	if doctype == "Sales Invoice" and not return_to:
-		intro += " You can also attach an invoice image instead."
+	for row in rows or []:  # rows carried over from another document type, re-checked for this one
+		if _item_ok(form, row["item_code"]):
+			form["items"].append({k: row.get(k) for k in ("item_code", "item_name", "qty", "rate", "uom")})
+		else:
+			notes.append(f"Item {row['item_code']} can't be used on a {doctype}, so I left it out.")
+	form["items_done"] = bool(form["items"]) and not form["queued_items"]
+	if intro is None:
+		intro = f"Let's create a {'new ' if doctype in MASTERS else ''}{doctype}" + ("" if doctype in MASTERS else " (it will be saved as a Draft)") + ". I'll ask only for what's needed."
+		if doctype == "Sales Invoice" and not return_to:
+			intro += " You can also attach an invoice image instead."
 	ctx.say(intro)
 	for n in notes:
 		ctx.say(n)
@@ -139,12 +190,64 @@ def cancel(ctx):
 	ctx.say(f"Cancelled{' the ' + forms[0]['doctype'] if forms else ''}. Nothing was created.")
 
 
+def switch(ctx, text):
+	"""“I meant Purchase Receipt” / “Purchase Receipt, not Purchase Order”: change the document type
+	of the open form and keep every value that still applies. Returns True if handled."""
+	m = SWITCH_RE.match(text) or SWITCH_NOT_RE.match(text)
+	if not m:
+		return False
+	new = match_doctype(m.group("dt"))
+	forms = ctx.st["forms"]
+	form = forms[-1]
+	ctx.st["pending"] = None
+	if len(forms) > 1:
+		ctx.say(f"Let's finish or cancel the new {form['doctype'].lower()} first; then you can switch the {forms[0]['doctype']}.")
+		return next_step(ctx) or True
+	if new == form["doctype"]:
+		ctx.say(f"This already is a {new}.")
+		return next_step(ctx) or True
+	if not frappe.has_permission(new, "create"):
+		ctx.say(f"You don't have permission to create {new} records, so I kept the {form['doctype']}.")
+		return next_step(ctx) or True
+	old_spec, new_spec = SPECS[form["doctype"]], SPECS[new]
+	values, kept = {}, []
+	old_party_dt = _field(form["doctype"], old_spec["party"])["doctype"] if old_spec["party"] else None
+	new_party_dt = _field(new, new_spec["party"])["doctype"] if new_spec["party"] else None
+	if old_party_dt and old_party_dt == new_party_dt and form["values"].get(old_spec["party"]):
+		values[new_spec["party"]] = form["values"][old_spec["party"]]
+		kept.append(old_party_dt.lower())
+	for key in ("company", "set_warehouse", "due_date", "schedule_date", "delivery_date"):
+		if form["values"].get(key) and _field(new, key):
+			values[key] = form["values"][key]
+			kept.append(_field(new, key)["label"].lower())
+	rows = form["items"] if new_spec["items"] and old_spec["items"] else []
+	ctx.st["forms"] = []
+	start(ctx, new, values=values, rows=rows, intro=f"Switched to a {'new ' if new in MASTERS else ''}{new}" + ("" if new in MASTERS else " (it will be saved as a Draft)")
+		+ (f", keeping the {', '.join(kept)}" + (f" and {len(rows)} item row{'s' if len(rows) != 1 else ''}" if rows else "") if kept or rows else "")
+		+ ". Nothing was created.")
+	return True
+
+
+def restart(ctx):
+	"""“Start over”: the outermost form begins again with no values; nothing was created."""
+	doctype = ctx.st["forms"][0]["doctype"]
+	ctx.st["forms"] = []
+	ctx.st["pending"] = None
+	return start(ctx, doctype, intro=f"Starting the {doctype} again from the beginning. Nothing was created.")
+
+
 def next_step(ctx):
 	form = ctx.st["forms"][-1]
 	spec = SPECS[form["doctype"]]
 	for f in _fields(form):
 		wanted = f["ask"] or f["fieldname"] in form.get("force_ask", [])
 		if wanted and f["fieldname"] not in form["values"] and f["fieldname"] not in form.get("skipped", []):
+			prefill = (form.get("prefill") or {}).pop(f["fieldname"], None)
+			if prefill and prefill.get("candidates"):
+				return _ask_field(ctx, form, f, search=prefill["search"], candidates=prefill["candidates"],
+					text=f"Several {f['label'].lower()} records match “{prefill['search']}”. Which one?")
+			if prefill:
+				return _ask_not_found(ctx, form, f, prefill["search"])
 			return _ask_field(ctx, form, f)
 	if spec["items"] and not form["items_done"]:
 		return _items_step(ctx, form)
@@ -167,8 +270,12 @@ def answer(ctx, pending, value, from_text):
 		if value == "__skip__" and not field["required"]:
 			form.setdefault("skipped", []).append(key)
 			return next_step(ctx)
-		if value == "__create__" and field.get("master"):
+		if value == "__create__" and field.get("master") and _can_create(field["master"]):
 			return _start_master(ctx, form, field["master"], pending.get("search") or "", {"field": key})
+		if value == "__more__" and field["type"] == "link":
+			return _ask_field(ctx, form, field, offset=int(pending.get("offset") or 0) + PAGE)
+		if from_text and field["type"] == "link":
+			value = answer_term(value) or value
 		error = _set(ctx, form, field, value, from_text=from_text)
 		if error == "__asked__":
 			return
@@ -254,6 +361,12 @@ def correction(ctx, text):
 		ctx.say(f"Updated row {idx + 1}.")
 		ctx.st["pending"] = None
 		return next_step(ctx) or True
+	m = WAREHOUSE_RE.match(text) or USE_WAREHOUSE_RE.match(text)
+	if m and not (ctx.st.get("pending") or {}).get("kind") == "form_warehouse":
+		return _correct_warehouse(ctx, form, m.group("v"))
+	m = QTY_RATE_FIELD_RE.match(text)
+	if m and SPECS[form["doctype"]]["items"]:
+		return _correct_qty_rate(ctx, form, m.group("what").lower(), m.group("v"))
 	m = re.match(r"^\s*(?:please\s+)?(?:change|set|update|use|make)\s+(?:the\s+)?(.+?)\s+(?:to|as|=|:|is)\s+(.+?)\s*$", text, re.I)
 	if m:
 		field = _field_by_label(form, m.group(1))
@@ -264,7 +377,69 @@ def correction(ctx, text):
 			ctx.say(error or f"{field['label']} set to {form['labels'].get(field['fieldname'])}.")
 			ctx.st["pending"] = None
 			return next_step(ctx) or True
+		if len(m.group(1).split()) <= 4 and re.match(r"^\s*(?:please\s+)?(?:change|set|update)\b", text, re.I):
+			# A field this form doesn't have: say what can be changed instead of treating the message as an answer.
+			ctx.say(f"I can't change “{clean_text(m.group(1), 40)}” on a {form['doctype']} here. " + _changeable(form))
+			ctx.st["pending"] = None
+			return next_step(ctx) or True
 	return False
+
+
+def _changeable(form):
+	labels = [f["label"] for f in _fields(form) if f["type"] != "select" or f["ask"]]
+	text = "You can change: " + ", ".join(labels)
+	if SPECS[form["doctype"]]["items"]:
+		text += "; and item rows, e.g. “row 1 qty 5”, “row 1 rate 20”, “row 1 item …”" + (", “row 1 warehouse …”" if
+			form["doctype"] in requirements.WAREHOUSE_RULES else "") + ", “remove row 1” or “add item”"
+	return text + "."
+
+
+def _correct_warehouse(ctx, form, value):
+	"""“use Finished Goods warehouse”, “set target warehouse to Stores”: one warehouse for all stock rows."""
+	ctx.st["pending"] = None
+	field = _field(form["doctype"], "set_warehouse", form)
+	if not field:
+		reason = ("stock isn't updated by it (the Delivery Note or Purchase Receipt moves the stock)" if form["doctype"] in
+			("Sales Invoice", "Purchase Invoice") else "it doesn't move stock")
+		ctx.say(f"A {form['doctype']} created here has no warehouse: {reason}. Nothing was changed.")
+		return next_step(ctx) or True
+	value = re.sub(r"\s+warehouse$", "", answer_term(value) or "", flags=re.I) or value
+	status, found, _display = _resolve_link(field, form, value, from_text=True)
+	if status == "ambiguous":
+		_ask_field(ctx, form, field, search=value, candidates=found, text=f"Several warehouses match “{value}”. Which one should all stock rows use?")
+		return True
+	if status != "ok":
+		company = form["values"].get("company")
+		ctx.say(f"I couldn't find a warehouse of {company or 'this company'} matching “{value}” that you can use. Nothing was changed.")
+		return next_step(ctx) or True
+	_set(ctx, form, field, found, from_text=False)
+	ctx.say(f"Warehouse set to {found} for all stock rows of this {form['doctype']}.")
+	return next_step(ctx) or True
+
+
+def _correct_qty_rate(ctx, form, what, value):
+	"""“change quantity to 5” without a row number: the item being added, or the only row."""
+	number = parse_number(value)
+	is_qty = what in ("qty", "quantity")
+	if number is None or (is_qty and number <= 0) or number < 0:
+		ctx.say("The quantity must be a number greater than 0." if is_qty else "The rate must be a number of 0 or more.")
+		return True
+	key = "qty" if is_qty else "rate"
+	pending = ctx.st.get("pending") or {}
+	if form.get("draft_item") and pending.get("kind") == "form_item":
+		form["draft_item"][key] = number
+		ctx.st["pending"] = None
+		return next_step(ctx) or True
+	if len(form["items"]) == 1:
+		form["items"][0][key] = number
+		ctx.say(f"Updated the {'quantity' if is_qty else 'rate'} of row 1 to {flt(number)}.")
+		ctx.st["pending"] = None
+		return next_step(ctx) or True
+	if not form["items"]:
+		ctx.say("There are no item rows yet.")
+		return True
+	ctx.say(f"This {form['doctype']} has {len(form['items'])} rows. Which one? For example “row 2 {'qty' if is_qty else 'rate'} {flt(number)}”.")
+	return True
 
 
 # ------------------------------------------------------------------------------------------------
@@ -316,19 +491,29 @@ def _filters(f, form):
 		if not (isinstance(v, str) and v.startswith("$") and not form["values"].get(v[1:]))}
 
 
-def _suggestions(doctype, filters, limit=6):
+def _suggestions(doctype, filters, limit=PAGE, offset=0):
 	try:
-		return frappe.get_list(doctype, filters=filters, pluck="name", limit_page_length=limit, order_by="modified desc")
+		return frappe.get_list(doctype, filters=filters, pluck="name", limit_start=offset, limit_page_length=limit, order_by="modified desc")
 	except frappe.PermissionError:
+		frappe.local.message_log = []
 		return []
 
 
-def _ask_field(ctx, form, f, search=None, candidates=None, text=None):
-	options, input_type = [], "text"
+def _can_create(master):
+	"""A "Create new ..." choice is offered only for masters the chat can create and the user may create."""
+	return master in MASTERS and frappe.has_permission(master, "create")
+
+
+def _ask_field(ctx, form, f, search=None, candidates=None, text=None, offset=0):
+	options, input_type, more = [], "text", False
 	if f["type"] == "link":
-		names = candidates if candidates is not None else _suggestions(f["doctype"], _filters(f, form))
+		names = candidates if candidates is not None else _suggestions(f["doctype"], _filters(f, form), limit=PAGE + 1, offset=offset)
+		more = candidates is None and len(names) > PAGE
+		names = names[:PAGE] if candidates is None else names
 		options = [{"label": n, "value": n} for n in names]
-		if f.get("master"):
+		if more:
+			options.append({"label": f"Show more {f['label'].lower()}s", "value": "__more__", "style": "secondary"})
+		if f.get("master") and _can_create(f["master"]):
 			options.append({"label": f"Create new {f['master'].lower()}" + (f" “{search}”" if search else ""), "value": "__create__", "style": "secondary"})
 	elif f["type"] == "date":
 		input_type = "date"
@@ -347,10 +532,24 @@ def _ask_field(ctx, form, f, search=None, candidates=None, text=None):
 		options.append({"label": f["skip_label"], "value": "__skip__", "style": "secondary"})
 	prompt = text or f.get("prompt") or f"Which {f['label'].lower()} should I use?"
 	if f["type"] == "link" and input_type == "text" and not candidates:
-		prompt += " Pick one or type a name to search."
-	q = ctx.ask("form_field", prompt, key=f["fieldname"], options=options, input=input_type)
+		creatable = f.get("master") and _can_create(f["master"])
+		if options:
+			prompt += " Choose one below" + (f" or create a new {f['master'].lower()}" if creatable else "") + ". You can also type a name to search."
+		else:
+			prompt += (f" There are none yet: create a new {f['master'].lower()}" if creatable else " Type a name to search") + "."
+	ctx.ask("form_field", prompt, key=f["fieldname"], options=options, input=input_type)
+	ctx.st["pending"]["offset"] = offset
 	if search:
 		ctx.st["pending"]["search"] = search
+
+
+def _ask_not_found(ctx, form, f, value):
+	"""No record matches what the user typed: offer existing records and, separately, "Create new"."""
+	if f.get("master") and _can_create(f["master"]):
+		text = f"I couldn't find a {f['master'].lower()} called “{value}”. Pick an existing one, type another name, or create “{value}” as a new {f['master'].lower()}."
+	else:
+		text = f"I couldn't find a {f['label'].lower()} called “{value}”. Pick one or type another name."
+	_ask_field(ctx, form, f, search=value, text=text)
 
 
 def _set(ctx, form, f, raw, from_text):
@@ -416,9 +615,7 @@ def _set(ctx, form, f, raw, from_text):
 		_ask_field(ctx, form, f, search=value, candidates=found, text=f"Several {f['label'].lower()} records match “{value}”. Which one?")
 		return "__asked__"
 	if f.get("master"):
-		ctx.ask("form_field", f"I couldn't find a {f['master'].lower()} called “{value}”. Should I create it, or search again?",
-			key=name, options=[{"label": f"Create new {f['master'].lower()} “{value}”", "value": "__create__"}], input="text")
-		ctx.st["pending"]["search"] = value
+		_ask_not_found(ctx, form, f, value)
 		return "__asked__"
 	return f"I couldn't find a {f['label'].lower()} called “{value}”."
 
@@ -430,7 +627,11 @@ class _GenericMatcher:
 	def __init__(self, doctype, title=None, filters=None):
 		self.doctype, self.filters = doctype, filters or {}
 		meta = frappe.get_meta(doctype)
-		self.title = title or (meta.title_field if meta.title_field and meta.get_field(meta.title_field) else None)
+		# DocTypes without a title field usually keep the human name in "<doctype>_name"
+		# (Warehouse: warehouse_name "Stores" for the record "Stores - ABC").
+		own_name = frappe.scrub(doctype) + "_name"
+		self.title = title or (meta.title_field if meta.title_field and meta.get_field(meta.title_field) else
+			(own_name if meta.has_field(own_name) else None))
 
 	def match(self, value):
 		fields = ["name"] + ([self.title] if self.title else [])
@@ -512,7 +713,7 @@ def _items_step(ctx, form):
 	if not d.get("item_code"):
 		return _ask_item(ctx, form, search=d.get("text"))
 	if d.get("qty") is None or d["qty"] <= 0:
-		return ctx.ask("form_item", f"How many of {d['item_name'] or d['item_code']}?", key="qty", input="text")
+		return ctx.ask("form_item", f"How many of {d['item_name'] or d['item_code']}? You can give the rate too, e.g. “5 at 20”.", key="qty", input="text")
 	if d.get("rate") is None or d["rate"] < 0:
 		options = []
 		price = _price(form, d["item_code"])
@@ -533,22 +734,34 @@ def _ask_more(ctx, form):
 		options=[{"label": "Add another item", "value": "__more__"}, {"label": "No, that's all", "value": "__done__", "style": "secondary"}])
 
 
-def _ask_item(ctx, form, search=None, candidates=None, text=None):
+def _ask_item(ctx, form, search=None, candidates=None, text=None, offset=0):
 	flags = ITEM_FILTERS[SPECS[form["doctype"]]["items"]]
-	names = candidates if candidates is not None else _suggestions("Item", {"disabled": 0, "has_variants": 0, **flags})
-	options = [{"label": f"{frappe.db.get_value('Item', n, 'item_name')} ({n})" if frappe.db.get_value("Item", n, "item_name") != n else n, "value": n} for n in names]
-	options.append({"label": "Create new item" + (f" “{search}”" if search else ""), "value": "__create__", "style": "secondary"})
-	prompt = text or ("Which item? Type the item name or code." if not search else f"I couldn't find the item “{search}”. Pick one, search again, or create it.")
+	names = candidates if candidates is not None else _suggestions("Item", {"disabled": 0, "has_variants": 0, **flags}, limit=PAGE + 1, offset=offset)
+	more = candidates is None and len(names) > PAGE
+	names = names[:PAGE] if candidates is None else names
+	titles = dict(frappe.get_all("Item", filters={"name": ["in", names or [""]]}, fields=["name", "item_name"], as_list=True))
+	options = [{"label": f"{titles.get(n)} ({n})" if titles.get(n) and titles.get(n) != n else n, "value": n} for n in names]
+	if more:
+		options.append({"label": "Show more items", "value": "__more__", "style": "secondary"})
+	creatable = _can_create("Item")
+	if creatable:
+		options.append({"label": "Create new item" + (f" “{search}”" if search else ""), "value": "__create__", "style": "secondary"})
+	prompt = text or ("Which item? Pick one or type the item name or code." if not search else
+		f"I couldn't find the item “{search}”. Pick one, search again" + (", or create it." if creatable else "."))
 	ctx.ask("form_item", prompt, key="item_code", options=options, input="text")
-	ctx.st["pending"]["search"] = search
+	ctx.st["pending"].update(search=search, offset=offset)
 
 
 def _answer_item(ctx, form, key, value, from_text, pending):
 	d = form["draft_item"] if form["draft_item"] is not None else {}
 	form["draft_item"] = d
 	if key == "item_code":
-		if value == "__create__":
+		if value == "__more__":
+			return _ask_item(ctx, form, offset=int(pending.get("offset") or 0) + PAGE)
+		if value == "__create__" and _can_create("Item"):
 			return _start_master(ctx, form, "Item", pending.get("search") or d.get("text") or "", {"field": "item_code", "row": "draft"})
+		if from_text:
+			value = answer_term(value) or value
 		if not from_text:
 			rows = frappe.get_list("Item", filters={"name": value, "disabled": 0, **ITEM_FILTERS[SPECS[form["doctype"]]["items"]]}, pluck="name", limit_page_length=1)
 			status, code, name = ("ok", rows[0], frappe.db.get_value("Item", rows[0], "item_name")) if rows else ("none", None, None)
@@ -565,11 +778,14 @@ def _answer_item(ctx, form, key, value, from_text, pending):
 			d["text"] = value
 			return _ask_item(ctx, form, search=value)
 	elif key == "qty":
-		qty = parse_number(value)
+		both = QTY_AND_RATE_RE.match(value or "") if from_text else None
+		qty = parse_number(both.group("q")) if both else parse_number(value)
 		if qty is None or qty <= 0:
 			ctx.say("The quantity must be a number greater than 0.")
 		else:
 			d["qty"] = qty
+			if both:
+				d["rate"] = parse_number(both.group("r"))
 	elif key == "rate":
 		rate = parse_number(value)
 		if rate is None or rate < 0:
@@ -708,6 +924,8 @@ def _ask_warehouse(ctx, form, rows, candidates=None, text=None):
 
 def _answer_warehouse(ctx, form, pending, value, from_text):
 	rows = [r for r in pending.get("rows") or [] if 1 <= r <= len(form["items"])]
+	if from_text:  # “use Stores warehouse” -> “Stores”
+		value = re.sub(r"\s+warehouse$", "", answer_term(value) or "", flags=re.I) or value
 	status, found, _display = _resolve_link(SET_WAREHOUSE, form, value, from_text)
 	if status == "ambiguous":
 		return _ask_warehouse(ctx, form, rows, candidates=found, text=f"Several warehouses match “{value}”. Which one?")
@@ -796,6 +1014,7 @@ def _create(ctx, form):
 
 	ctx.st["forms"].pop()
 	ctx.st["pending"] = None
+	ctx.st["last_created"] = {"doctype": doctype, "name": doc.name}  # “this Purchase Order” in a follow-up question
 	notes = erpnext_notes()
 	if doctype in MASTERS:
 		ctx.say(f"{doctype} {doc.name} created.", card={"type": "created", "title": f"{doctype} created", "doctype": doctype, "name": doc.name,

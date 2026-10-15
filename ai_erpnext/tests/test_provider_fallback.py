@@ -143,7 +143,8 @@ class TestProviderFallback(IntegrationTestCase):
 
 	def test_openai_out_of_credits_or_rejected_key_is_a_clear_error(self):
 		credits = error(429, "You exceeded your current quota, please check your plan and billing details.", code="insufficient_quota")
-		for response, category in ((credits, "quota_exhausted"), (error(401, "Incorrect API key provided"), "auth")):
+		# no credits is a billing problem, not a daily quota: it is reported as such and never retried
+		for response, category in ((credits, "billing"), (error(401, "Incorrect API key provided"), "auth")):
 			net = FakeNet(api_groq_com=[error(429, TPD)], api_openai_com=[response])
 			with self.assertRaises(AIProviderError) as ctx:
 				self.route(net, settings(fallback_enabled=1))

@@ -102,7 +102,13 @@ class TestCompanyIsolation(IntegrationTestCase):
 			self.assertEqual(row["total"] if row else 0, 100 * len(keys), label)
 			details = run({"doctype": "Customer", "operation": "details", "filters": {"name": self.customer}})
 			value = {r["label"]: r["value"] for r in details["card"]["rows"]}["Outstanding (submitted Sales Invoices)"]
-			self.assertEqual(value, f"{100.0 * len(keys)} {self.currency} in {len(keys)} invoice(s)" if keys else "None", label)
+			self.assertEqual(value, f"{100.0 * len(keys)} {self.currency} in {len(keys)} invoice(s)" if keys else "Nothing outstanding", label)
+			# the field answer ("outstanding amount of <customer>") is limited the same way
+			answer = run({"doctype": "Customer", "operation": "details", "filters": {"search": "AIC Shared Buyer"}, "fields": ["outstanding"]})["text"]
+			if keys:
+				self.assertIn(f"{100.0 * len(keys)} {self.currency} in {len(keys)} invoice(s)", answer, label)
+			else:
+				self.assertIn("has no outstanding amount on submitted Sales Invoices you can access", answer, label)
 
 	def test_other_companys_record_is_not_revealed(self):
 		frappe.set_user(self.users["A"])

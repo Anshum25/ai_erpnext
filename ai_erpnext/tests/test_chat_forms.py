@@ -94,8 +94,11 @@ class TestChatForms(IntegrationTestCase):
 		pi = frappe.get_doc("Purchase Invoice", card["name"])
 		self.assertEqual((pi.docstatus, pi.supplier, pi.items[0].item_code, pi.items[0].qty, pi.items[0].rate), (0, self.supplier, "AIF-ITEM", 3, 400))
 		self.assertIn({"label": "Status", "value": "Draft"}, card["rows"])
+		seq = json.loads(frappe.db.get_value("AI Chat Session", self.s, "state"))["seq"]
 		again = chat.send_message(session=self.s, action=json.dumps({"question_id": q["id"], "value": "__create__"}), client_id="pi-1")
-		self.assertEqual(again["messages"], [])
+		# a duplicate delivery is not processed again: the first reply is returned, nothing new is added or created
+		self.assertEqual(again["messages"], r["messages"])
+		self.assertEqual(json.loads(frappe.db.get_value("AI Chat Session", self.s, "state"))["seq"], seq)
 		self.assertEqual(frappe.db.count("Purchase Invoice"), before + 1)
 
 	def test_prefilled_sales_order_asks_only_missing_fields(self):

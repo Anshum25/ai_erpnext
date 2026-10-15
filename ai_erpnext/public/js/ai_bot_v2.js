@@ -203,6 +203,13 @@ $(document).ready(function () {
 	}
 	function send(payload) {
 		S.lastPayload = payload;
+		// The page the user is on, so "this Sales Order" can be resolved; the server re-checks access.
+		// A retry re-sends the same payload (same client_id): the server returns the original reply.
+		if (!payload.context) {
+			let route = null;
+			try { route = frappe.get_route(); } catch (e) { route = null; }
+			if (Array.isArray(route)) payload.context = JSON.stringify({ route: route.slice(0, 3).map(String) });
+		}
 		call("send_message", Object.assign({ session: S.session }, payload), apply, payload);
 	}
 	function apply(r) {
@@ -262,6 +269,7 @@ $(document).ready(function () {
 		}
 		if (m.source === "erpnext") $row.append('<span class="ai-source erpnext">From your ERPNext data</span>');
 		if (m.source === "general") $row.append('<span class="ai-source">General answer</span>');
+		if (m.source === "guide") $row.append('<span class="ai-source">General ERPNext guidance</span>');
 		if (m.text) $row.append(`<div class="ai-bubble">${lines(m.text)}</div>`);
 		if (m.card) $row.append(renderCard(m.card, m.id));
 		if (m.suggestions && m.suggestions.length) $row.append(renderSuggestions(m.suggestions));

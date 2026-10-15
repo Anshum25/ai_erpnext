@@ -147,6 +147,13 @@ class TestChatCreationRequirements(IntegrationTestCase):
 		self.assertEqual(po.items[0].warehouse, self.stores)
 		self.assertEqual(frappe.db.count("Purchase Order"), before + 1)
 
+	def test_warehouse_answer_in_plain_words(self):
+		self.start("Purchase Order", [("AIW Bottle", 3)])
+		self.say("use Finished Goods warehouse")  # the warehouse's own name, phrased naturally
+		self.assertEqual(self.preview()["items"][0]["warehouse"], self.goods)
+		self.say("set target warehouse to Stores")  # a correction to every stock row, same company only
+		self.assertEqual(self.preview()["items"][0]["warehouse"], self.stores)
+
 	def test_invalid_and_other_company_warehouses_are_refused(self):
 		self.start("Purchase Order", [("AIW Bottle", 3)])
 		for wrong in ("No Such Warehouse", self.other_stores):

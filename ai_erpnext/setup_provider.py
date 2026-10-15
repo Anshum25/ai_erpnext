@@ -13,18 +13,26 @@ import json
 import os
 
 import frappe
+from frappe.utils import cint
 from frappe.utils.password import get_decrypted_password, set_encrypted_password
+
+from ai_erpnext.ai.providers import PROVIDERS, configuration_issues
 
 SETTINGS = "AI Provider Settings"
 BACKUP_KEY = "ai_erpnext_previous_provider"
 BACKUP_PASSWORD_FIELD = "previous_api_key"
-GROQ = {"provider": "Groq", "base_url": "https://api.groq.com/openai/v1", "model": "qwen/qwen3.8-27b"}
+GROQ = {"provider": "Groq", "base_url": PROVIDERS["Groq"]["base_url"], "model": PROVIDERS["Groq"]["model"]}
 
 
 def show_provider():
+	"""Non-secret summary of the configuration (keys are reported only as set / not set)."""
 	s = frappe.get_single(SETTINGS)
 	backup = json.loads(frappe.db.get_global(BACKUP_KEY) or "null")
+	errors, warnings = configuration_issues(s)
 	print(json.dumps({"provider": s.provider, "base_url": s.base_url, "model": s.model, "api_key_set": bool(s.api_key),
+		"fallback_enabled": cint(s.get("fallback_enabled")), "fallback_provider": s.get("fallback_provider"),
+		"fallback_model": s.get("fallback_model"), "fallback_api_key_set": bool(s.get("fallback_api_key")),
+		"fallback_daily_limit": cint(s.get("fallback_daily_limit")), "errors": errors, "warnings": warnings,
 		"previous_provider_backup": backup, "previous_api_key_stored": bool(_previous_key())}))
 
 

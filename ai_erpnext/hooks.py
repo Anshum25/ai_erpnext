@@ -151,7 +151,9 @@ doc_events = {
 	"AI Document Entry": {
 		"validate": "ai_erpnext.pipeline.controller.validate_ai_document",
 		"before_save": "ai_erpnext.pipeline.controller.process_ai_document",
-	}
+	},
+	# Local checks only (missing fallback key, cap, unsupported provider); never calls a provider.
+	"AI Provider Settings": {"validate": "ai_erpnext.ai.providers.validate_settings"},
 }
 
 # Scheduled Tasks

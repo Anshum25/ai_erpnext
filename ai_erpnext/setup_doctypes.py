@@ -35,29 +35,45 @@ AI_PROVIDER_SETTINGS = {
 	"custom": 1,
 	"issingle": 1,
 	"fields": [
-		{"fieldname": "provider", "label": "Provider", "fieldtype": "Select", "options": "\n".join(PROVIDERS), "default": "Gemini"},
-		{"fieldname": "api_key", "label": "API Key", "fieldtype": "Password"},
+		{"fieldname": "provider", "label": "Primary AI Provider", "fieldtype": "Select", "options": "\n".join(PROVIDERS), "default": "Groq"},
+		{"fieldname": "api_key", "label": "Primary API Key", "fieldtype": "Password"},
 	],
 	"permissions": [{"role": "System Manager", "read": 1, "write": 1, "create": 1, "delete": 1}],
 }
 
 AI_PROVIDER_SETTINGS_FIELDS = [
 	# (fieldname, definition, insert_after)
-	("base_url", {"label": "Base URL", "fieldtype": "Data"}, "api_key"),
-	("model", {"label": "Model Name", "fieldtype": "Data"}, "base_url"),
+	("base_url", {"label": "Base URL", "fieldtype": "Data",
+		"description": "Leave empty for the provider's own endpoint (Groq, OpenRouter and Nvidia NIM endpoints are built in)."}, "api_key"),
+	("model", {"label": "Model Name", "fieldtype": "Data",
+		"description": "Leave empty for the provider default (Groq: qwen/qwen3.8-27b, OpenAI: gpt-4.1-mini, Gemini: gemini-3.6-flash). "
+			"Required for OpenRouter and Nvidia NIM. Used for invoice image extraction."}, "base_url"),
 	# Optional text-only model for the chat router (same provider and key). Empty: Model Name is used.
 	("text_model", {"label": "Chat Model (Text Only)", "fieldtype": "Data",
 		"description": "Optional. Used for chat routing so ordinary chat does not go to the image model. Empty: Model Name is used for both."}, "model"),
 	# Paid fallback for an exhausted Groq daily quota. Off unless an administrator enables it.
-	("fallback_section", {"label": "Quota Fallback", "fieldtype": "Section Break", "collapsible": 1}, "text_model"),
-	("fallback_enabled", {"label": "Use Fallback When Groq Daily Quota Is Exhausted", "fieldtype": "Check", "default": "0",
-		"description": "Only a Groq daily-quota error switches to the fallback, for one request. Other errors never do."}, "fallback_section"),
-	("fallback_provider", {"label": "Fallback Provider", "fieldtype": "Select", "options": "\nOpenAI"}, "fallback_enabled"),
-	("fallback_model", {"label": "Fallback Model", "fieldtype": "Data", "default": "gpt-4.1-mini"}, "fallback_provider"),
-	("fallback_base_url", {"label": "Fallback Base URL", "fieldtype": "Data", "description": "Leave empty for the provider's default endpoint."}, "fallback_model"),
-	("fallback_api_key", {"label": "Fallback API Key", "fieldtype": "Password"}, "fallback_base_url"),
-	("fallback_daily_limit", {"label": "Fallback Requests Per Day", "fieldtype": "Int", "default": "20",
+	("fallback_section", {"label": "Fallback Provider", "fieldtype": "Section Break", "collapsible": 1}, "text_model"),
+	("fallback_enabled", {"label": "Enable Fallback Provider", "fieldtype": "Check", "default": "0",
+		"description": "Off by default. Only a Groq daily-quota error switches to the fallback, for one request. Rate limits, outages, "
+			"invalid keys, missing credits and other errors never do. The fallback is a paid service: enable it only after its account has credits."},
+		"fallback_section"),
+	("fallback_provider", {"label": "Fallback AI Provider", "fieldtype": "Select", "options": "\nOpenAI", "depends_on": "eval:doc.fallback_enabled"},
+		"fallback_enabled"),
+	("fallback_model", {"label": "Fallback Model", "fieldtype": "Data", "default": "gpt-4.1-mini", "depends_on": "eval:doc.fallback_enabled"},
+		"fallback_provider"),
+	("fallback_base_url", {"label": "Fallback Base URL", "fieldtype": "Data", "depends_on": "eval:doc.fallback_enabled",
+		"description": "Leave empty for OpenAI's own endpoint. Only needed for a compatible gateway."}, "fallback_model"),
+	("fallback_api_key", {"label": "Fallback API Key", "fieldtype": "Password", "depends_on": "eval:doc.fallback_enabled"}, "fallback_base_url"),
+	("fallback_daily_limit", {"label": "Fallback Daily Request Limit", "fieldtype": "Int", "default": "20", "depends_on": "eval:doc.fallback_enabled",
 		"description": "Hard cap on fallback requests per site per day. 0 disables the fallback."}, "fallback_api_key"),
+]
+
+# Existing fields of the base definition whose presentation changed (fieldnames, values and
+# stored keys are untouched, so upgraded sites keep their provider and keys).
+AI_PROVIDER_SETTINGS_UPDATES = [
+	("provider", {"label": "Primary AI Provider", "default": "Groq",
+		"description": "Groq, OpenAI, OpenRouter and Nvidia NIM work for chat and invoice images; Gemini for invoice images only."}, None),
+	("api_key", {"label": "Primary API Key", "description": "Stored encrypted. Never shown again after saving."}, None),
 ]
 
 
@@ -122,7 +138,8 @@ def ensure_ai_provider_settings_schema():
 		return
 	provider = next((f for f in doc.fields if f.fieldname == "provider"), None)
 	changed = _add_select_options(provider, PROVIDERS) if provider else False
-	if _add_fields(doc, AI_PROVIDER_SETTINGS_FIELDS) or changed:
+	changed = _add_fields(doc, AI_PROVIDER_SETTINGS_FIELDS) or changed
+	if _add_fields(doc, [u for u in AI_PROVIDER_SETTINGS_UPDATES if u[0] in {f.fieldname for f in doc.fields}]) or changed:
 		doc.save()
 
 

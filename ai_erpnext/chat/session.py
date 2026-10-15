@@ -69,7 +69,28 @@ def messages(doc):
 
 
 def state(doc):
-	return json.loads(doc.state or "{}")
+	"""The conversation state, with malformed parts dropped (never trusted blindly after a restore).
+
+	Keys: pending (the one open question: id, kind, key, options; lookups also keep their plan and
+	attempt count), forms (the guided record(s) being filled, outermost first), entry/phase (an
+	invoice from an image), last_query, processed/replies (message ids already handled and the
+	reply each produced), ask_sig (loop guard), seq (last message id)."""
+	try:
+		st = json.loads(doc.state or "{}")
+	except ValueError:
+		st = {}
+	if not isinstance(st, dict):
+		st = {}
+	pending = st.get("pending")
+	if pending is not None and not (isinstance(pending, dict) and isinstance(pending.get("id"), str) and isinstance(pending.get("kind"), str)):
+		st["pending"] = None
+	if not isinstance(st.get("forms") or [], list) or not all(isinstance(f, dict) and f.get("doctype") for f in st.get("forms") or []):
+		st["forms"] = []
+	if not isinstance(st.get("processed") or [], list):
+		st["processed"] = []
+	if not isinstance(st.get("replies") or {}, dict):
+		st["replies"] = {}
+	return st
 
 
 def add_message(doc, msgs, st, role, text=None, **extra):
@@ -87,6 +108,8 @@ def save(doc, msgs, st):
 		del msgs[: len(msgs) - MAX_MESSAGES]
 	processed = st.get("processed") or []
 	st["processed"] = processed[-MAX_PROCESSED_IDS:]
+	kept = set(st["processed"])
+	st["replies"] = {k: v for k, v in (st.get("replies") or {}).items() if k in kept}
 	doc.messages = json.dumps(msgs, default=str)
 	doc.state = json.dumps(st, default=str)
 	doc.last_activity = now_datetime()

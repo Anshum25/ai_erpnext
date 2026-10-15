@@ -9,6 +9,7 @@ only in memory to pick a category and is never logged or shown to users.
 import json
 import logging
 import os
+import re
 
 USER_MESSAGES = {
 	"rate_limited": "AI request limit reached. Please wait and try again.",
@@ -16,7 +17,7 @@ USER_MESSAGES = {
 	"unavailable": "AI service is temporarily unavailable. Please try again shortly.",
 	"auth": "AI service configuration needs attention. Please contact the administrator.",
 	"config": "AI service configuration needs attention. Please contact the administrator.",
-	"billing": "AI service account needs attention. Please contact the administrator.",
+	"billing": "The AI service account has no usable credits or needs billing attention. Please contact the administrator.",
 	"timeout": "AI extraction timed out. Please retry.",
 	"network": "Could not reach the AI service. Please check the connection and retry.",
 	"bad_request": "The AI service could not process this file. Please upload a clear JPG, PNG or WEBP image of the invoice.",
@@ -24,9 +25,17 @@ USER_MESSAGES = {
 	"unknown": "AI extraction failed. Please retry or contact the administrator.",
 }
 
-# Phrases in a 429 body that mean a daily/monthly allowance is used up rather than a
-# short per-minute limit. Matched case-insensitively, never logged.
-_QUOTA_HINTS = ("per day", "(tpd)", "(rpd)", "daily", "quota", "insufficient", "credits", "per month")
+# What a 429 means. Structured codes are checked first; the phrases are matched
+# case-insensitively in memory (with "-"/"_" read as spaces) and never logged.
+# Order matters: Groq's per-minute and per-day messages both end with a link to its billing
+# page, so the time window is decided before any credit wording is considered. A 429 that
+# names neither window is treated as a short rate limit: an ambiguous error never spends
+# paid fallback requests.
+_CREDIT_CODES = ("insufficient_quota", "insufficient_credits", "billing_hard_limit_reached")
+_MINUTE_HINTS = ("per minute", "(tpm)", "(rpm)", "per second", "(tps)", "(rps)")
+_DAILY_HINTS = ("per day", "perday", "(tpd)", "(rpd)", "daily", "per month", "permonth", "monthly")
+_CREDIT_HINTS = ("exceeded your current quota", "insufficient quota", "insufficient credits", "out of credits",
+	"credit balance", "no credits", "requires more credits")
 
 
 class AIProviderError(Exception):
@@ -62,7 +71,7 @@ def classify(exc) -> AIProviderError:
 		if isinstance(exc, openai.APIConnectionError):
 			return AIProviderError("network")
 		if isinstance(exc, openai.APIStatusError):
-			error = _from_status(exc.status_code, _text(exc))
+			error = _from_status(exc.status_code, _text(exc), _code(exc))
 			error.retry_after = _retry_after(getattr(getattr(exc, "response", None), "headers", None))
 			if error.category == "invalid_response":
 				error.failed_generation = _failed_generation(getattr(exc, "body", None))
@@ -81,7 +90,7 @@ def classify(exc) -> AIProviderError:
 	# google-genai errors expose an integer `code`
 	code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
 	if isinstance(code, int):
-		return _from_status(code, _text(exc))
+		return _from_status(code, _text(exc), _code(exc))
 	return AIProviderError("unknown")
 
 
@@ -91,6 +100,16 @@ def _text(exc):
 	if body is not None:
 		parts.append(json.dumps(body, default=str) if not isinstance(body, str) else body)
 	return " ".join(parts).lower()
+
+
+def _code(exc):
+	"""The provider's structured error code/type (e.g. OpenAI "insufficient_quota"), lower-case."""
+	values = [getattr(exc, "code", None), getattr(exc, "type", None)]
+	body = getattr(exc, "body", None)
+	if isinstance(body, dict):
+		err = body.get("error") if isinstance(body.get("error"), dict) else body
+		values += [err.get("code"), err.get("type")]
+	return " ".join(str(v).lower() for v in values if isinstance(v, str))
 
 
 def _failed_generation(body):
@@ -110,8 +129,6 @@ def _duration(value):
 		return float(value)
 	except ValueError:
 		pass
-	import re
-
 	total, found = 0.0, False
 	for number, unit in re.findall(r"([\d.]+)\s*(ms|h|m|s)", value):
 		found = True
@@ -133,9 +150,23 @@ def _retry_after(headers):
 	return None
 
 
-def _from_status(status, text):
+def rate_limit_category(text, code=""):
+	"""rate_limited (per-minute or unknown window), quota_exhausted (daily/monthly allowance) or billing (no credits)."""
+	words = re.sub(r"[-_]", " ", text or "")
+	if any(c in (code or "") for c in _CREDIT_CODES):
+		return "billing"
+	if any(h in words for h in _MINUTE_HINTS):
+		return "rate_limited"
+	if any(h in words for h in _DAILY_HINTS):
+		return "quota_exhausted"
+	if any(h in words for h in _CREDIT_HINTS):
+		return "billing"
+	return "rate_limited"
+
+
+def _from_status(status, text, code=""):
 	if status == 429:
-		category = "quota_exhausted" if any(h in text for h in _QUOTA_HINTS) else "rate_limited"
+		category = rate_limit_category(text, code)
 	elif status in (401, 403):
 		category = "auth"
 	elif status == 402:

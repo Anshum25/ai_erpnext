@@ -5,9 +5,13 @@ from google import genai
 from google.genai import types
 
 class GeminiProvider(LLMProvider):
-    def __init__(self, api_key: str):
+    DEFAULT_MODEL = "gemini-3.6-flash"
+
+    def __init__(self, api_key: str, model: str | None = None):
         self.client = genai.Client(api_key=api_key)
-    
+        self.model = model or self.DEFAULT_MODEL
+        self.provider_name = "Gemini"
+
     def extract_document_data(self, file_content: bytes, file_type: str, prompt: str) -> dict:
         import time
         mime_type = "application/pdf" if file_type.lower() == "pdf" else f"image/{file_type.lower()}"
@@ -17,11 +21,11 @@ class GeminiProvider(LLMProvider):
         )
         
         started = time.perf_counter()
-        meta = {"provider": "Gemini", "model": "gemini-3.6-flash"}
+        meta = {"provider": "Gemini", "model": self.model}
         for attempt in range(4):  # bounded: at most 3 retries, only for 503
             try:
                 response = self.client.models.generate_content(
-                    model='gemini-3.6-flash',
+                    model=self.model,
                     contents=[document, prompt],
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",

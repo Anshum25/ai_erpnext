@@ -24,9 +24,11 @@ def get_session(session=None):
 
 
 @frappe.whitelist(methods=["POST"])
-def send_message(session=None, text=None, file_url=None, action=None, client_id=None):
+def send_message(session=None, text=None, file_url=None, action=None, client_id=None, context=None):
+	"""context: {"route": frappe.get_route()} of the page the user is on, so “this Sales Order” can be
+	resolved; it is only a hint and is re-checked against the user's permissions."""
 	ctx = _ctx(session)
-	engine.handle_message(ctx, text=text, file_url=file_url, action=action, client_id=client_id)
+	engine.handle_message(ctx, text=text, file_url=file_url, action=action, client_id=client_id, context=context)
 	ctx.save()
 	return ctx.payload()
 

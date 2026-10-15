@@ -140,9 +140,12 @@ class TestChatAgent(IntegrationTestCase):
 		self.assertIn({"label": "Status", "value": "Draft"}, card["rows"])
 		self.assertEqual(frappe.db.count("Sales Invoice"), before + 1)
 
-		# the same request delivered again (network retry / double click) does nothing
+		# the same request delivered again (network retry / double click) is not processed again:
+		# the browser gets the original reply (so a retried request still shows its result) and nothing new happens
+		seq = json.loads(frappe.db.get_value("AI Chat Session", self.s, "state"))["seq"]
 		again = self.send(action={"question_id": q["id"], "value": "__create__", "label": "Create"}, client_id="cid-1")
-		self.assertEqual(again["messages"], [])
+		self.assertEqual(again["messages"], r["messages"])
+		self.assertEqual(json.loads(frappe.db.get_value("AI Chat Session", self.s, "state"))["seq"], seq)
 		stale = self.send(action={"question_id": q["id"], "value": "__create__", "label": "Create"}, client_id="cid-2")
 		self.assertIn("no longer active", self.texts(stale))
 		self.assertEqual(frappe.db.count("Sales Invoice"), before + 1)
