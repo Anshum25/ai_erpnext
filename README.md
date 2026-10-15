@@ -1,16 +1,30 @@
-### AI
+## AI for ERPNext (`ai_erpnext`)
 
-..
+An AI assistant inside ERPNext Desk. It answers questions about ERPNext and about your own records, creates documents step by step from a conversation, and turns invoice images into draft Sales Invoices. Everything it creates is a **Draft**: it never submits, cancels, deletes or pays.
+
+Requires Frappe and ERPNext **version 16** (CI uses Python 3.14).
+
+### What it can do
+
+- **Look up your data (read-only).** For example: “What is the mobile number of Amit Patel?”, “Which items are in Sales Invoice ACC-SINV-2026-00001?”, “Show me the tax breakdown of this invoice”, “How many submitted Sales Invoices are outstanding?”, “Show the last 10 purchase orders”. Answers come from ERPNext with the user's own permissions and company restrictions, and are labelled “From your ERPNext data”.
+- **Explain ERPNext.** How-to and concept questions (“How do I create a Purchase Order?”, “What does the Stock module do?”) are answered as general guidance, with a note on what the assistant itself can do. Built-in guidance covers common questions when the AI service is unavailable.
+- **Create records by conversation.** Sales/Purchase Invoices, Sales/Purchase Orders, Quotations, Delivery Notes and Purchase Receipts (as Drafts), plus Customers, Suppliers and Items. Short forms work: “create po”, “new so”. Existing records are offered as buttons, with a separate **Create new …** choice; nothing is created until you confirm a preview. You can correct anything on the way (“change quantity to 7”, “use Finished Goods warehouse”, “I meant Purchase Receipt”, “start over”, “cancel”).
+- **Draft Sales Invoices from images.** Attach a JPG, PNG or WEBP invoice; the assistant reads it, matches customer, items, units, taxes and dates to your masters, asks only about what it can't resolve, and creates a draft after you confirm.
 
 ### Installation
 
-You can install this app using the [bench](https://github.com/frappe/bench) CLI:
+ERPNext must be installed on the site first (`required_apps`).
 
 ```bash
 cd $PATH_TO_YOUR_BENCH
 bench get-app $URL_OF_THIS_REPO --branch version-16
-bench install-app ai_erpnext
+bench --site <site> install-app ai_erpnext
+bench build --app ai_erpnext
 ```
+
+After updating the app, run `bench --site <site> migrate` (it creates or upgrades the app's DocTypes; repeated runs change nothing) and `bench build --app ai_erpnext` for the chat widget.
+
+The assistant appears as a chat button in Desk for users with the **System Manager** role (the role allowed on *AI Chat Session* and *AI Document Entry*).
 
 ### AI provider configuration
 
@@ -20,7 +34,53 @@ Open **AI Provider Settings** (System Manager only). Keys are stored encrypted i
 - **Enable Fallback Provider** (off by default): when Groq reports that its *daily* quota is exhausted, one request goes to the fallback (OpenAI, e.g. `gpt-4.1-mini`). Per-minute limits, outages, invalid keys, missing credits and other errors never switch providers, and a failing fallback is never retried. **Fallback Daily Request Limit** caps paid requests per site per day.
 - The fallback is a paid service: enable it only after its account has credits. Saving the settings checks them locally and never calls a provider.
 
-Changing the provider or a key takes effect immediately; no code change or deployment is needed. After updating the app, run `bench --site <site> migrate` to apply the settings layout.
+Changing the provider or a key takes effect immediately; no code change or deployment is needed. Without a working provider, data look-ups and guided creation still work for messages the assistant understands on its own (for example “create purchase order” or “mobile number of Amit Patel”).
+
+### Conversations
+
+- Each browser page has its own conversation. Opening the assistant on a new page (another browser, an incognito window, after a reload) starts a fresh one; **New chat (+)** starts another.
+- Earlier conversations stay in **History** (clock icon) for 7 days and can be reopened there, including any unfinished work such as an open supplier question or an invoice being reviewed.
+- Conversations belong to the user who started them. Every request is checked on the server; another user's conversation can't be read, listed or reopened.
+- Conversations nobody wrote in are removed after a day; expired ones are closed and their messages cleared by a daily scheduler job.
+
+### Safety rules
+
+- Documents are only ever saved as Drafts through ERPNext's normal `insert()`, with its permissions and validation. Masters are created only after their own preview and confirmation.
+- Look-ups use permission-aware queries against an allowlist of DocTypes and fields; the AI model only proposes a plan and never writes SQL. Record data is never sent back to the model.
+- Each company's data stays separate: queries are limited to the companies the user may access, and warehouses must belong to the document's company.
+- Logs contain metadata only (provider, status, timings), never keys, document content or model output.
+
+### Code layout
+
+| Path | Purpose |
+| --- | --- |
+| `ai_erpnext/ai/` | Provider adapters and settings (`providers.py`), retry policy, safe error handling |
+| `ai_erpnext/chat/` | Conversation engine, sessions, data look-ups (`queries.py`), guided forms (`forms.py`), capability guide |
+| `ai_erpnext/pipeline/`, `mapping/`, `validation/` | Invoice image extraction, master matching and validation |
+| `ai_erpnext/api/` | Whitelisted endpoints (chat, extraction, review, creation) |
+| `ai_erpnext/public/js/` | Chat widget (`ai_bot_v2.js`) and AI Document Entry form |
+| `ai_erpnext/setup_doctypes.py` | Creates and upgrades the app's DocTypes on install and migrate |
+
+### Tests
+
+Integration tests run against a real site; AI providers are always mocked (a fake network fails any unexpected request), so no keys or credits are needed.
+
+```bash
+bench --site <test-site> set-config allow_tests true
+bench --site <test-site> run-tests --app ai_erpnext
+bench --site <test-site> run-tests --module ai_erpnext.tests.test_chat_sessions   # one module
+```
+
+On a fresh site the `before_tests` hook completes the ERPNext setup wizard with a throw-away test company. Use a dedicated test site, not a production one.
+
+### CI
+
+GitHub Actions workflows in `.github/workflows/`:
+
+- **CI** (`ci.yml`): on every push to `version-16` and on pull requests, installs the latest Frappe and ERPNext `version-16`, installs this app on a new site, runs `bench migrate` again, then runs the full test suite.
+- **Linters** (`linter.yml`): on pull requests, runs pre-commit, [Frappe Semgrep Rules](https://github.com/frappe/semgrep-rules) and [pip-audit](https://pypi.org/project/pip-audit/).
+
+CI always uses the newest ERPNext v16, so it can catch schema changes a local bench doesn't have yet.
 
 ### Contributing
 
@@ -31,20 +91,8 @@ cd apps/ai_erpnext
 pre-commit install
 ```
 
-Pre-commit is configured to use the following tools for checking and formatting your code:
-
-- ruff
-- eslint
-- prettier
-- pyupgrade
-### CI
-
-This app can use GitHub Actions for CI. The following workflows are configured:
-
-- CI: Installs this app and runs unit tests on every push to `develop` branch.
-- Linters: Runs [Frappe Semgrep Rules](https://github.com/frappe/semgrep-rules) and [pip-audit](https://pypi.org/project/pip-audit/) on every pull request.
-
+Pre-commit is configured to use ruff, eslint, prettier and pyupgrade.
 
 ### License
 
-mit
+MIT
