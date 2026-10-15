@@ -501,7 +501,7 @@ def _list(q):
 		fields = ["name"] + fields
 	filters, or_filters, notes = _base_filters(q)
 	rows = frappe.get_list(doctype, filters=filters, or_filters=or_filters or None, fields=fields, order_by=_order_by(q),
-		limit_start=q["offset"], limit_page_length=q["limit"] + 1)
+		offset=q["offset"], limit=q["limit"] + 1)
 	has_more = len(rows) > q["limit"]
 	rows = rows[: q["limit"]]
 	what = {"overdue": f"overdue {doctype}s", "unpaid": f"unpaid {doctype}s"}.get(q["operation"], f"{doctype} records")
@@ -567,11 +567,11 @@ def resolve_record(doctype, term, scope=None, exact_name=False):
 	term = clean_text(term, 140)
 	if not term:
 		return [], False
-	found = frappe.get_list(doctype, filters=[["name", "=", term], *scope], fields=fields, limit_page_length=1)
+	found = frappe.get_list(doctype, filters=[["name", "=", term], *scope], fields=fields, limit=1)
 	if found or exact_name:
 		return rows_of(found), True
 	if title != "name":
-		found = frappe.get_list(doctype, filters=[[title, "=", term], *scope], fields=fields, limit_page_length=MAX_CHOICES + 1)
+		found = frappe.get_list(doctype, filters=[[title, "=", term], *scope], fields=fields, limit=MAX_CHOICES + 1)
 		if found:
 			return rows_of(found), True
 	tokens = normalize_name(term).split()
@@ -580,7 +580,7 @@ def resolve_record(doctype, term, scope=None, exact_name=False):
 	searchable = [f for f in dict.fromkeys(["name", title, *spec.search_fields]) if f == "name" or frappe.get_meta(doctype).has_field(f)]
 	longest = max(tokens, key=len)
 	pool = frappe.get_list(doctype, filters=scope or None, or_filters=[[f, "like", f"%{longest}%"] for f in searchable],
-		fields=list(dict.fromkeys(fields + searchable)), limit_page_length=50, order_by="modified desc")
+		fields=list(dict.fromkeys(fields + searchable)), limit=50, order_by="modified desc")
 	wanted = " ".join(tokens)
 	same = [r for r in pool if wanted in (normalize_name(r.get(title)), normalize_name(r["name"]))]
 	if same:
@@ -778,7 +778,7 @@ def _missing(doctype, doc, subject, label, fieldname):
 		permitted = set(get_permitted_fields("Contact"))
 		contact_fields = [f for f in contact_fields if f in permitted]
 		contacts = frappe.get_list("Contact", filters=[["Dynamic Link", "link_doctype", "=", doctype], ["Dynamic Link", "link_name", "=", doc.name]],
-			fields=["name", *contact_fields], limit_page_length=5) if contact_fields else []
+			fields=["name", *contact_fields], limit=5) if contact_fields else []
 		found = [(c["name"], c.get(f)) for c in contacts for f in contact_fields if c.get(f)]
 		if found:
 			text += " Linked contact" + ("s: " if len(found) > 1 else ": ") + "; ".join(f"{n}: {v}" for n, v in found[:3]) + "."
@@ -842,7 +842,7 @@ def _outstanding_by_customer(q):
 	rows = frappe.get_list("Sales Invoice", filters=[["docstatus", "=", 1], ["outstanding_amount", ">", 0],
 		*_company_filter(dict(q, doctype="Sales Invoice"))[0]],
 		fields=["customer", "customer_name", "currency", {"SUM": "outstanding_amount", "as": "total"}, {"COUNT": "*", "as": "n"}],
-		group_by="customer, customer_name, currency", order_by="total desc", limit_page_length=q["limit"])
+		group_by="customer, customer_name, currency", order_by="total desc", limit=q["limit"])
 	if not rows:
 		return {"text": "No customer has an outstanding balance on submitted Sales Invoices.", "names": [], "titles": []}
 	card = {"type": "table", "title": "Outstanding by customer", "doctype": "Customer",

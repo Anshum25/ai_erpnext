@@ -18,6 +18,7 @@ from frappe.utils import add_days, nowdate
 
 from ai_erpnext.api import chat
 from ai_erpnext.chat import requirements
+from ai_erpnext.mapping.warehouse import configured_default_warehouse
 
 ROUTE = "ai_erpnext.chat.llm.route"
 PLAIN, OTHER = "AIW Plain Co", "AIW Other Co"  # companies without an applicable default warehouse
@@ -42,8 +43,16 @@ class TestChatCreationRequirements(IntegrationTestCase):
 		cls.other_stores = "Stores - AIWO"
 		for wh in (cls.stores, cls.goods, cls.other_stores):
 			assert frappe.db.exists("Warehouse", wh), wh  # created with the company by ERPNext
-		stock_default = frappe.db.get_single_value("Stock Settings", "default_warehouse")
-		assert not stock_default or frappe.db.get_value("Warehouse", stock_default, "company") != PLAIN
+		# These companies must have no default warehouse. Since ERPNext v16 moved the default to Company,
+		# a new company gets its "Stores" warehouse as default; clear it (older sites keep the default in
+		# Stock Settings, which belongs to another company).
+		if frappe.get_meta("Company").has_field("default_warehouse"):
+			for name in (PLAIN, OTHER):
+				frappe.db.set_value("Company", name, "default_warehouse", None)
+				frappe.clear_document_cache("Company", name)
+		for name in (PLAIN, OTHER):
+			default = configured_default_warehouse(name)
+			assert not default or frappe.db.get_value("Warehouse", default, "company") != name, default
 		ig = frappe.db.get_value("Item Group", {"is_group": 0}, "name")
 		item = {"doctype": "Item", "item_group": ig, "stock_uom": "Nos", "is_sales_item": 1, "is_purchase_item": 1}
 		frappe.get_doc({**item, "item_code": "AIW-BOTTLE", "item_name": "AIW Bottle", "is_stock_item": 1}).insert()

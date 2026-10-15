@@ -3,6 +3,21 @@
 The browser only ever sends user text, an uploaded file URL or the id/value of a button;
 everything else (operation, extracted data, answers, acknowledgements) lives here or in
 the linked AI Document Entry, owned by the user.
+
+There is no per-user "current conversation" on the server. Each page (browser tab, window,
+incognito session) holds the id of the conversation it shows, in memory:
+- create: when the assistant is first opened on a page, or on "New chat", a new conversation
+  is created (new id, empty state). Other conversations are left exactly as they are, so a
+  user can have several open at once, in several browsers.
+- resume: a conversation the user picks from the history is reopened by its id, after the
+  ownership check; its messages and pending work continue there.
+- list: the history shows the user's own conversations that have messages and haven't expired.
+status is "Open" for usable conversations and "Closed" once expired (see cleanup).
+
+A conversation id from the browser is untrusted: every access checks the owner, and a missing
+or foreign id gets the same "Conversation not found." error. A message or poll is only ever
+applied to the conversation it names; if that one is closed or expired, SessionClosed is
+raised and nothing is redirected to another conversation.
 """
 
 import json
@@ -17,32 +32,74 @@ MAX_PROCESSED_IDS = 100
 EXPIRY_DAYS = 7
 
 
+NOT_FOUND = "Conversation not found."
+HISTORY_LIMIT = 20
+UNTITLED = "Conversation"  # title until the user's first message (text or attachment)
+
+
+class SessionClosed(Exception):
+	"""The conversation a request was sent for is closed or expired."""
+
+
 def _owned(doc):
 	if doc.owner != frappe.session.user:
-		raise frappe.PermissionError(_("This conversation belongs to another user."))
+		raise frappe.PermissionError(_(NOT_FOUND))  # same answer as a missing id: nothing is revealed
 	return doc
 
 
+def _load(name):
+	"""The user's own conversation `name`, or PermissionError (missing and foreign ids alike)."""
+	if not isinstance(name, str) or not name or len(name) > 140 or not frappe.db.exists(DOCTYPE, name):
+		raise frappe.PermissionError(_(NOT_FOUND))
+	return _owned(frappe.get_doc(DOCTYPE, name))
+
+
 def get_session(name=None):
-	"""Return the user's conversation (the given one, or their latest open one, or a new one)."""
+	"""The conversation a page shows: the one it already has (its own id, ownership checked), or a
+	new one. Never another existing conversation: a page without an id gets a fresh conversation
+	even if the user has others (in another browser, or earlier ones in the history)."""
 	if name:
-		doc = _owned(frappe.get_doc(DOCTYPE, name))
-		if doc.status == "Open" and not _expired(doc):
+		doc = _load(name)
+		if _usable(doc):
 			return doc
-	rows = frappe.get_all(DOCTYPE, filters={"owner": frappe.session.user, "status": "Open"},
-		order_by="modified desc", pluck="name", limit=1)
-	if rows:
-		doc = _owned(frappe.get_doc(DOCTYPE, rows[0]))
-		if not _expired(doc):
-			return doc
-		close(doc)
 	return new_session()
 
 
+def active_session(name):
+	"""The conversation a message or poll was sent for; it must be the user's own, usable one."""
+	doc = _load(name)
+	if not _usable(doc):
+		raise SessionClosed()
+	return doc
+
+
+def _usable(doc):
+	return doc.status == "Open" and not _expired(doc)
+
+
+def history(limit=HISTORY_LIMIT):
+	"""The user's own conversations that can still be opened (metadata only, newest first).
+	Conversations nobody wrote in yet (a page opened and left) are not listed."""
+	cutoff = add_days(now_datetime(), -EXPIRY_DAYS)
+	rows = frappe.get_all(DOCTYPE, filters={"owner": frappe.session.user, "last_activity": [">=", cutoff],
+		"title": ["!=", UNTITLED]}, fields=["name", "title", "last_activity"], order_by="last_activity desc", limit=limit)
+	return [{"session": r.name, "title": r.title, "last_activity": str(r.last_activity)} for r in rows]
+
+
+def reopen(name):
+	"""Resume a conversation the user picked from the history (its pending work included). Nothing
+	else changes: conversations open in other pages stay as they are."""
+	doc = _load(name)
+	if _expired(doc):
+		raise frappe.PermissionError(_(NOT_FOUND))
+	if doc.status != "Open":  # closed by an earlier version of "New chat", still within its lifetime
+		doc.status = "Open"
+		doc.save()
+	return doc
+
+
 def new_session():
-	for name in frappe.get_all(DOCTYPE, filters={"owner": frappe.session.user, "status": "Open"}, pluck="name"):
-		close(frappe.get_doc(DOCTYPE, name))
-	doc = frappe.get_doc({"doctype": DOCTYPE, "title": "Conversation", "status": "Open",
+	doc = frappe.get_doc({"doctype": DOCTYPE, "title": UNTITLED, "status": "Open",
 		"messages": "[]", "state": "{}", "last_activity": now_datetime()})
 	doc.insert()
 	return doc
@@ -53,11 +110,15 @@ def close(doc):
 	doc.save()
 
 
-def lock(doc):
-	"""Serialise concurrent requests for one conversation (double clicks, retries, polls)."""
+def lock(doc, active=False):
+	"""Serialise concurrent requests for one conversation (double clicks, retries, polls, two
+	pages showing the same conversation). active: it must still be usable once locked."""
 	frappe.db.get_value(DOCTYPE, doc.name, "name", for_update=True)
 	doc.reload()
-	return _owned(doc)
+	_owned(doc)
+	if active and not _usable(doc):
+		raise SessionClosed()
+	return doc
 
 
 def _expired(doc):
@@ -113,15 +174,17 @@ def save(doc, msgs, st):
 	doc.messages = json.dumps(msgs, default=str)
 	doc.state = json.dumps(st, default=str)
 	doc.last_activity = now_datetime()
-	if doc.title == "Conversation":
-		first = next((m.get("text") for m in msgs if m["role"] == "user" and m.get("text")), None)
+	if doc.title == UNTITLED:
+		first = next((m for m in msgs if m["role"] == "user"), None)
 		if first:
-			doc.title = first[:60]
+			doc.title = (first.get("text") or (first.get("attachment") or {}).get("file_name") or "Attachment")[:60]
 	doc.save()
 
 
 def cleanup_expired_sessions():
-	"""Daily: close expired conversations and drop their message history."""
+	"""Daily: close expired conversations and drop their message history. Every page that opens
+	the assistant starts a conversation, so ones nobody wrote in are deleted after a day."""
 	cutoff = add_days(now_datetime(), -EXPIRY_DAYS)
 	for name in frappe.get_all(DOCTYPE, filters={"last_activity": ["<", cutoff], "status": "Open"}, pluck="name"):
 		frappe.db.set_value(DOCTYPE, name, {"status": "Closed", "messages": "[]", "state": "{}"})
+	frappe.db.delete(DOCTYPE, {"title": UNTITLED, "active_entry": ["is", "not set"], "last_activity": ["<", add_days(now_datetime(), -1)]})

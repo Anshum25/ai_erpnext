@@ -35,7 +35,7 @@ def find_duplicate_sales_invoices(customer, invoice_number=None, company=None, p
 			"Sales Invoice",
 			filters={**base, "customer": customer, "remarks": ["like", f"%{SOURCE_TAG}%"]},
 			fields=["name", "customer", "docstatus", "remarks"],
-			limit_page_length=500,
+			limit=500,
 		)
 		wanted = invoice_number.strip().lower()
 		for row in rows:
@@ -49,7 +49,7 @@ def find_duplicate_sales_invoices(customer, invoice_number=None, company=None, p
 			"Sales Invoice",
 			filters={**base, "customer": customer, "posting_date": posting_date},
 			fields=["name", "customer", "docstatus", "grand_total"],
-			limit_page_length=100,
+			limit=100,
 		)
 		for row in rows:
 			if abs(flt(row.grand_total) - flt(grand_total)) <= 0.01:

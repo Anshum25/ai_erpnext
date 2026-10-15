@@ -2,6 +2,13 @@
 // All decisions and validation happen on the server (ai_erpnext.api.chat); this file only
 // renders server messages and sends user text, uploaded image URLs and button choices.
 // Every server/AI-provided string is escaped before rendering.
+//
+// Conversations: each page has its own conversation, kept in memory only (never in browser
+// storage, never a server-side "current conversation" of the user). The first time the
+// assistant is opened on a page a new conversation starts; "New chat" starts another; earlier
+// ones (from this or another browser) are reopened only when picked from the history. Other
+// pages' conversations are never changed. The server checks ownership on every request. Each
+// request remembers which conversation it was for: a late response for another one is ignored.
 $(document).ready(function () {
 	if (!window.frappe || !frappe.boot || !frappe.boot.user || frappe.boot.user.name === "Guest") return;
 	if (document.getElementById("ai-agent")) return;
@@ -25,6 +32,7 @@ $(document).ready(function () {
 		clip: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>',
 		send: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>',
 		plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+		history: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>',
 		expand: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>',
 		close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>',
 	};
@@ -108,6 +116,12 @@ $(document).ready(function () {
 	.ai-table-note { margin-top: 6px; }
 	.ai-card-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 	.ai-card-actions .ai-primary { margin-top: 0; }
+	.ai-history { position: absolute; inset: 57px 0 auto 0; max-height: 60%; overflow-y: auto; background: var(--card-bg, #fff); border-bottom: 1px solid var(--border-color, #e5e7eb); box-shadow: 0 10px 20px rgba(0,0,0,.08); z-index: 2; padding: 8px; }
+	.ai-history[hidden] { display: none; }
+	.ai-history-item { display: block; width: 100%; text-align: left; border: none; background: transparent; border-radius: 8px; padding: 7px 9px; cursor: pointer; font-size: 13px; color: inherit; }
+	.ai-history-item:hover, .ai-history-item:focus-visible { background: var(--fg-hover-color, #f3f4f6); }
+	.ai-history-item .ai-note { margin-top: 1px; }
+	.ai-panel { isolation: isolate; }
 	.ai-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 	@media (max-width: 640px) {
 		#ai-agent { right: 16px; bottom: 16px; }
@@ -125,11 +139,13 @@ $(document).ready(function () {
 				<div class="ai-head-id"><span class="ai-avatar" aria-hidden="true">AI</span>
 					<div style="min-width:0"><div class="ai-title">AI Assistant</div><div class="ai-sub">Chat · ERPNext lookups · draft invoices</div></div></div>
 				<div class="ai-head-actions">
+					<button type="button" class="ai-icon-btn" data-act="history" aria-label="Previous conversations" aria-expanded="false" title="Previous conversations">${ICON.history}</button>
 					<button type="button" class="ai-icon-btn" data-act="new" aria-label="Start a new conversation" title="New conversation">${ICON.plus}</button>
 					<button type="button" class="ai-icon-btn ai-expand-btn" data-act="expand" aria-label="Expand chat" aria-pressed="false" title="Expand">${ICON.expand}</button>
 					<button type="button" class="ai-icon-btn" data-act="close" aria-label="Close AI Assistant" title="Close">${ICON.close}</button>
 				</div>
 			</header>
+			<div class="ai-history" role="region" aria-label="Previous conversations" hidden></div>
 			<div class="ai-log" id="ai-chat-body" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation" tabindex="0"></div>
 			<form class="ai-composer" novalidate>
 				<div class="ai-attach" hidden>
@@ -154,9 +170,10 @@ $(document).ready(function () {
 
 	const $root = $("#ai-agent"), $panel = $("#ai-chat-panel"), $log = $("#ai-chat-body"), $btn = $("#ai-bot-btn");
 	const $form = $root.find(".ai-composer"), $input = $("#ai-input"), $send = $root.find(".ai-send"), $file = $root.find(".ai-file");
-	const $attach = $root.find(".ai-attach");
+	const $attach = $root.find(".ai-attach"), $history = $root.find(".ai-history");
 
-	const S = { session: null, lastId: 0, pendingId: null, busy: false, sending: false, loaded: false, pollTimer: null,
+	// gen changes whenever another conversation is shown; responses of an older gen are dropped.
+	const S = { session: null, gen: 0, lastId: 0, pendingId: null, busy: false, sending: false, loaded: false, pollTimer: null,
 		pollStarted: 0, attachment: null, lastPayload: null };
 
 	// ---------------------------------------------------------------- panel
@@ -164,7 +181,7 @@ $(document).ready(function () {
 		$panel.prop("hidden", false);
 		$btn.attr("aria-expanded", "true");
 		if (store.get("ai_agent_expanded") === "1") setExpanded(true);
-		if (!S.loaded) loadSession(); else scrollToEnd();
+		if (!S.loaded) loadSession(); else scrollToEnd();  // only the first open of a page creates a conversation
 		if (S.loaded && S.busy && !S.pollTimer) { S.pollStarted = Date.now(); schedulePoll(); }  // resume after the poll limit
 		setTimeout(() => $input.trigger("focus"), 50);
 	}
@@ -183,26 +200,78 @@ $(document).ready(function () {
 	$root.on("click", '[data-act="expand"]', () => setExpanded(!$panel.hasClass("ai-expanded")));
 	$root.on("click", '[data-act="new"]', () => {
 		if (S.sending) return;
-		call("new_conversation", {}, (r) => { resetLog(); apply(r); $input.trigger("focus"); }, null);
+		hideHistory();
+		switchTo(null);  // nothing of the old conversation may be rendered from now on
+		call("new_conversation", {}, (r) => { apply(r); $input.trigger("focus"); }, null);
 	});
+	$root.on("click", '[data-act="history"]', () => ($history.prop("hidden") ? showHistory() : hideHistory()));
+
+	// ---------------------------------------------------------------- conversations
+	function switchTo(session) {
+		S.gen += 1;
+		S.session = session;
+		if (S.pollTimer) { clearTimeout(S.pollTimer); S.pollTimer = null; }
+		S.busy = false;
+		resetLog();
+	}
+	function hideHistory() {
+		$history.prop("hidden", true).empty();
+		$root.find('[data-act="history"]').attr("aria-expanded", "false");
+	}
+	function showHistory() {
+		$root.find('[data-act="history"]').attr("aria-expanded", "true");
+		$history.prop("hidden", false).html('<div class="ai-note">Loading…</div>');
+		frappe.call({ method: API + "list_conversations", type: "POST",
+			callback: (r) => {
+				const rows = r.message || [];
+				$history.empty();
+				if (!rows.length) { $history.append('<div class="ai-note">No previous conversations.</div>'); return; }
+				rows.forEach((c) => {
+					const when = c.last_activity ? frappe.datetime.comment_when(c.last_activity) : "";
+					const current = c.session === S.session;
+					const $b = $(`<button type="button" class="ai-history-item"${current ? ' aria-current="true"' : ""}><div>${esc(c.title)}${current ? ' <span class="ai-pill ok">Current</span>' : ""}</div>
+						<div class="ai-note">${esc(when)}</div></button>`);
+					$b.on("click", () => {
+						hideHistory();
+						if (c.session === S.session || S.sending) return;
+						switchTo(null);
+						call("open_conversation", { session: c.session }, apply, null);
+					});
+					$history.append($b);
+				});
+			},
+			error: () => { $history.html('<div class="ai-note">Couldn\'t load previous conversations.</div>'); } });
+	}
 
 	// ---------------------------------------------------------------- server calls
-	function call(method, args, ok, retryPayload) {
+	function call(method, args, ok, retryPayload, failed) {
+		const gen = S.gen;
 		S.sending = true; updateComposer(); showTyping(true);
 		frappe.call({
 			method: API + method, args, type: "POST",
-			callback: (r) => { S.sending = false; showTyping(false); updateComposer(); if (r.message) ok(r.message); },
+			callback: (r) => {
+				S.sending = false; showTyping(false); updateComposer();
+				if (gen !== S.gen) return;  // another conversation is shown now
+				if (r.message) ok(r.message);
+			},
 			error: () => {
 				S.sending = false; showTyping(false); updateComposer();
+				if (failed) failed();
+				if (gen !== S.gen) return;
 				systemNote("The request didn't go through.", retryPayload ? () => send(retryPayload) : null);
 			},
 		});
 	}
 	function loadSession() {
-		call("get_session", { session: S.session }, (r) => { S.loaded = true; resetLog(); apply(r); restoreAttachment(); }, null);
+		if (S.loading) return;  // a reopened panel must not start a second conversation
+		S.loading = true;
+		call("get_session", { session: S.session }, (r) => { S.loading = false; S.loaded = true; resetLog(); S.session = null; apply(r); restoreAttachment(); },
+			null, () => { S.loading = false; });
 	}
 	function send(payload) {
 		S.lastPayload = payload;
+		// Bound to the conversation it was typed in: a retry never goes to another conversation.
+		if (!payload.session) payload.session = S.session;
 		// The page the user is on, so "this Sales Order" can be resolved; the server re-checks access.
 		// A retry re-sends the same payload (same client_id): the server returns the original reply.
 		if (!payload.context) {
@@ -210,9 +279,21 @@ $(document).ready(function () {
 			try { route = frappe.get_route(); } catch (e) { route = null; }
 			if (Array.isArray(route)) payload.context = JSON.stringify({ route: route.slice(0, 3).map(String) });
 		}
-		call("send_message", Object.assign({ session: S.session }, payload), apply, payload);
+		call("send_message", payload, apply, payload);
 	}
 	function apply(r) {
+		if (r.closed) {
+			// That conversation has expired: nothing was sent. Start a new one and give the typed text
+			// back instead of posting it to some other conversation.
+			const typed = S.lastPayload && S.lastPayload.session === r.session ? S.lastPayload.text : null;
+			switchTo(null);
+			call("get_session", {}, (x) => {
+				apply(x);
+				systemNote("That conversation has expired, so your message wasn't sent. A new conversation was started; the old one is no longer available.");
+				if (typed && !$input.val()) { $input.val(typed); autosize(); updateComposer(); }
+			}, null);
+			return;
+		}
 		if (S.session && r.session !== S.session) resetLog();
 		S.session = r.session;
 		(r.messages || []).forEach(renderMessage);
@@ -234,9 +315,14 @@ $(document).ready(function () {
 				systemNote("Still working on it. Check again in a moment.", () => { S.pollStarted = Date.now(); schedulePoll(); });
 				return;
 			}
-			frappe.call({ method: API + "poll", type: "POST", args: { session: S.session, since: S.lastId },
-				callback: (r) => { if (r.message) apply(r.message); if (S.busy && !S.pollTimer) schedulePoll(); },
-				error: () => schedulePoll() });
+			const gen = S.gen, session = S.session;
+			frappe.call({ method: API + "poll", type: "POST", args: { session, since: S.lastId },
+				callback: (r) => {
+					if (gen !== S.gen || !r.message || r.message.session !== session) return;  // a newer conversation is shown
+					apply(r.message);
+					if (S.busy && !S.pollTimer) schedulePoll();
+				},
+				error: () => { if (gen === S.gen) schedulePoll(); } });
 		}, POLL_MS);
 	}
 
@@ -413,6 +499,7 @@ $(document).ready(function () {
 		$send.prop("disabled", S.sending || uploading || !hasContent);
 		$root.find('[data-act="attach"]').prop("disabled", S.sending);
 		$root.find('[data-act="new"]').prop("disabled", S.sending);
+		$root.find('[data-act="history"]').prop("disabled", S.sending);
 		refreshQuestions();
 	}
 	function autosize() { $input.css("height", "auto").css("height", Math.min($input[0].scrollHeight, 140) + "px"); }

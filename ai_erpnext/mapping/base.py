@@ -220,7 +220,7 @@ class BaseMatcher:
 			filters=merged,
 			or_filters=or_filters,
 			fields=self._fields(),
-			limit_page_length=limit,
+			limit=limit,
 			order_by="modified desc",
 		)
 

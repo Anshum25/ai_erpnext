@@ -89,10 +89,10 @@ def field_options(doctype, fieldname):
 		filters = {"is_group": 0} if spec["options"] in TREE_DOCTYPES else {}
 		if spec["options"] == "UOM":
 			filters = {"enabled": 1}
-			names = frappe.get_list("UOM", filters=filters, pluck="name", limit_page_length=0)
+			names = frappe.get_list("UOM", filters=filters, pluck="name", limit=0)
 			preferred = [u for u in ("Nos", "Unit", "Hour", "Kg") if u in names]
 			return [{"label": n, "value": n} for n in preferred]
-		names = frappe.get_list(spec["options"], filters=filters, pluck="name", limit_page_length=12, order_by="name asc")
+		names = frappe.get_list(spec["options"], filters=filters, pluck="name", limit=12, order_by="name asc")
 		return [{"label": n, "value": n} for n in names]
 	return []
 
@@ -137,10 +137,10 @@ def set_field(draft, fieldname, raw):
 
 def _resolve_link(doctype, value):
 	filters = {"is_group": 0} if doctype in TREE_DOCTYPES else ({"enabled": 1} if doctype == "UOM" else {})
-	exact = frappe.get_list(doctype, filters={**filters, "name": value}, pluck="name", limit_page_length=2)
+	exact = frappe.get_list(doctype, filters={**filters, "name": value}, pluck="name", limit=2)
 	if exact:
 		return exact[0]
-	like = frappe.get_list(doctype, filters={**filters, "name": ["like", f"%{value}%"]}, pluck="name", limit_page_length=2)
+	like = frappe.get_list(doctype, filters={**filters, "name": ["like", f"%{value}%"]}, pluck="name", limit=2)
 	return like[0] if len(like) == 1 else None
 
 

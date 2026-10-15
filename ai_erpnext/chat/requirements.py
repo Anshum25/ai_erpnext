@@ -7,7 +7,7 @@ module checks those before the preview, so the chat can ask instead of failing o
 
 - ERPNext's own defaulting runs on an unsaved copy of the document (the controller's
   set_missing_values, the same call insert() makes), so a valid configured default
-  (item / item group / brand default, or the Stock Settings default of the same company)
+  (item / item group / brand default, or the company's default warehouse)
   is found exactly as ERPNext would find it. Nothing is written.
 - Per-row warehouse rules come from the ERPNext v16 controllers (see WAREHOUSE_RULES).
 - Frappe's own mandatory check is used for fields the chat can collect. Other `reqd` fields

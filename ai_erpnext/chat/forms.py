@@ -472,7 +472,7 @@ def _default(f, form):
 	if d == "today":
 		return nowdate()
 	if d == "company":
-		permitted = frappe.get_list("Company", pluck="name", limit_page_length=50)
+		permitted = frappe.get_list("Company", pluck="name", limit=50)
 		for c in (frappe.defaults.get_user_default("Company"), frappe.db.get_single_value("Global Defaults", "default_company")):
 			if c and c in permitted:
 				return c
@@ -493,7 +493,7 @@ def _filters(f, form):
 
 def _suggestions(doctype, filters, limit=PAGE, offset=0):
 	try:
-		return frappe.get_list(doctype, filters=filters, pluck="name", limit_start=offset, limit_page_length=limit, order_by="modified desc")
+		return frappe.get_list(doctype, filters=filters, pluck="name", offset=offset, limit=limit, order_by="modified desc")
 	except frappe.PermissionError:
 		frappe.local.message_log = []
 		return []
@@ -635,13 +635,13 @@ class _GenericMatcher:
 
 	def match(self, value):
 		fields = ["name"] + ([self.title] if self.title else [])
-		exact = frappe.get_list(self.doctype, filters={**self.filters, "name": value}, fields=fields, limit_page_length=2)
+		exact = frappe.get_list(self.doctype, filters={**self.filters, "name": value}, fields=fields, limit=2)
 		if not exact and self.title:
-			exact = frappe.get_list(self.doctype, filters={**self.filters, self.title: value}, fields=fields, limit_page_length=3)
+			exact = frappe.get_list(self.doctype, filters={**self.filters, self.title: value}, fields=fields, limit=3)
 		if len(exact) == 1:
 			return _Result(exact, self.title, matched=True)
 		rows = exact or frappe.get_list(self.doctype, filters=self.filters, or_filters=[[f, "like", f"%{value}%"] for f in fields],
-			fields=fields, limit_page_length=6)
+			fields=fields, limit=6)
 		return _Result(rows, self.title, matched=False)
 
 
@@ -660,7 +660,7 @@ def _exists_named(doctype, title_field, value):
 def _resolve_link(f, form, value, from_text):
 	doctype, filters = f["doctype"], _filters(f, form)
 	if not from_text:  # button values are exact record names; re-check existence and permission
-		rows = frappe.get_list(doctype, filters={**filters, "name": value}, pluck="name", limit_page_length=1)
+		rows = frappe.get_list(doctype, filters={**filters, "name": value}, pluck="name", limit=1)
 		return ("ok", rows[0], value) if rows else ("none", None, None)
 	if doctype == "Customer":
 		res = CustomerMatcher().match(value)
@@ -686,7 +686,7 @@ def _resolve_item(form, value):
 	flags = ITEM_FILTERS[SPECS[form["doctype"]]["items"]]
 
 	def allowed(code):
-		return bool(frappe.get_list("Item", filters={"name": code, "disabled": 0, **flags}, pluck="name", limit_page_length=1))
+		return bool(frappe.get_list("Item", filters={"name": code, "disabled": 0, **flags}, pluck="name", limit=1))
 
 	res = ItemMatcher().match({"item_name": value, "item_code": value})
 	if res.matched:
@@ -763,7 +763,7 @@ def _answer_item(ctx, form, key, value, from_text, pending):
 		if from_text:
 			value = answer_term(value) or value
 		if not from_text:
-			rows = frappe.get_list("Item", filters={"name": value, "disabled": 0, **ITEM_FILTERS[SPECS[form["doctype"]]["items"]]}, pluck="name", limit_page_length=1)
+			rows = frappe.get_list("Item", filters={"name": value, "disabled": 0, **ITEM_FILTERS[SPECS[form["doctype"]]["items"]]}, pluck="name", limit=1)
 			status, code, name = ("ok", rows[0], frappe.db.get_value("Item", rows[0], "item_name")) if rows else ("none", None, None)
 		else:
 			status, code, name = _resolve_item(form, value)
@@ -893,7 +893,7 @@ def _row_warehouse(form, row, include_default=True):
 
 def _link_ok(f, form, value):
 	try:
-		return bool(frappe.get_list(f["doctype"], filters={**_filters(f, form), "name": value}, pluck="name", limit_page_length=1))
+		return bool(frappe.get_list(f["doctype"], filters={**_filters(f, form), "name": value}, pluck="name", limit=1))
 	except frappe.PermissionError:
 		frappe.local.message_log = []
 		return False
@@ -901,7 +901,7 @@ def _link_ok(f, form, value):
 
 def _item_ok(form, code):
 	flags = ITEM_FILTERS[SPECS[form["doctype"]]["items"]]
-	return bool(frappe.get_list("Item", filters={"name": code, "disabled": 0, **flags}, pluck="name", limit_page_length=1))
+	return bool(frappe.get_list("Item", filters={"name": code, "disabled": 0, **flags}, pluck="name", limit=1))
 
 
 def _ask_warehouse(ctx, form, rows, candidates=None, text=None):

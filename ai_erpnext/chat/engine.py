@@ -900,7 +900,7 @@ def _plan(ctx, entry, results, validation, mapped):
 
 
 def _q_company(ctx, company, issuer):
-	options = [{"label": c, "value": c} for c in frappe.get_list("Company", pluck="name", limit_page_length=20)]
+	options = [{"label": c, "value": c} for c in frappe.get_list("Company", pluck="name", limit=20)]
 	if issuer:
 		text = (f"The invoice is issued by “{issuer}”, which doesn't match any of your ERPNext companies. "
 			"Which of your companies is this sales invoice for?")
@@ -999,7 +999,7 @@ def _warehouse_options(mapped):
 	filters = {"is_group": 0, "disabled": 0}
 	if mapped.get("company"):
 		filters["company"] = mapped["company"]
-	return [{"label": w, "value": w} for w in frappe.get_list("Warehouse", filters=filters, pluck="name", limit_page_length=8)]
+	return [{"label": w, "value": w} for w in frappe.get_list("Warehouse", filters=filters, pluck="name", limit=8)]
 
 
 def _q_taxes(ctx, entry, mapped):
@@ -1011,7 +1011,7 @@ def _q_taxes(ctx, entry, mapped):
 	if parts:
 		tax_text += " (" + ", ".join(parts) + ")"
 	templates = frappe.get_list("Sales Taxes and Charges Template", filters={"company": mapped.get("company"), "disabled": 0},
-		pluck="name", limit_page_length=10) if mapped.get("company") else []
+		pluck="name", limit=10) if mapped.get("company") else []
 	if templates:
 		text = f"The invoice shows {tax_text}. Which Sales Taxes and Charges Template should I apply? ERPNext will calculate the tax rows."
 		options = [{"label": t, "value": t} for t in templates]
