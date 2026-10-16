@@ -15,7 +15,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt, nowdate, strip_html
 
-from ai_erpnext.chat import forms, masters
+from ai_erpnext.capability.access import readable_exists
+from ai_erpnext.chat import forms, history, masters, page_context
 from ai_erpnext.chat import session as S
 from ai_erpnext.constants import FieldStatus
 from ai_erpnext.mapping.adapters import SalesInvoiceAdapter
@@ -101,7 +102,9 @@ class Ctx:
 		self.msgs = S.messages(doc)
 		self.st = S.state(doc)
 		self.start_seq = int(self.st.get("seq") or 0)
+		self.loaded_seq = self.start_seq  # messages up to here were stored by earlier requests (rechecked when shown again)
 		self.view = None  # (doctype, name) of the form the user has open, if readable
+		self.page = None  # the validated Desk page (chat/page_context.py): form, list or report; a hint, rechecked on the server
 		self.reasking = False  # True while re-asking a pending question after an unrelated message
 		# The question the user is replying to now (loop guard: only a re-ask of it counts as a repeat).
 		self.answering_sig = (self.st.get("ask_sig") or {}).get("sig") if self.st.get("pending") else None
@@ -138,7 +141,7 @@ class Ctx:
 	def payload(self, since=None):
 		since = self.start_seq if since is None else int(since or 0)
 		pending = self.st.get("pending")
-		return {"session": self.doc.name, "messages": [m for m in self.msgs if m["id"] > since],
+		return {"session": self.doc.name, "messages": history.recheck([m for m in self.msgs if m["id"] > since], self.loaded_seq),
 			"busy": self.st.get("phase") == "extracting", "pending_id": pending["id"] if pending else None}
 
 
@@ -163,7 +166,8 @@ def handle_message(ctx, text=None, file_url=None, action=None, client_id=None, c
 	if client_id:
 		processed.append(client_id)
 		replies[client_id] = ctx.start_seq
-	ctx.view = _view_context(context)
+	ctx.page = page_context.parse(context)
+	ctx.view = ctx.page.view if ctx.page else None
 
 	text = clean_text(text, MAX_TEXT) if text else None
 	action = _parse_action(action)
@@ -203,25 +207,9 @@ def handle_message(ctx, text=None, file_url=None, action=None, client_id=None, c
 
 def _view_context(context):
 	"""(doctype, name) of the ERPNext form the user has open, when it is a record the chat can read.
-	The browser only sends its route; everything is re-checked here."""
-	from ai_erpnext.chat.queries import REGISTRY
-
-	if isinstance(context, str):
-		try:
-			context = json.loads(context) if len(context) <= 1000 else None
-		except ValueError:
-			context = None
-	route = context.get("route") if isinstance(context, dict) else None
-	if not (isinstance(route, list) and len(route) >= 3 and route[0] == "Form"):
-		return None
-	doctype, name = clean_text(route[1], 60), clean_text(route[2], 140)
-	if doctype not in REGISTRY or not name or name.startswith("new-"):
-		return None
-	try:
-		return (doctype, name) if frappe.db.exists(doctype, name) and frappe.has_permission(doctype, "read", name) else None
-	except Exception:
-		frappe.local.message_log = []
-		return None
+	The browser only sends its route (and, from the page-aware widget, more); everything is re-checked in chat/page_context.py."""
+	page = page_context.parse(context)
+	return page.view if page else None
 
 
 def _parse_action(action):
@@ -362,7 +350,8 @@ def _on_text(ctx, text):
 		search_kinds = ("customer", "item", "uom", "company", "currency", "warehouse", "master_field", "form_field", "form_item", "form_warehouse")
 		from ai_erpnext.chat import shortcuts
 
-		is_general = (GENERAL_CUE_RE.match(text) or CREATE_DOC_RE.match(text) or shortcuts.field_question(text)) and not (
+		is_general = (GENERAL_CUE_RE.match(text) or CREATE_DOC_RE.match(text) or shortcuts.field_question(text)
+			or (ctx.page and page_context.classify(text, ctx.page))) and not (
 			pending["kind"] in search_kinds and re.match(r"^\s*(find|search)\b", text, re.I))
 		if not is_general:
 			return _answer(ctx, pending, text, from_text=True)
@@ -404,6 +393,10 @@ def _general(ctx, text):
 	from ai_erpnext.ai.errors import AIProviderError
 	from ai_erpnext.chat import capabilities, llm, shortcuts
 
+	# Questions about the page the user has open (“explain this invoice”, “compare the selected orders”) are answered from server data.
+	if page_context.answer(ctx, text):
+		_count_route(ctx, "page", "page")
+		return
 	# Unambiguous messages are handled without an AI call (see chat/shortcuts.py).
 	plan = shortcuts.match(text, ctx.st.get("last_query"))
 	m = CREATE_DOC_RE.match(text)
@@ -412,9 +405,11 @@ def _general(ctx, text):
 	via = "shortcut" if plan else "model"
 	if plan is None:
 		try:
-			plan = llm.route(ctx.msgs[:-1], text, ctx.st.get("last_query"))
+			plan = llm.route(ctx.msgs[:-1], text, ctx.st.get("last_query"), page=ctx.page.summary() if ctx.page else None)
 		except AIProviderError as e:
 			_count_route(ctx, "model", "error")
+			if ctx.page and page_context.answer(ctx, text, loose=True):  # “what is this page about” needs no AI service
+				return
 			if m:  # creation works without the AI service: start the guided form with no prefill
 				return forms.start(ctx, forms.match_doctype(m.group(1)))
 			reason = CHAT_ERRORS.get(e.category, CHAT_ERRORS["unknown"])
@@ -454,8 +449,11 @@ def _general(ctx, text):
 		return _start_form(ctx, doctype, values=plan.get("values") if isinstance(plan.get("values"), dict) else None,
 			items=plan.get("items") if isinstance(plan.get("items"), list) else None)
 	elif mode == "unsupported":
-		ctx.say((plan.get("reply") or "I can't do that yet.") + " From the chat I can only create new Drafts of "
-			f"{', '.join(forms.CREATABLE)} after you confirm; I never submit, cancel, delete or pay.")
+		if ctx.page and ctx.page.dirty:
+			plan = dict(plan, reply=(plan.get("reply") or "I can't do that yet.") + " This form also has unsaved changes. Editing from the chat isn't available; "
+				"when it is, the form will first have to be saved or discarded and reloaded. Nothing you typed in the form was saved by me.")
+		ctx.say((plan.get("reply") or "I can't do that yet.") + " From the chat I can only create new records of "
+			f"{', '.join(forms.CREATABLE)} after you confirm (transactions only as Drafts); I never submit, cancel, delete or pay.")
 	elif mode == "open":
 		_open_result(ctx, plan.get("index"))
 	elif mode == "more":
@@ -518,7 +516,8 @@ CHAT_ERRORS = {
 	"timeout": "The AI service is responding slowly right now. Please try again in a moment.",
 	"network": "I couldn't reach the AI service. Please check the connection and try again.",
 	"unavailable": "The AI service is temporarily unavailable. Please try again in a moment.",
-	"rate_limited": "The AI request limit was reached. Please wait a minute and try again.",
+	# A 429 that names neither a daily quota nor credits: usually a short (per-minute) limit, but the provider doesn't always say which.
+	"rate_limited": "The AI request limit was reached for now. Please wait about a minute and try again.",
 	"quota_exhausted": "Today's AI usage limit has been reached, so chat and data questions are paused until it resets. "
 		"You can still create records by typing, for example, “create purchase invoice”.",
 	"auth": "The AI service isn't configured correctly. Please contact the administrator.",
@@ -526,6 +525,7 @@ CHAT_ERRORS = {
 	"billing": "The AI service account needs attention. Please contact the administrator.",
 	"invalid_response": "The AI couldn't produce a usable answer this time. Please rephrase your question or try again.",
 	"bad_request": "The AI service couldn't process that request. Please rephrase it.",
+	"request_too_large": "That request was too large for the AI service. Please ask a shorter question.",
 	"unknown": "Something went wrong with the AI service. Please try again.",
 }
 
@@ -564,7 +564,9 @@ def _run_query(ctx, raw_plan, page_of=None, prepared=None, attempts=0):
 	plan = {k: v for k, v in q.items() if k != "pick"}  # a picked record name came from ERPNext, not from the user
 	ctx.st["last_query"] = {"plan": plan, "names": result.get("names", []), "titles": result.get("titles", []),
 		"doctype": result.get("result_doctype") or q["doctype"]}
-	ctx.say(result["text"], card=result.get("card"), source="erpnext")
+	ctx.say(result["text"], card=result.get("card"), source="erpnext",
+		ref={"doctype": result.get("result_doctype") or q["doctype"], "names": result.get("names", [])[:history.MAX_REFS],
+			"requires": result.get("requires") or ([q["doctype"]] if q["doctype"] and q["doctype"] != (result.get("result_doctype") or q["doctype"]) else [])})
 
 
 def _operation_in_progress(ctx):
@@ -650,7 +652,7 @@ def _answer_query(ctx, pending, value, from_text):
 
 def _more(ctx):
 	last = ctx.st.get("last_query")
-	if not last or last["plan"]["operation"] in ("count", "details", "sales_summary"):
+	if not last or last["plan"]["operation"] in ("count", "details", "sales_summary", "aggregate", "summary"):
 		ctx.say("There's no list to continue. Ask me for some records first.")
 		return
 	q = dict(last["plan"], offset=last["plan"]["offset"] + last["plan"]["limit"])
@@ -1267,7 +1269,7 @@ def _master_next(ctx):
 			"item_group": "Which item group does it belong to?",
 			"is_stock_item": "Is it a stock item (tracked in inventory) or a non-stock item / service?",
 		}.get(field, f"Which {spec['label']} should I use?")
-		if field == "item_code" and draft["values"].get("item_name") and not frappe.db.exists("Item", draft["values"]["item_name"]):
+		if field == "item_code" and draft["values"].get("item_name") and not readable_exists("Item", draft["values"]["item_name"]):
 			options = [{"label": f"Use the item name: {draft['values']['item_name']}", "value": draft["values"]["item_name"]}] + options
 		ctx.ask("master_field", prompt, key=field, options=options, input=None if spec["type"] in ("Select", "Check") else "text")
 		return

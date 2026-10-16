@@ -33,6 +33,7 @@ EXPIRY_DAYS = 7
 
 
 NOT_FOUND = "Conversation not found."
+EPHEMERAL_TEXT = "Your unsaved changes were shown here. They are not stored in the conversation."
 HISTORY_LIMIT = 20
 UNTITLED = "Conversation"  # title until the user's first message (text or attachment)
 
@@ -42,7 +43,9 @@ class SessionClosed(Exception):
 
 
 def _owned(doc):
-	if doc.owner != frappe.session.user:
+	# Role access is rechecked on every load: a user who is no longer allowed to use the chat (for example
+	# no longer a System Manager) gets nothing back from conversations stored earlier.
+	if doc.owner != frappe.session.user or not frappe.has_permission(DOCTYPE, "read"):
 		raise frappe.PermissionError(_(NOT_FOUND))  # same answer as a missing id: nothing is revealed
 	return doc
 
@@ -171,7 +174,9 @@ def save(doc, msgs, st):
 	st["processed"] = processed[-MAX_PROCESSED_IDS:]
 	kept = set(st["processed"])
 	st["replies"] = {k: v for k, v in (st.get("replies") or {}).items() if k in kept}
-	doc.messages = json.dumps(msgs, default=str)
+	# Messages that show browser-provided values (unsaved changes) are shown once and stored without them.
+	stored = [{k: v for k, v in m.items() if k not in ("card", "ref", "ephemeral", "source")} | {"text": EPHEMERAL_TEXT} if m.get("ephemeral") else m for m in msgs]
+	doc.messages = json.dumps(stored, default=str)
 	doc.state = json.dumps(st, default=str)
 	doc.last_activity = now_datetime()
 	if doc.title == UNTITLED:

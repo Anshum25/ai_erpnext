@@ -8,7 +8,7 @@ Requires Frappe and ERPNext **version 16** (CI uses Python 3.14).
 
 - **Look up your data (read-only).** For example: “What is the mobile number of Amit Patel?”, “Which items are in Sales Invoice ACC-SINV-2026-00001?”, “Show me the tax breakdown of this invoice”, “How many submitted Sales Invoices are outstanding?”, “Show the last 10 purchase orders”. Answers come from ERPNext with the user's own permissions and company restrictions, and are labelled “From your ERPNext data”.
 - **Explain ERPNext.** How-to and concept questions (“How do I create a Purchase Order?”, “What does the Stock module do?”) are answered as general guidance, with a note on what the assistant itself can do. Built-in guidance covers common questions when the AI service is unavailable.
-- **Create records by conversation.** Sales/Purchase Invoices, Sales/Purchase Orders, Quotations, Delivery Notes and Purchase Receipts (as Drafts), plus Customers, Suppliers and Items. Short forms work: “create po”, “new so”. Existing records are offered as buttons, with a separate **Create new …** choice; nothing is created until you confirm a preview. You can correct anything on the way (“change quantity to 7”, “use Finished Goods warehouse”, “I meant Purchase Receipt”, “start over”, “cancel”).
+- **Create records by conversation.** Sales/Purchase Invoices, Sales/Purchase Orders, Quotations, Delivery Notes and Purchase Receipts (as Drafts), plus Customers, Suppliers, Items, Leads and Issues (these four are saved immediately, not as Drafts, and the confirmation says so). Short forms work: “create po”, “new so”. Existing records are offered as buttons, with a separate **Create new …** choice; nothing is created until you confirm a preview. You can correct anything on the way (“change quantity to 7”, “use Finished Goods warehouse”, “I meant Purchase Receipt”, “start over”, “cancel”).
 - **Draft Sales Invoices from images.** Attach a JPG, PNG or WEBP invoice; the assistant reads it, matches customer, items, units, taxes and dates to your masters, asks only about what it can't resolve, and creates a draft after you confirm.
 
 ### Installation
@@ -43,10 +43,17 @@ Changing the provider or a key takes effect immediately; no code change or deplo
 - Conversations belong to the user who started them. Every request is checked on the server; another user's conversation can't be read, listed or reopened.
 - Conversations nobody wrote in are removed after a day; expired ones are closed and their messages cleared by a daily scheduler job.
 
+### Page-aware answers
+
+The chat widget describes the Desk page you are on (`public/js/ai_page_context.js`): the saved form (DocType, record, `modified`, whether it has unsaved changes and which fields changed), a list (filters, sort, selected records) or a report (name and filters). With it, “Explain this invoice”, “Explain these invoice items”, “What do these fields mean?”, “What did I change?”, “Compare the selected orders”, “Why are these orders pending?”, “Summarize the current filtered list” and “Explain this report” need no record name. It is only a hint: the server (`chat/page_context.py`) re-fetches everything with your permissions, ignores forged or inaccessible records, names list filters it cannot apply instead of dropping them, announces when the saved record changed since the page loaded, and shows unsaved values only as such (never written, not kept in the conversation). Reports are described by name and filters only; their results are never read. The browser bundle must be rebuilt (`bench build --app ai_erpnext`) for the widget change to reach users.
+
 ### Safety rules
 
 - Documents are only ever saved as Drafts through ERPNext's normal `insert()`, with its permissions and validation. Masters are created only after their own preview and confirmation.
 - Look-ups use permission-aware queries against an allowlist of DocTypes and fields; the AI model only proposes a plan and never writes SQL. Record data is never sent back to the model.
+- What the chat may query or create is one explicit policy (`ai_erpnext/capability/`). ERPNext metadata only describes what exists; a DocType or field is usable only if the policy lists it, it exists, and the current user may read it (role, User Permission, company, field permission level). Queryable and creatable are separate lists; passwords, secrets, tokens and attachments are never exposed, and submit/cancel/delete/pay/edit are not capabilities.
+- Structured questions (filters, count/sum/average/min/max with grouping, rows inside item/tax tables, one related record per row) are validated server-side against that policy; amounts are never added across currencies. About 55 DocTypes are queryable (accounting ledgers and charts, stock ledger and balances, manufacturing, quality, assets, subcontracting, CRM, projects, support and shared masters such as price lists and item groups); the exact list, with what is tested and what is not, is generated into `docs/coverage_inventory.md`. DocTypes without a company field are queryable only when explicitly reviewed as shared master data. Monthly/yearly breakdowns, "overdue by more than N days" and customer/supplier summaries are built in. Standard reports, editing and workflow actions are not supported.
+- Stored conversation results are checked again against the reader's current permissions whenever a conversation is reopened; results that are no longer readable are removed or replaced by a neutral sentence. An AI Document Entry (extracted invoice data) can only be opened by its owner.
 - Each company's data stays separate: queries are limited to the companies the user may access, and warehouses must belong to the document's company.
 - Logs contain metadata only (provider, status, timings), never keys, document content or model output.
 
@@ -54,6 +61,8 @@ Changing the provider or a key takes effect immediately; no code change or deplo
 
 | Path | Purpose |
 | --- | --- |
+| `ai_erpnext/capability/` | The shared capability policy (`policy.py`), metadata reader (`metadata.py`), answers/validation (`service.py`), permission-aware lookups (`access.py`) and the coverage inventory generator (`inventory.py`) |
+| `docs/` | Generated coverage inventory (`coverage_inventory.md` / `.json`): regenerate on a test site with `bench --site <test-site> execute ai_erpnext.capability.inventory.write_inventory` |
 | `ai_erpnext/ai/` | Provider adapters and settings (`providers.py`), retry policy, safe error handling |
 | `ai_erpnext/chat/` | Conversation engine, sessions, data look-ups (`queries.py`), guided forms (`forms.py`), capability guide |
 | `ai_erpnext/pipeline/`, `mapping/`, `validation/` | Invoice image extraction, master matching and validation |

@@ -22,12 +22,20 @@ fuzzy (misspelt) match is never selected on its own.
 
 import datetime
 import re
-from dataclasses import dataclass, field
 
 import frappe
 from frappe.model import get_permitted_fields
 from frappe.utils import add_days, add_months, flt, get_first_day, get_last_day, getdate, nowdate, strip_html
 
+from ai_erpnext.capability import metadata as meta_
+from ai_erpnext.capability import service as capability
+from ai_erpnext.capability.policy import (  # re-exported: existing callers import them from here
+	REGISTRY,
+	TAX_FIELDS,
+	TXN_ITEMS,
+	Spec,
+)
+from ai_erpnext.capability.service import CapabilityError
 from ai_erpnext.mapping.normalize import clean_text, normalize_name, parse_date
 
 PAGE_SIZE = 10
@@ -36,8 +44,8 @@ MAX_OFFSET = 500
 MAX_RANGE_DAYS = 3 * 366
 
 
-class QueryError(Exception):
-	"""User-facing reason a plan can't run (unsupported, not permitted, invalid)."""
+# The capability layer owns the registry (explicit policy) and its errors; these names stay here for existing callers.
+QueryError = CapabilityError  # user-facing reason a plan can't run (unsupported, not permitted, invalid)
 
 
 class QueryClarify(Exception):
@@ -54,82 +62,6 @@ class QueryClarify(Exception):
 		self.kind = kind
 		self.plan = plan
 
-
-@dataclass
-class Spec:
-	title: str  # field shown as the record's human title
-	list_fields: tuple
-	detail_fields: tuple
-	date_field: str | None = None
-	party_field: str | None = None
-	party_title_field: str | None = None
-	amount_field: str | None = None
-	status_field: str | None = "status"
-	search_fields: tuple = ()
-	child: tuple = ()  # (table fieldname, fields)
-	operations: tuple = ("list", "count", "details")
-	labels: dict = field(default_factory=dict)
-	taxes: bool = False  # has a "taxes" table (Sales/Purchase Taxes and Charges)
-
-
-TXN_ITEMS = ("items", ("item_code", "item_name", "qty", "uom", "rate", "amount"))
-TAX_FIELDS = ("charge_type", "account_head", "description", "rate", "tax_amount", "total")
-
-REGISTRY = {
-	"Sales Invoice": Spec("customer_name", ("name", "customer_name", "posting_date", "grand_total", "currency", "status"),
-		("name", "customer", "customer_name", "company", "posting_date", "due_date", "currency", "net_total", "total_taxes_and_charges",
-			"grand_total", "outstanding_amount", "status"), "posting_date", "customer", "customer_name", "grand_total", search_fields=("name", "customer", "customer_name"),
-		child=TXN_ITEMS, operations=("list", "count", "details", "sales_summary", "overdue", "unpaid", "outstanding_by_customer"), taxes=True),
-	"Purchase Invoice": Spec("supplier_name", ("name", "supplier_name", "posting_date", "grand_total", "currency", "status"),
-		("name", "supplier", "supplier_name", "company", "posting_date", "due_date", "bill_no", "currency", "net_total", "total_taxes_and_charges",
-			"grand_total", "outstanding_amount", "status"), "posting_date", "supplier", "supplier_name", "grand_total", search_fields=("name", "supplier", "supplier_name", "bill_no"),
-		child=TXN_ITEMS, operations=("list", "count", "details", "overdue", "unpaid"), taxes=True),
-	"Sales Order": Spec("customer_name", ("name", "customer_name", "transaction_date", "grand_total", "currency", "status"),
-		("name", "customer", "customer_name", "company", "transaction_date", "delivery_date", "set_warehouse", "currency", "net_total",
-			"total_taxes_and_charges", "grand_total", "per_delivered", "per_billed", "status"),
-		"transaction_date", "customer", "customer_name", "grand_total", search_fields=("name", "customer", "customer_name"), child=TXN_ITEMS, taxes=True),
-	"Purchase Order": Spec("supplier_name", ("name", "supplier_name", "transaction_date", "grand_total", "currency", "status"),
-		("name", "supplier", "supplier_name", "company", "transaction_date", "schedule_date", "set_warehouse", "currency", "net_total",
-			"total_taxes_and_charges", "grand_total", "per_received", "per_billed", "status"),
-		"transaction_date", "supplier", "supplier_name", "grand_total", search_fields=("name", "supplier", "supplier_name"), child=TXN_ITEMS, taxes=True),
-	"Delivery Note": Spec("customer_name", ("name", "customer_name", "posting_date", "grand_total", "currency", "status"),
-		("name", "customer", "customer_name", "company", "posting_date", "set_warehouse", "currency", "net_total", "total_taxes_and_charges",
-			"grand_total", "per_billed", "status"),
-		"posting_date", "customer", "customer_name", "grand_total", search_fields=("name", "customer", "customer_name"), child=TXN_ITEMS, taxes=True),
-	"Purchase Receipt": Spec("supplier_name", ("name", "supplier_name", "posting_date", "grand_total", "currency", "status"),
-		("name", "supplier", "supplier_name", "company", "posting_date", "set_warehouse", "currency", "net_total", "total_taxes_and_charges",
-			"grand_total", "per_billed", "status"),
-		"posting_date", "supplier", "supplier_name", "grand_total", search_fields=("name", "supplier", "supplier_name"), child=TXN_ITEMS, taxes=True),
-	"Stock Entry": Spec("stock_entry_type", ("name", "stock_entry_type", "posting_date", "total_outgoing_value", "total_incoming_value", "docstatus"),
-		("name", "stock_entry_type", "purpose", "company", "posting_date", "from_warehouse", "to_warehouse", "total_outgoing_value", "total_incoming_value", "docstatus"),
-		"posting_date", amount_field="total_outgoing_value", status_field=None, search_fields=("name", "stock_entry_type"),
-		child=("items", ("item_code", "item_name", "qty", "uom", "s_warehouse", "t_warehouse"))),
-	"Payment Entry": Spec("party_name", ("name", "payment_type", "party_name", "posting_date", "paid_amount", "paid_from_account_currency", "status"),
-		("name", "payment_type", "party_type", "party", "party_name", "company", "posting_date", "mode_of_payment", "paid_amount",
-			"paid_from_account_currency", "received_amount", "paid_to_account_currency", "reference_no", "status"),
-		"posting_date", "party", "party_name", "paid_amount", search_fields=("name", "party", "party_name", "reference_no")),
-	"Customer": Spec("customer_name", ("name", "customer_name", "customer_group", "territory", "customer_type"),
-		("name", "customer_name", "customer_type", "customer_group", "territory", "default_currency", "mobile_no", "email_id", "tax_id",
-			"customer_primary_contact", "primary_address", "disabled"),
-		status_field=None, search_fields=("name", "customer_name", "mobile_no", "email_id")),
-	"Supplier": Spec("supplier_name", ("name", "supplier_name", "supplier_group", "country", "supplier_type"),
-		("name", "supplier_name", "supplier_type", "supplier_group", "country", "default_currency", "mobile_no", "email_id", "tax_id",
-			"supplier_primary_contact", "primary_address", "disabled"),
-		status_field=None, search_fields=("name", "supplier_name", "mobile_no", "email_id")),
-	"Contact": Spec("full_name", ("name", "full_name", "company_name", "email_id", "mobile_no"),
-		("name", "full_name", "company_name", "designation", "email_id", "mobile_no", "phone", "status"),
-		status_field=None, search_fields=("name", "full_name", "first_name", "last_name", "email_id", "mobile_no", "phone", "company_name")),
-	"Item": Spec("item_name", ("name", "item_name", "item_group", "stock_uom", "is_stock_item"),
-		("name", "item_name", "item_group", "stock_uom", "is_stock_item", "is_sales_item", "is_purchase_item", "description", "disabled"),
-		status_field=None, search_fields=("name", "item_name")),
-	"Warehouse": Spec("warehouse_name", ("name", "warehouse_name", "company", "warehouse_type", "is_group"),
-		("name", "warehouse_name", "company", "parent_warehouse", "warehouse_type", "is_group", "disabled"),
-		status_field=None, search_fields=("name", "warehouse_name")),
-	# HR: only non-sensitive organisational fields; salary, bank and personal data are never exposed.
-	"Employee": Spec("employee_name", ("name", "employee_name", "department", "designation", "status"),
-		("name", "employee_name", "department", "designation", "company", "branch", "status"), status_field="status",
-		search_fields=("name", "employee_name")),
-}
 
 # Words people use for a field -> candidate fields (first ones present in the DocType's
 # allowlist win; "@..." are computed values). Only allowlisted fields can ever be returned.
@@ -181,8 +113,9 @@ def validate(plan):
 	if doctype and not frappe.has_permission(doctype, "read"):
 		raise QueryError(f"You don't have permission to view {doctype} records.")
 	spec = REGISTRY.get(doctype)
-	if spec and op not in spec.operations:
-		raise QueryError(f"I can't do “{op.replace('_', ' ')}” for {doctype}.")
+	capability.refuse_lifecycle(op)
+	if spec:
+		capability.check_operation(doctype, op)  # operations outside the policy fail closed
 
 	q = {"doctype": doctype, "auto": auto, "operation": op, "company": _match_company(doctype, filters.get("company")) if doctype else None,
 		"party": clean_text(filters.get("party"), 140) if spec and spec.party_field else None,
@@ -222,14 +155,56 @@ def validate(plan):
 	date = plan.get("date") if isinstance(plan.get("date"), dict) else None
 	if date and spec:
 		q["date"] = _resolve_dates(date, spec)
+	_generic_parts(q, plan)
 	if op == "sales_summary" and not q["date"]:
 		raise QueryClarify("For which period should I total the sales?", kind="period", plan=q,
 			options=[{"label": "This month", "value": "this_month"}, {"label": "Last month", "value": "last_month"},
 				{"label": "This year", "value": "this_year"}])
-	if op == "details" and not (q["name"] or q["search"] or q["party"]):
+	if op in ("details", "summary") and not (q["name"] or q["search"] or q["party"]):
 		what = doctype or "record"
 		raise QueryClarify(f"Which {what} do you mean? Type its name or ID.", kind="target", plan=q)
 	return q
+
+
+def _generic_parts(q, plan):
+	"""Validated structured parts of a plan: where (filters), aggregate, child (table rows) and link (one hop).
+	A part that can't be validated rejects the whole plan: it is never dropped, which would widen the query."""
+	doctype, op = q["doctype"], q["operation"]
+	parts = {k: plan.get(k) for k in ("where", "aggregate", "child", "link") if plan.get(k) not in (None, [], {}, "")}
+	if not doctype:
+		if parts:
+			raise QueryError("Please say which kind of record you mean.")
+		q.update(where=[], aggregate=None, child=None, link=None)
+		return
+	q["where"] = capability.normalize_where(doctype, parts.get("where"))
+	q["overdue_days"] = None
+	days = plan.get("overdue_days")
+	if days not in (None, "", 0):
+		days = int(flt(days)) if isinstance(days, (int, float, str)) and not isinstance(days, bool) else 0
+		if doctype not in ("Sales Invoice", "Purchase Invoice") or not 1 <= days <= 3650:
+			raise QueryError("I can only filter invoices by how many days they are overdue (1 to 3650).")
+		q["overdue_days"] = days
+		if op in ("list", "overdue", "unpaid"):
+			op = q["operation"] = "overdue"
+		else:
+			q["payment"] = "overdue"
+	if "aggregate" in parts and op in ("list", "count"):
+		op = q["operation"] = "aggregate"
+	q["aggregate"] = capability.normalize_aggregate(doctype, parts.get("aggregate") or {"fn": "count"}) if op == "aggregate" else None
+	if "aggregate" in parts and op != "aggregate":
+		raise QueryError("That calculation can't be combined with this request.")
+	q["child"] = capability.normalize_child(doctype, parts["child"]) if "child" in parts else None
+	if op == "child_rows" and not q["child"]:
+		raise QueryError("Which part of the records do you want to see (for example their items)?")
+	q["link"] = capability.normalize_link(doctype, parts["link"]) if "link" in parts else None
+	if q["link"] and op != "list":
+		raise QueryError("Related records can only be shown next to a list.")
+	if q["child"] and op not in ("list", "count", "child_rows", "aggregate"):
+		raise QueryError("That can't be combined with a lookup inside the rows.")
+	if op == "aggregate" and q["aggregate"]["period"] and not q["date"]:
+		raise QueryClarify("For which period should I group them?", kind="period", plan=q,
+			options=[{"label": "This year", "value": "this_year"}, {"label": "Last year", "value": "last_year"},
+				{"label": "Last 30 days", "value": "last_30_days"}])
 
 
 def _concept_fields(doctype, word, allowed=None):
@@ -327,6 +302,9 @@ def _company_filter(q):
 	allowed = permitted_companies()
 	if allowed is None:
 		return [], None
+	spec = REGISTRY.get(q["doctype"])
+	if spec and spec.optional_company:  # records without a company (e.g. a Lead) are not tied to any company
+		return [["company", "in", [*allowed, ""]]], None
 	return [["company", "in", allowed or [""]]], None
 
 
@@ -405,10 +383,17 @@ def _recheck(q):
 		raise QueryError("I couldn't understand that request.")
 	if doctype is not None:
 		spec = REGISTRY.get(doctype)
-		if not spec or q.get("operation") not in spec.operations:
+		if not spec or q.get("operation") not in spec.operations or not capability.is_queryable(doctype):
 			raise QueryError("I couldn't understand that request.")
 		if not frappe.has_permission(doctype, "read"):
 			raise QueryError(f"You don't have permission to view {doctype} records.")
+		# structured parts come back from conversation state too: validate them again, never trust a stored plan
+		q["where"] = capability.normalize_where(doctype, q.get("where"))
+		q["aggregate"] = capability.normalize_aggregate(doctype, q["aggregate"]) if q.get("aggregate") else None
+		days = q.get("overdue_days")
+		q["overdue_days"] = int(days) if isinstance(days, (int, float)) and not isinstance(days, bool) and 1 <= days <= 3650 and doctype in ("Sales Invoice", "Purchase Invoice") else None
+		q["child"] = capability.normalize_child(doctype, q["child"]) if q.get("child") else None
+		q["link"] = capability.normalize_link(doctype, q["link"]) if q.get("link") else None
 		allowed = set(spec.detail_fields) | set(spec.list_fields)
 		q["fields"] = [f for f in q.get("fields") or [] if f in allowed] or None
 	q["limit"] = max(1, min(MAX_PAGE, int(flt(q.get("limit")) or PAGE_SIZE)))
@@ -421,6 +406,12 @@ def execute(q):
 	op = q["operation"]
 	if op == "count":
 		return _count(q)
+	if op == "aggregate":
+		return _aggregate(q)
+	if op == "summary":
+		return _party_summary(q)
+	if op == "child_rows":
+		return _child_rows(q)
 	if op == "details":
 		return _details(q)
 	if op == "sales_summary":
@@ -443,9 +434,18 @@ def _base_filters(q):
 	elif q["docstatus"]:
 		filters.append(["docstatus", "=", DOCSTATUS[q["docstatus"]]])
 		notes.append(q["docstatus"])
+	elif q.get("all_states"):  # set by the page context only (a list or form shows every state), never taken from a plan
+		pass
 	elif frappe.get_meta(q["doctype"]).is_submittable:
 		filters.append(["docstatus", "<", 2])
 		notes.append("draft and submitted (cancelled excluded)")
+	for fieldname, op, value in spec.default_filters:
+		if not any(w[0] == fieldname for w in q.get("where") or []):
+			filters.append([fieldname, op, value])
+	if subset == "overdue" and q.get("overdue_days"):
+		cutoff = add_days(nowdate(), -int(q["overdue_days"]))
+		filters.append(["due_date", "<", cutoff])
+		notes.append(f"overdue by more than {int(q['overdue_days'])} days (due before {cutoff})")
 	company_filters, company_note = _company_filter(q)
 	filters += company_filters
 	if company_note:
@@ -459,6 +459,13 @@ def _base_filters(q):
 	if q["search"]:
 		or_filters += [[f, "like", f"%{q['search']}%"] for f in spec.search_fields]
 		notes.append(f"matching “{q['search']}”")
+	for fieldname, op, value in q.get("where") or []:
+		filters.append([fieldname, op, f"%{value}%" if op == "like" else value])
+		notes.append(f"{meta_.field_info(q['doctype'], fieldname).label.lower()} {op if op != 'like' else 'contains'} {_show(value)}")
+	child_filters, child_note = _child_parent_filter(q)
+	filters += child_filters
+	if child_note:
+		notes.append(child_note)
 	if q["date"]:
 		d = q["date"]
 		filters.append([d["field"], "between", [d["from"], d["to"]]])
@@ -498,7 +505,10 @@ def _list(q):
 	if q["operation"] in ("overdue", "unpaid"):
 		fields = _permitted(doctype, ["name", spec.title, "posting_date", "due_date", "grand_total", "outstanding_amount", "currency", "status"])
 	if "name" not in fields:
-		fields = ["name"] + fields
+		fields = ["name", *fields]
+	link = q.get("link")
+	if link and link["field"] not in fields:
+		fields = [*fields, link["field"]]
 	filters, or_filters, notes = _base_filters(q)
 	rows = frappe.get_list(doctype, filters=filters, or_filters=or_filters or None, fields=fields, order_by=_order_by(q),
 		offset=q["offset"], limit=q["limit"] + 1)
@@ -510,11 +520,191 @@ def _list(q):
 			"names": [], "titles": []}
 	start = q["offset"] + 1
 	summary = f"I found {len(rows)}{'+' if has_more else ''} {what}" if not q["offset"] else f"Showing {what} {start}–{q['offset'] + len(rows)}"
-	card = {"type": "table", "title": doctype, "doctype": doctype, "columns": _columns(doctype, fields),
-		"rows": [{**{k: _jsonable(r.get(k)) for k in fields}, "_name": r["name"], "_n": start + i} for i, r in enumerate(rows)],
+	columns = _columns(doctype, [f for f in fields if not (link and f == link["field"] and f not in (q["fields"] or spec.list_fields))])
+	table_rows = [{**{k: _jsonable(r.get(k)) for k in fields}, "_name": r["name"], "_n": start + i} for i, r in enumerate(rows)]
+	if link:
+		columns += _attach_link(doctype, link, rows, table_rows, q)
+	card = {"type": "table", "title": doctype, "doctype": doctype, "columns": columns,
+		"rows": table_rows,
 		"note": "From your ERPNext data. " + ("Filters: " + "; ".join(notes) + ". " if notes else "") + f"Sorted {q['sort']} first.",
 		"has_more": has_more}
 	return {"text": summary + ".", "card": card, "names": [r["name"] for r in rows], "titles": [str(r.get(spec.title) or "") for r in rows]}
+
+
+def _show(value):
+	if isinstance(value, (list, tuple)):
+		return " – ".join(map(str, value)) if len(value) == 2 else ", ".join(map(str, value))
+	return f"“{value}”" if isinstance(value, str) else str(value)
+
+
+# ------------------------------------------------------------------------------------------------
+# Generic structured queries: child-table conditions, child rows, one-hop links, aggregates
+# ------------------------------------------------------------------------------------------------
+MAX_PARENT_SCAN = 500  # parents matched through a child-table condition
+MAX_CHILD_PARENTS = 50  # parents whose rows "child_rows" shows
+MAX_CHILD_ROWS = 100
+
+
+def _child_filter(cond):
+	fieldname, op, value = cond
+	return [fieldname, op, f"%{value}%" if op == "like" else value]
+
+
+def _child_parent_filter(q):
+	"""[filters, note] limiting the parents to those having a child row that matches the child conditions.
+
+	Parent-first: the child rows only yield candidate parent names; the parent query that follows applies
+	the user's permissions, company scope and every other filter, so no row of an inaccessible parent is
+	ever returned or counted."""
+	child = q.get("child")
+	if not child or not child["where"]:
+		return [], None
+	doctype, table = q["doctype"], child["table"]
+	child_doctype = meta_.child_doctype(doctype, table)
+	names = frappe.get_list(child_doctype, parent_doctype=doctype, pluck="parent", group_by="parent", order_by="parent desc", limit=MAX_PARENT_SCAN,
+		filters=[["parenttype", "=", doctype], ["parentfield", "=", table], *[_child_filter(c) for c in child["where"]]])
+	label = frappe.get_meta(doctype).get_field(table).label.lower()
+	return [["name", "in", names or [""]]], "having " + label + " with " + " and ".join(
+		f"{meta_.field_info(child_doctype, f).label.lower()} {op if op != 'like' else 'containing'} {_show(v)}" for f, op, v in child["where"])
+
+
+def _attach_link(doctype, link, rows, table_rows, q):
+	"""Add the allowlisted fields of the linked record (one hop) to the rows; returns the new columns.
+
+	The target is read with its own permission-aware query and company scope. A record the user can't
+	read gives an empty cell, the same as a missing one: nothing reveals whether it exists."""
+	target, key = link["target"], link["field"]
+	values = sorted({r.get(key) for r in rows if r.get(key)})
+	fields = [f for f in _permitted(target, link["fields"]) if f != "name"]
+	found = {}
+	if values and fields and frappe.has_permission(target, "read"):
+		try:
+			for r in frappe.get_list(target, filters=[["name", "in", values], *_scope(target)], fields=["name", *fields], limit=len(values)):
+				found[r["name"]] = r
+		except frappe.PermissionError:
+			frappe.local.message_log = []
+	label = frappe.get_meta(doctype).get_label(key)
+	columns = []
+	for f in fields:
+		column = f"{key}.{f}"
+		columns.append({"key": column, "label": f"{label} › {frappe.get_meta(target).get_label(f)}", "type": _columns(target, [f])[0]["type"]})
+		for r, shown in zip(rows, table_rows, strict=True):
+			shown[column] = _jsonable((found.get(r.get(key)) or {}).get(f))
+	return columns
+
+
+def _child_rows(q):
+	doctype, child = q["doctype"], q["child"]
+	table = child["table"]
+	child_doctype = meta_.child_doctype(doctype, table)
+	fields = [f for f in child["fields"] if f in set(get_permitted_fields(child_doctype, parenttype=doctype))]
+	filters, or_filters, notes = _base_filters(q)
+	parents = frappe.get_list(doctype, filters=filters, or_filters=or_filters or None, pluck="name", order_by=_order_by(q), limit=MAX_CHILD_PARENTS)
+	if not parents or not fields:
+		return {"text": f"I found no {doctype} records with matching rows" + (f" ({'; '.join(notes)})." if notes else "."), "names": [], "titles": []}
+	rows = frappe.get_list(child_doctype, parent_doctype=doctype, fields=["parent", *fields], order_by="parent desc, idx asc",
+		filters=[["parent", "in", parents], ["parenttype", "=", doctype], ["parentfield", "=", table], *[_child_filter(c) for c in child["where"]]],
+		limit=min(q["limit"] * 5, MAX_CHILD_ROWS) + 1, offset=q["offset"] * 5)
+	cap = min(q["limit"] * 5, MAX_CHILD_ROWS)
+	has_more = len(rows) > cap
+	rows = rows[:cap]
+	if not rows:
+		return {"text": f"I found no matching rows in {len(parents)} {doctype} record{'s' if len(parents) != 1 else ''}.", "names": [], "titles": []}
+	columns = [{"key": "parent", "label": doctype, "type": "link"}, *({"key": f, "label": frappe.get_meta(child_doctype).get_label(f)} for f in fields)]
+	names = list(dict.fromkeys(r["parent"] for r in rows))
+	card = {"type": "table", "title": f"{doctype}: {frappe.get_meta(doctype).get_field(table).label}", "doctype": doctype, "columns": columns,
+		"rows": [{"parent": r["parent"], **{f: _jsonable(r.get(f)) for f in fields}, "_name": r["parent"], "_n": q["offset"] * 5 + i + 1} for i, r in enumerate(rows)],
+		"note": "From your ERPNext data. Rows of the " + (f"{len(parents)}" if len(parents) < MAX_CHILD_PARENTS else f"first {MAX_CHILD_PARENTS}") +
+			f" {doctype} records you can access" + (f" ({'; '.join(notes)})" if notes else "") + ".", "has_more": has_more}
+	return {"text": f"I found {len(rows)}{'+' if has_more else ''} matching row{'s' if len(rows) != 1 else ''} in {len(names)} {doctype} record{'s' if len(names) != 1 else ''}.",
+		"card": card, "names": names, "titles": [], "result_doctype": doctype}
+
+
+AGG_SQL = {"count": "COUNT", "sum": "SUM", "avg": "AVG", "min": "MIN", "max": "MAX"}
+AGG_WORDS = {"count": "Number of", "sum": "Total", "avg": "Average", "min": "Smallest", "max": "Largest"}
+MAX_GROUPS = 20
+MAX_BUCKET_ROWS = 120  # month/year buckets x groups
+
+
+def _month_buckets(date):
+	start, end = getdate(date["from"]), getdate(date["to"])
+	cursor = get_first_day(start)
+	while cursor <= end:
+		yield cursor, get_last_day(cursor)
+		cursor = add_months(cursor, 1)
+
+
+def _aggregate(q):
+	"""Count/sum/average/min/max over records the user can read, optionally grouped. Currency amounts are
+	never added across currencies: the document currency (or the company, for company-currency fields) is
+	always part of the grouping. Nothing but allowlisted fields and fixed functions reaches the database."""
+	doctype, agg = q["doctype"], q["aggregate"]
+	fn, measure, group, period = agg["fn"], agg["field"], agg["group_by"], agg["period"]
+	filters, or_filters, notes = _base_filters(q)
+	source = capability.currency_source(doctype, measure) if measure else None
+	columns = []
+	if source and source[0] == "field":
+		columns.append(source[1])
+	elif source and source[0] == "company":
+		columns.append("company")
+	bucket = period
+	if group and group not in columns:
+		columns.append(group)
+	value = {AGG_SQL[fn]: measure or "*", "as": "value"}
+	fields = [*columns, value, {"COUNT": "*", "as": "n"}]
+
+	def run(extra):
+		return frappe.get_list(doctype, filters=[*filters, *extra], or_filters=or_filters or None, fields=fields,
+			group_by=", ".join(columns) or None, order_by="value desc", limit=MAX_GROUPS + 1)
+
+	results = []  # (bucket label, row)
+	groups_label = [g for g in (group, bucket) if g]
+	if bucket:
+		date_field = REGISTRY[doctype].date_field
+		spans = list(_month_buckets(q["date"])) if bucket == "month" else [
+			(datetime.date(y, 1, 1), datetime.date(y, 12, 31)) for y in range(getdate(q["date"]["from"]).year, getdate(q["date"]["to"]).year + 1)]
+		for start, end in spans:
+			lo, hi = max(start, getdate(q["date"]["from"])), min(end, getdate(q["date"]["to"]))
+			label = f"{start:%Y-%m}" if bucket == "month" else f"{start:%Y}"
+			results += [(label, r) for r in run([[date_field, "between", [str(lo), str(hi)]]])]
+			if len(results) > MAX_BUCKET_ROWS:
+				break
+	else:
+		results = [(None, r) for r in run([])]
+	if not results or all(not r.get("n") for _l, r in results):
+		return {"text": f"I found no {doctype} records to calculate that from" + (f" ({'; '.join(notes)})." if notes else "."), "names": [], "titles": []}
+	truncated = len(results) > (MAX_BUCKET_ROWS if bucket else MAX_GROUPS)
+	results = results[:MAX_BUCKET_ROWS if bucket else MAX_GROUPS]
+
+	meta = frappe.get_meta(doctype)
+	label = meta.get_label(measure) if measure else "records"
+	cols, table_rows = [], []
+	if bucket:
+		cols.append({"key": "bucket", "label": "Month" if bucket == "month" else "Year"})
+	for c in columns:
+		cols.append({"key": c, "label": "Currency" if source and source[0] == "field" and c == source[1] else meta.get_label(c)})
+	if source and source[0] == "company":
+		cols.append({"key": "currency", "label": "Currency"})
+	is_money = bool(source and source[0] != "unknown")
+	cols.append({"key": "value", "label": f"{AGG_WORDS[fn]} {label}".strip(), "type": "currency" if is_money else "text"})
+	if fn != "count":
+		cols.append({"key": "n", "label": "Records"})
+	for bucket_label, r in results:
+		row = {c: r.get(c) for c in columns}
+		if bucket:
+			row["bucket"] = bucket_label
+		if source and source[0] == "company":
+			row["currency"] = frappe.get_cached_value("Company", r.get("company"), "default_currency")
+		v = r.get("value")
+		row["value"] = _jsonable(v) if not isinstance(v, float) else flt(v, 2)
+		row["n"] = r.get("n")
+		table_rows.append(row)
+	title = f"{AGG_WORDS[fn]} {label}" + (f" by {' and '.join(g.replace('_', ' ') for g in groups_label)}" if groups_label else "")
+	card = {"type": "table", "title": f"{doctype}: {title}", "doctype": None, "source_doctype": doctype, "columns": cols, "rows": table_rows,
+		"note": "From your ERPNext data" + (f" ({'; '.join(notes)})" if notes else "") + ". "
+			+ ("Amounts in different currencies are never added together. " if is_money else "")
+			+ (f"Showing only the first {MAX_BUCKET_ROWS if bucket else MAX_GROUPS} rows. " if truncated else "")}
+	return {"text": f"{title} for {doctype} records" + (" (grouped)" if groups_label else "") + ".", "card": card, "names": [], "titles": []}
 
 
 def _count(q):
@@ -639,8 +829,8 @@ def _resolve(q, term):
 # ------------------------------------------------------------------------------------------------
 # Details and field answers
 # ------------------------------------------------------------------------------------------------
-def _details(q):
-	term = q["name"] or q["search"] or q["party"]
+def _resolve_target(q, term):
+	"""(doctype, name, exact) of the record a details/summary request names, or a not-found result dict."""
 	if q.get("pick"):
 		doctype, name = q["pick"]
 		if doctype not in REGISTRY or not frappe.has_permission(doctype, "read"):
@@ -648,11 +838,15 @@ def _details(q):
 		rows, _exact = resolve_record(doctype, name, _scope(doctype, q.get("company")), exact_name=True)
 		if not rows:
 			return {"text": f"That {doctype} isn't available to you any more.", "names": [], "titles": [], "not_found": True}
-		resolved = (doctype, rows[0]["name"], True)
-	else:
-		resolved = _resolve(q, term)
-		if isinstance(resolved, dict):
-			return resolved
+		return (doctype, rows[0]["name"], True)
+	return _resolve(q, term)
+
+
+def _details(q):
+	term = q["name"] or q["search"] or q["party"]
+	resolved = _resolve_target(q, term)
+	if isinstance(resolved, dict):
+		return resolved
 	doctype, name, exact = resolved
 	spec, meta = REGISTRY[doctype], frappe.get_meta(doctype)
 	doc = frappe.get_doc(doctype, name)
@@ -679,6 +873,51 @@ def _details(q):
 
 
 _INVOICE = {"Customer": "Sales Invoice", "Supplier": "Purchase Invoice"}
+_ORDER = {"Customer": "Sales Order", "Supplier": "Purchase Order"}
+_PARTY_FIELD = {"Customer": "customer", "Supplier": "supplier"}
+
+
+def _party_summary(q):
+	"""A customer's (or supplier's) orders and invoices in one table: per document type, state and currency, the number of
+	documents and their totals. Each source is a separate permission-aware, company-scoped query, so a document type the
+	user can't read is left out (and said so), and amounts of different currencies are never added together."""
+	resolved = _resolve_target(q, q["name"] or q["search"] or q["party"])
+	if isinstance(resolved, dict):
+		return resolved
+	party_type, name, _exact = resolved
+	if party_type not in _INVOICE:
+		raise QueryError("A summary is available for customers and suppliers.")
+	title = frappe.get_cached_value(party_type, name, _title(party_type)) or name
+	table_rows, skipped, readable = [], [], []
+	for doctype in (_ORDER[party_type], _INVOICE[party_type]):
+		if not (doctype in REGISTRY and capability.is_queryable(doctype) and frappe.has_permission(doctype, "read")):
+			skipped.append(doctype)
+			continue
+		readable.append(doctype)
+		invoice = doctype == _INVOICE[party_type]
+		fields = ["docstatus", "currency", {"COUNT": "*", "as": "n"}, {"SUM": "grand_total", "as": "total"}]
+		if invoice:
+			fields.append({"SUM": "outstanding_amount", "as": "outstanding"})
+		scope = _company_filter({"doctype": doctype, "company": q.get("company")})[0]
+		for r in frappe.get_list(doctype, filters=[[_PARTY_FIELD[party_type], "=", name], ["docstatus", "<", 2], *scope], fields=fields,
+			group_by="docstatus, currency", order_by="docstatus desc, currency asc", limit=40):
+			table_rows.append({"document": doctype, "state": "Submitted" if r["docstatus"] == 1 else "Draft", "currency": r["currency"], "n": r["n"],
+				"total": flt(r["total"], 2), "outstanding": flt(r["outstanding"], 2) if invoice and r["docstatus"] == 1 else None})
+	requires = [_ORDER[party_type], _INVOICE[party_type]]
+	if not readable:
+		raise QueryError(f"You don't have permission to view the orders or invoices of this {party_type.lower()}.")
+	note = "From your ERPNext data. Cancelled documents are left out; amounts in different currencies are never added together."
+	if skipped:
+		note += f" Not included (no permission): {', '.join(skipped)}."
+	if not table_rows:
+		return {"text": f"{party_type} {title} has no {' or '.join(d.lower() + 's' for d in readable)} that you can access.", "names": [name], "titles": [str(title)],
+			"result_doctype": party_type, "requires": requires}
+	cols = [{"key": "document", "label": "Document"}, {"key": "state", "label": "State"}, {"key": "currency", "label": "Currency"},
+		{"key": "n", "label": "Documents"}, {"key": "total", "label": "Total", "type": "currency"}, {"key": "outstanding", "label": "Outstanding", "type": "currency"}]
+	card = {"type": "table", "title": f"{party_type} {title}: orders and invoices", "doctype": None, "source_doctype": _INVOICE[party_type], "columns": cols,
+		"rows": table_rows, "note": note}
+	return {"text": f"Here is the summary of {party_type.lower()} {title}.", "card": card, "names": [name], "titles": [str(title)],
+		"result_doctype": party_type, "requires": requires}
 
 
 def _who(doctype, doc, title):

@@ -104,7 +104,7 @@ class OpenAIProvider(LLMProvider):
 			)
 		except Exception as exc:
 			error = classify(exc)
-			log_ai_event(**meta, status="error", category=error.category, http_status=error.status_code or self._last_status,
+			log_ai_event(**meta, status="error", category=error.category, limit=error.limit, http_status=error.status_code or self._last_status,
 				elapsed_ms=self._elapsed(started), retries=max(0, self._requests - 1))
 			raise error from None
 		usage = getattr(response, "usage", None)

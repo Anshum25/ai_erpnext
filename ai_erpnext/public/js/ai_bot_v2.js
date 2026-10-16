@@ -2,18 +2,21 @@
 // All decisions and validation happen on the server (ai_erpnext.api.chat); this file only
 // renders server messages and sends user text, uploaded image URLs and button choices.
 // Every server/AI-provided string is escaped before rendering.
-//
 // Conversations: each page has its own conversation, kept in memory only (never in browser
 // storage, never a server-side "current conversation" of the user). The first time the
 // assistant is opened on a page a new conversation starts; "New chat" starts another; earlier
 // ones (from this or another browser) are reopened only when picked from the history. Other
 // pages' conversations are never changed. The server checks ownership on every request. Each
 // request remembers which conversation it was for: a late response for another one is ignored.
+import { collectPageContext, snapshotForm } from "./ai_page_context.js";
+
 $(document).ready(function () {
 	if (!window.frappe || !frappe.boot || !frappe.boot.user || frappe.boot.user.name === "Guest") return;
 	if (document.getElementById("ai-agent")) return;
 
 	const API = "ai_erpnext.api.chat.";
+	// A clean form is remembered when it is drawn, so that later edits can be named (nothing is stored in the browser).
+	$(document).on("form-refresh", (e, frm) => snapshotForm(frm));
 	const MAX_BYTES = 10 * 1024 * 1024;
 	const UPLOAD_KEY = "ai_agent_pending_upload:" + ((frappe.session && frappe.session.user) || "");
 	const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
@@ -137,7 +140,7 @@ $(document).ready(function () {
 		<section id="ai-chat-panel" class="ai-panel" role="dialog" aria-label="AI Assistant" hidden>
 			<header class="ai-head">
 				<div class="ai-head-id"><span class="ai-avatar" aria-hidden="true">AI</span>
-					<div style="min-width:0"><div class="ai-title">AI Assistant</div><div class="ai-sub">Chat · ERPNext lookups · draft invoices</div></div></div>
+					<div style="min-width:0"><div class="ai-title">AI Assistant</div><div class="ai-sub">Chat</div></div></div>
 				<div class="ai-head-actions">
 					<button type="button" class="ai-icon-btn" data-act="history" aria-label="Previous conversations" aria-expanded="false" title="Previous conversations">${ICON.history}</button>
 					<button type="button" class="ai-icon-btn" data-act="new" aria-label="Start a new conversation" title="New conversation">${ICON.plus}</button>
@@ -274,10 +277,11 @@ $(document).ready(function () {
 		if (!payload.session) payload.session = S.session;
 		// The page the user is on, so "this Sales Order" can be resolved; the server re-checks access.
 		// A retry re-sends the same payload (same client_id): the server returns the original reply.
+		// (page-aware: the record, list filters/selection or report named by the page; see ai_page_context.js)
 		if (!payload.context) {
-			let route = null;
-			try { route = frappe.get_route(); } catch (e) { route = null; }
-			if (Array.isArray(route)) payload.context = JSON.stringify({ route: route.slice(0, 3).map(String) });
+			let page = null;
+			try { page = collectPageContext({ frappe, cur_frm: window.cur_frm, cur_list: window.cur_list }); } catch (e) { page = null; }
+			if (page) payload.context = JSON.stringify(page);
 		}
 		call("send_message", payload, apply, payload);
 	}
@@ -353,7 +357,7 @@ $(document).ready(function () {
 		if (m.attachment && m.attachment.file_url) {
 			$row.append(`<img class="ai-thumb" src="${esc(m.attachment.file_url)}" alt="Attached invoice image ${esc(m.attachment.file_name)}" loading="lazy">`);
 		}
-		if (m.source === "erpnext") $row.append('<span class="ai-source erpnext">From your ERPNext data</span>');
+		if (m.source === "erpnext") $row.append('<span class="ai-source erpnext">From your	 data</span>');
 		if (m.source === "general") $row.append('<span class="ai-source">General answer</span>');
 		if (m.source === "guide") $row.append('<span class="ai-source">General ERPNext guidance</span>');
 		if (m.text) $row.append(`<div class="ai-bubble">${lines(m.text)}</div>`);

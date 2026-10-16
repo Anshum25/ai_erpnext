@@ -35,7 +35,7 @@ class FakeProvider:
 		self.outcomes, self.calls = list(outcomes), []
 
 	def complete_json(self, system, messages, sdk_retries=None):
-		self.calls.append({"messages": messages, "sdk_retries": sdk_retries})
+		self.calls.append({"messages": messages, "sdk_retries": sdk_retries, "system": system})
 		outcome = self.outcomes.pop(0)
 		if isinstance(outcome, Exception):
 			raise outcome

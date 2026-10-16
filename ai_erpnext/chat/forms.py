@@ -26,6 +26,8 @@ import uuid
 import frappe
 from frappe.utils import flt, nowdate, strip_html
 
+from ai_erpnext.capability import service as capability
+from ai_erpnext.capability.access import readable_exists, readable_names
 from ai_erpnext.chat import requirements
 from ai_erpnext.mapping.customer import CustomerMatcher
 from ai_erpnext.mapping.item import ItemMatcher
@@ -74,6 +76,15 @@ SPECS = {
 		F("supplier_name", "Supplier name", "data", prompt="What is the supplier's name?"),
 		F("supplier_type", "Supplier type", "select", default="Company", ask=False),
 		F("supplier_group", "Supplier group", "link", required=False, doctype="Supplier Group", filters={"is_group": 0})]},
+	"Lead": {"party": None, "items": None, "title": "first_name", "header": [
+		F("first_name", "Contact name", "data", prompt="What is the lead's name?"),
+		F("company_name", "Organization", "data", required=False, ask=True, prompt="Which organization is the lead from?", skip_label="Skip"),
+		F("email_id", "Email", "data", required=False, ask=True, prompt="What is the lead's email address?", skip_label="Skip"),
+		F("mobile_no", "Mobile number", "data", required=False, ask=True, prompt="What is the lead's mobile number?", skip_label="Skip")]},
+	"Issue": {"party": None, "items": None, "title": "subject", "header": [
+		F("subject", "Subject", "data", prompt="What is the issue about? Give it a short subject."),
+		F("customer", "Customer", "link", required=False, ask=True, doctype="Customer", filters={"disabled": 0}, prompt="Which customer raised it?", skip_label="Skip"),
+		F("description", "Description", "data", required=False, ask=True, prompt="Describe the problem.", skip_label="Skip")]},
 	"Item": {"party": None, "items": None, "title": "item_name", "fixed": {"is_sales_item": 1, "is_purchase_item": 1}, "header": [
 		F("item_code", "Item code", "data", prompt="What item code should the new item have?"),
 		F("item_name", "Item name", "data", required=False, default="item_code"),
@@ -81,7 +92,9 @@ SPECS = {
 		F("stock_uom", "Stock unit (UOM)", "link", doctype="UOM", filters={"enabled": 1}, default="stock_uom"),
 		F("is_stock_item", "Stock or service", "check", prompt="Is it a stock item (tracked in inventory) or a non-stock item / service?")]},
 }
-MASTERS = ("Customer", "Supplier", "Item")
+# Records ERPNext saves immediately (no Draft state): the confirmation says so. Only Customer, Supplier and Item can also be created
+# on the way from inside another form ("Create new ..."): that offer is driven by the `master` of a link field, not by this list.
+MASTERS = ("Customer", "Supplier", "Item", "Lead", "Issue")
 CREATABLE = tuple(SPECS)
 
 ITEM_FILTERS = {"selling": {"is_sales_item": 1}, "buying": {"is_purchase_item": 1}}
@@ -90,7 +103,7 @@ LABEL_ALIASES = {"date": "posting_date", "invoice date": "posting_date", "order 
 	"required by date": "schedule_date", "delivery date": "delivery_date", "warehouse": "set_warehouse", "uom": "stock_uom", "unit": "stock_uom"}
 PAGE = 10  # existing records offered per question (then "Show more")
 # Short names people type for a document type ("create po").
-DOCTYPE_ALIASES = {"po": "Purchase Order", "so": "Sales Order", "pi": "Purchase Invoice", "si": "Sales Invoice",
+DOCTYPE_ALIASES = {"ticket": "Issue", "po": "Purchase Order", "so": "Sales Order", "pi": "Purchase Invoice", "si": "Sales Invoice",
 	"dn": "Delivery Note", "pr": "Purchase Receipt", "grn": "Purchase Receipt", "quote": "Quotation", "purchase bill": "Purchase Invoice",
 	"vendor": "Supplier", "client": "Customer", "product": "Item"}
 
@@ -526,7 +539,7 @@ def _ask_field(ctx, form, f, search=None, candidates=None, text=None, offset=0):
 	elif f["type"] == "check":
 		input_type = None
 		options = [{"label": "Stock item (tracked in inventory)", "value": "1"}, {"label": "Non-stock item / service", "value": "0"}]
-	if f["fieldname"] == "item_code" and form["values"].get("item_name") and not frappe.db.exists("Item", form["values"]["item_name"]):
+	if f["fieldname"] == "item_code" and form["values"].get("item_name") and not readable_exists("Item", form["values"]["item_name"]):
 		options.insert(0, {"label": f"Use the item name: {form['values']['item_name']}", "value": form["values"]["item_name"]})
 	if not f["required"] and f.get("skip_label"):
 		options.append({"label": f["skip_label"], "value": "__skip__", "style": "secondary"})
@@ -559,7 +572,7 @@ def _set(ctx, form, f, raw, from_text):
 		return f"Please give the {f['label'].lower()}."
 	name = f["fieldname"]
 	if f["type"] == "data":
-		if name == "item_code" and frappe.db.exists("Item", value):
+		if name == "item_code" and readable_exists("Item", value):
 			return f"An item with code “{value}” already exists. Please choose another code."
 		if name in ("customer_name", "supplier_name"):
 			existing = _exists_named(form["doctype"], name, value)
@@ -654,7 +667,7 @@ class _Result:
 
 
 def _exists_named(doctype, title_field, value):
-	return frappe.db.get_value(doctype, {title_field: value}, "name")
+	return (readable_names(doctype, {title_field: value}, limit=1) or [None])[0]
 
 
 def _resolve_link(f, form, value, from_text):
@@ -797,7 +810,11 @@ def _answer_item(ctx, form, key, value, from_text, pending):
 
 def _price(form, item_code):
 	kind = SPECS[form["doctype"]]["items"]
-	row = frappe.get_all("Item Price", filters={"item_code": item_code, kind: 1}, fields=["price_list_rate", "price_list"], order_by="modified desc", limit=1)
+	try:  # permission-aware: a user who can't read Item Price gets no suggested rate
+		row = frappe.get_list("Item Price", filters={"item_code": item_code, kind: 1}, fields=["price_list_rate", "price_list"], order_by="modified desc", limit=1)
+	except frappe.PermissionError:
+		frappe.local.message_log = []
+		return None
 	return (row[0]["price_list_rate"], row[0]["price_list"]) if row else None
 
 
@@ -964,7 +981,7 @@ def _ask_confirm(ctx, form):
 		if any(it.get("warehouse_note") for it in card["items"]):
 			card["note"] += " Warehouses marked “ERPNext default” come from your item or stock settings; say “row 1 warehouse …” to change one."
 	label = f"Create {doctype}" if doctype in MASTERS else f"Create draft {doctype}"
-	text = f"Here's the {doctype.lower()}. Shall I create it" + ("?" if doctype in MASTERS else " as a Draft? It will not be submitted.") \
+	text = f"Here's the {doctype.lower()}. Shall I create it" + ("? It is saved immediately: this record has no Draft state." if doctype in MASTERS else " as a Draft? It will not be submitted.") \
 		+ " You can still change anything, e.g. “change " + (spec["party"] or spec["header"][0]["fieldname"]).replace("_", " ") + " to …”" \
 		+ (" or “row 1 qty 5”." if spec["items"] else ".")
 	ctx.ask("form_confirm", text, options=[{"label": label, "value": "__create__"}, {"label": "Cancel", "value": "__cancel__", "style": "secondary"}], card=card)
@@ -1002,8 +1019,12 @@ def _create(ctx, form):
 	doctype = form["doctype"]
 	frappe.db.savepoint("ai_chat_form")
 	try:
-		doc = frappe.get_doc(_doc_dict(form))
+		doc_dict = _doc_dict(form)
+		# Only allowlisted fields, never docstatus/owner/workflow fields, whatever the form holds (fail closed).
+		capability.assert_creation_safe(doctype, doc_dict, extra=[f["fieldname"] for f in form.get("extra", [])])
+		doc = frappe.get_doc(doc_dict)
 		doc.flags.ignore_mandatory = False
+		doc.docstatus = 0
 		doc.insert()  # standard permissions + ERPNext validation; never submit()
 		if doc.meta.is_submittable and doc.docstatus != 0:
 			raise frappe.ValidationError("Created documents must stay Draft")

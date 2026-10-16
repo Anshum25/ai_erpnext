@@ -173,7 +173,8 @@ class TestProviderFallback(IntegrationTestCase):
 			"unavailable": [error(503, "overloaded")] * llm.MAX_ATTEMPTS,
 			"auth": [error(401, "Invalid API Key")],
 			"billing": [error(402, "payment required")],
-			"bad_request": [error(400, "context length exceeded")],
+			"bad_request": [error(400, "invalid request: unsupported parameter")],
+			"request_too_large": [error(400, "context length exceeded")],  # too big for the model: retrying or a fallback can't help
 			"invalid_response": [error(400, "Failed to generate JSON", code="json_validate_failed")] * llm.MAX_ATTEMPTS,
 		}
 		for category, responses in cases.items():

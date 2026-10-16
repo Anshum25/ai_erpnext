@@ -156,6 +156,10 @@ doc_events = {
 	"AI Provider Settings": {"validate": "ai_erpnext.ai.providers.validate_settings"},
 }
 
+# AI Document Entry rows (extracted invoice data) are visible to their owner only.
+has_permission = {"AI Document Entry": "ai_erpnext.permissions.has_permission"}
+permission_query_conditions = {"AI Document Entry": "ai_erpnext.permissions.permission_query_conditions"}
+
 # Scheduled Tasks
 # ---------------
 

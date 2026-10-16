@@ -8,6 +8,8 @@ invented. Every value is validated here and again by ERPNext's own insert().
 import frappe
 from frappe import _
 
+from ai_erpnext.capability import service as capability
+from ai_erpnext.capability.access import readable_exists
 from ai_erpnext.mapping.customer import CustomerMatcher
 from ai_erpnext.mapping.item import ItemMatcher
 from ai_erpnext.mapping.normalize import clean_text
@@ -108,7 +110,7 @@ def set_field(draft, fieldname, raw):
 		return _("Please give a value for the {0}.").format(spec["label"])
 
 	if spec["type"] == "Data":
-		if fieldname == "item_code" and frappe.db.exists("Item", value):
+		if fieldname == "item_code" and readable_exists("Item", value):
 			return _("An item with code “{0}” already exists. Choose another code, or say “use existing”.").format(value)
 	elif spec["type"] == "Select":
 		opts = [o["value"] for o in field_options(doctype, fieldname)]
@@ -164,7 +166,10 @@ def find_existing(draft):
 
 
 def create(draft):
-	doc = frappe.get_doc({"doctype": draft["doctype"], **draft["values"]})
+	values = {"doctype": draft["doctype"], **draft["values"]}
+	capability.reject_protected(values)
+	doc = frappe.get_doc(values)
+	doc.docstatus = 0
 	doc.insert()  # standard permissions and validation
 	return doc.name
 

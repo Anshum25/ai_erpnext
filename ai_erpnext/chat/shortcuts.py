@@ -15,7 +15,7 @@ record the user is looking at (the open form) or the single record shown last.
 
 import re
 
-from ai_erpnext.chat.queries import DOCUMENT_DOCTYPES, REGISTRY, looks_like_id
+from ai_erpnext.chat.queries import DOCUMENT_DOCTYPES, ENTITY_DOCTYPES, REGISTRY, looks_like_id
 
 GREETING_REPLY = ("Hello! How can I help? You can ask about ERPNext, look up your data, create records step by step "
 	"(e.g. “create purchase invoice”), or attach an invoice image.")
@@ -29,8 +29,15 @@ ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth
 OPEN_RE = re.compile(r"^\s*(?:please\s+)?open\s+(?:the\s+|number\s+|no\.?\s*|#\s*)?(?P<n>\d{1,3}|" + "|".join(ORDINALS) + r"|last)"
 	r"(?:st|nd|rd|th)?(?:\s+(?:one|record|row|result|entry|invoice|order))?" + _END, re.I)
 
-_PLURALS = {dt: dt.lower() + ("" if dt.endswith("y") else "s") for dt in REGISTRY}
-_PLURALS.update({"Stock Entry": "stock entries", "Payment Entry": "payment entries"})
+def _plural(doctype):
+	name = doctype.lower()
+	if name.endswith("y"):
+		return name[:-1] + "ies"
+	return name + ("es" if name.endswith(("ch", "ss", "x")) else "s")
+
+
+_PLURALS = {dt: _plural(dt) for dt in REGISTRY}
+_PLURALS["BOM"] = "boms"
 _DOCTYPE_ALT = "|".join(sorted({re.escape(n) for dt in REGISTRY for n in (dt.lower(), _PLURALS[dt])}, key=len, reverse=True))
 _DOCTYPES = {n: dt for dt in REGISTRY for n in (dt.lower(), _PLURALS[dt])}
 
@@ -68,6 +75,8 @@ POSSESSIVE_RE = re.compile(_ASK + r"(?P<target>.+?)['’]s\s+(?:(?P<hint>custome
 	+ r"|details|info|information)" + _TAIL, re.I)
 ITEMS_IN_RE = re.compile(r"^\s*(?:which|what)\s+(?P<field>items|products)\s+(?:are|were|is)\s+(?:in|on)\s+(?P<target>.+?)" + _TAIL, re.I)
 WHO_RE = re.compile(r"^\s*(?:who|which\s+(?:supplier|customer))\s+is\s+(?:the\s+)?(?P<field>supplier|customer)\s+(?:for|of|on)\s+(?P<target>.+?)" + _TAIL, re.I)
+SUMMARY_RE = re.compile(r"^\s*(?:please\s+)?(?:(?:give|show)(?:\s+me)?\s+(?:an?\s+|the\s+)?summary\s+(?:of|for)|summari[sz]e)\s+(?:the\s+)?"
+	r"(?P<kind>customer|supplier)\s+(?P<target>.+?)" + _TAIL, re.I)
 DETAILS_RE = re.compile(r"^\s*(?:please\s+)?(?:show|give|get|display|find)(?:\s+me)?\s+(?:the\s+)?(?:details|info|information)\s+(?:of|for|on|about)\s+(?P<target>.+?)" + _TAIL, re.I)
 
 # Words naming a DocType (or a family of them) at the start of a target: "customer Amit", "this invoice".
@@ -78,6 +87,9 @@ _TARGET_DOCTYPES.update({"invoice": ["Sales Invoice", "Purchase Invoice"], "invo
 _TARGET_DT_ALT = "|".join(sorted((re.escape(n) for n in _TARGET_DOCTYPES), key=len, reverse=True))
 REF_RE = re.compile(r"^(?:this|that|the\s+current|the\s+open|current|it)(?:\s+(?P<dt>" + _TARGET_DT_ALT + r"))?\s*$", re.I)
 PREFIX_RE = re.compile(r"^(?:the\s+|a\s+|an\s+)?(?P<dt>" + _TARGET_DT_ALT + r")\s+(?:called\s+|named\s+|no\.?\s*|number\s+|#\s*)?(?P<term>.+)$", re.I)
+# DocTypes whose name may introduce a record name ("customer Amit", "item AIL-BOTTLE"). The names of the other queryable DocTypes are common
+# words ("project", "account", "task", "asset"), so there they only count in front of an ID (“task TASK-2026-00001”), never in front of a name.
+NAME_PREFIX_DOCTYPES = (*DOCUMENT_DOCTYPES, *ENTITY_DOCTYPES, "Item", "Warehouse", "Employee")
 _LIST_VERB_RE = re.compile(r"^\s*(?:please\s+)?(show|list|display|get|give|last|latest|recent|newest|oldest)\b", re.I)
 
 
@@ -100,6 +112,9 @@ def match(text, last_query=None):
 	m = COUNT_RE.match(text)
 	if m:
 		return _query(m, "count")
+	m = SUMMARY_RE.match(text)
+	if m and len(m.group("target")) <= 140:
+		return {"mode": "query", "query": {"doctype": m.group("kind").capitalize(), "operation": "summary", "filters": {"search": m.group("target").strip(" .?!\"'“”")}}}
 	plan = field_question(text)
 	if plan:
 		return plan
@@ -138,6 +153,9 @@ def field_question(text):
 	doctypes = [hint] if hint else None
 	if prefix:
 		family, term = _TARGET_DOCTYPES[prefix.group("dt").lower()], prefix.group("term").strip()
+		if not looks_like_id(term) and not set(family) <= set(NAME_PREFIX_DOCTYPES):
+			prefix = None  # "Project Hub Ltd", "Account Managers Co": a name that merely starts with the word of another DocType
+	if prefix:
 		if len(family) == 1:
 			doctypes, target = family, term
 		elif looks_like_id(term):

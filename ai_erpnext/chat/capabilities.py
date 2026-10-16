@@ -257,4 +257,5 @@ def capability_summary():
 
 	return (f"The assistant can look up (read-only): {', '.join(REGISTRY)}. It can create, after the user confirms a preview: "
 		f"{', '.join(CREATABLE)} (transactions only as Drafts). It cannot submit, cancel, amend, delete, pay or create anything else "
-		"(no Stock Entries, Payment Entries, Journal Entries); say so instead of offering it.")
+		"(no new Stock Entries, Payment Entries or Journal Entries); say so instead of offering it. For the looked-up types it can also filter by "
+		"field values, count, total/average/min/max (never mixing currencies), group results, look into item/tax rows and show one related record per row.")

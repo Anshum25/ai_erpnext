@@ -1,5 +1,6 @@
 import frappe
 
+from ai_erpnext.capability.access import readable_value
 from ai_erpnext.mapping.base import BaseMatcher, MatchResult
 from ai_erpnext.mapping.normalize import clean_text
 
@@ -40,7 +41,7 @@ class CurrencyMatcher(BaseMatcher):
 		if clean_text(value):
 			return self.match(value)
 		if customer:
-			cur = frappe.db.get_value("Customer", customer, "default_currency")
+			cur = readable_value("Customer", customer, "default_currency")
 			if cur:
 				return MatchResult.defaulted(self.doctype, cur, cur, "Not on document; used customer's default currency")
 		if company:

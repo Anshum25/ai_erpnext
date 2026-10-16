@@ -22,6 +22,7 @@ USER_MESSAGES = {
 	"network": "Could not reach the AI service. Please check the connection and retry.",
 	"bad_request": "The AI service could not process this file. Please upload a clear JPG, PNG or WEBP image of the invoice.",
 	"invalid_response": "The AI returned a response that could not be read. Please retry.",
+	"request_too_large": "The request was too large for the AI service. Please try a shorter question.",
 	"unknown": "AI extraction failed. Please retry or contact the administrator.",
 }
 
@@ -45,11 +46,13 @@ class AIProviderError(Exception):
 	failed_generation: the model output a JSON-mode provider rejected (memory only; never logged or shown raw).
 	"""
 
-	def __init__(self, category, status_code=None, retry_after=None, failed_generation=None):
+	def __init__(self, category, status_code=None, retry_after=None, failed_generation=None, limit=None):
 		self.category = category if category in USER_MESSAGES else "unknown"
 		self.status_code = status_code
 		self.retry_after = retry_after
 		self.failed_generation = failed_generation
+		# Which limit a 429 named, when the provider said so: "tpm", "rpm", "tpd", "rpd", "credits" or "unknown" (metadata only).
+		self.limit = limit
 		self.user_message = USER_MESSAGES[self.category]
 		super().__init__(self.user_message)
 
@@ -164,9 +167,34 @@ def rate_limit_category(text, code=""):
 	return "rate_limited"
 
 
+# Context-window / per-request token errors (the request itself is too big; retrying the same request can't help).
+_TOO_LARGE_HINTS = ("context length", "context_length", "maximum context", "too many tokens", "reduce the length", "request too large",
+	"reduce your message size", "prompt is too long")
+
+
+def rate_limit_kind(text, code=""):
+	"""Which limit a 429 names, for diagnostics only: tpm, rpm, tpd, rpd, credits or unknown. Never every 429 is a TPM limit."""
+	words = re.sub(r"[-_]", " ", text or "")
+	if any(c in (code or "") for c in _CREDIT_CODES) or any(h in words for h in _CREDIT_HINTS):
+		return "credits"
+	per_day = any(h in words for h in _DAILY_HINTS)
+	per_minute = any(h in words for h in _MINUTE_HINTS)
+	tokens = "token" in words or "(tpm)" in words or "(tpd)" in words
+	requests = "request" in words or "(rpm)" in words or "(rpd)" in words
+	if per_minute:
+		return "tpm" if tokens else "rpm" if requests else "unknown"
+	if per_day:
+		return "tpd" if tokens else "rpd" if requests else "unknown"
+	return "unknown"
+
+
 def _from_status(status, text, code=""):
+	words = re.sub(r"[-_]", " ", text or "")
+	if status in (400, 413) and any(h.replace("_", " ") in words for h in _TOO_LARGE_HINTS):
+		return AIProviderError("request_too_large", status_code=status)
 	if status == 429:
 		category = rate_limit_category(text, code)
+		return AIProviderError(category, status_code=status, limit=rate_limit_kind(text, code))
 	elif status in (401, 403):
 		category = "auth"
 	elif status == 402:
@@ -203,11 +231,18 @@ def get_ai_logger():
 	return logger
 
 
-_SAFE_FIELDS = ("provider", "model", "status", "category", "http_status", "elapsed_ms", "retries", "tokens_in", "tokens_out")
+_SAFE_FIELDS = ("corr", "stage", "provider", "model", "status", "category", "limit", "http_status", "elapsed_ms", "retries", "tokens_in", "tokens_out")
 
 
 def log_ai_event(**fields):
-	"""Write one metadata-only line. Unknown keys are dropped so content cannot leak in."""
+	"""Write one metadata-only line. Unknown keys are dropped so content cannot leak in.
+	A caller may set frappe.local.ai_log_context = {"corr": ..., "stage": ...} to tag the provider lines of one request."""
+	try:
+		import frappe
+
+		fields = {**(getattr(frappe.local, "ai_log_context", None) or {}), **fields}
+	except Exception:
+		pass
 	line = " ".join(f"{k}={fields[k]}" for k in _SAFE_FIELDS if fields.get(k) is not None)
 	level = logging.INFO if fields.get("status") == "ok" else logging.WARNING
 	get_ai_logger().log(level, "AI-EXTRACT " + line)
