@@ -485,7 +485,9 @@ def _default(f, form):
 	if d == "today":
 		return nowdate()
 	if d == "company":
-		permitted = frappe.get_list("Company", pluck="name", limit=50)
+		from ai_erpnext.chat.queries import usable_companies
+
+		permitted = usable_companies(form["doctype"])[:50]
 		for c in (frappe.defaults.get_user_default("Company"), frappe.db.get_single_value("Global Defaults", "default_company")):
 			if c and c in permitted:
 				return c
@@ -505,6 +507,10 @@ def _filters(f, form):
 
 
 def _suggestions(doctype, filters, limit=PAGE, offset=0):
+	if doctype == "Company":
+		from ai_erpnext.chat.queries import usable_companies
+
+		return usable_companies()[offset: offset + limit]
 	try:
 		return frappe.get_list(doctype, filters=filters, pluck="name", offset=offset, limit=limit, order_by="modified desc")
 	except frappe.PermissionError:
@@ -672,6 +678,8 @@ def _exists_named(doctype, title_field, value):
 
 def _resolve_link(f, form, value, from_text):
 	doctype, filters = f["doctype"], _filters(f, form)
+	if doctype == "Company":
+		return _resolve_company(form, value)
 	if not from_text:  # button values are exact record names; re-check existence and permission
 		rows = frappe.get_list(doctype, filters={**filters, "name": value}, pluck="name", limit=1)
 		return ("ok", rows[0], value) if rows else ("none", None, None)
@@ -908,7 +916,27 @@ def _row_warehouse(form, row, include_default=True):
 	return row.get("warehouse") or form["values"].get("set_warehouse") or (row.get("default_warehouse") if include_default else None)
 
 
+def _resolve_company(form, value):
+	"""A company the user may use, by name, company name or abbreviation (see queries.usable_companies for why this is not get_list)."""
+	from ai_erpnext.chat.queries import usable_companies
+
+	allowed = usable_companies(form["doctype"])
+	rows = frappe.get_all("Company", filters={"name": ["in", allowed or [""]]}, fields=["name", "company_name", "abbr"], limit=0)
+	text = (value or "").strip().lower()
+	exact = [r.name for r in rows if text in (r.name.lower(), (r.company_name or "").lower(), (r.abbr or "").lower())]
+	if len(exact) == 1:
+		return "ok", exact[0], exact[0]
+	partial = [r.name for r in rows if text and text in r.name.lower()]
+	if len(partial) == 1:
+		return "ok", partial[0], partial[0]
+	return ("ambiguous", partial[:PAGE], None) if partial else ("none", None, None)
+
+
 def _link_ok(f, form, value):
+	if f["doctype"] == "Company":
+		from ai_erpnext.chat.queries import usable_companies
+
+		return value in usable_companies(form["doctype"])
 	try:
 		return bool(frappe.get_list(f["doctype"], filters={**_filters(f, form), "name": value}, pluck="name", limit=1))
 	except frappe.PermissionError:

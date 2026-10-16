@@ -38,6 +38,25 @@ def make_user(email, roles, companies, system_manager=True):
 	return email
 
 
+def workspace_expectations(name):
+	"""What a correct description of the workspace must contain, read from its definition (independently of chat/page_context.py):
+	its number card labels, chart names, and the first section with a DocType link the current user can read, with that link."""
+	doc = frappe.get_doc("Workspace", name)
+	blocks = json.loads(doc.content or "[]")
+	labels = [frappe.db.get_value("Number Card", b["data"]["number_card_name"], "label") or b["data"]["number_card_name"]
+		for b in blocks if b.get("type") == "number_card"]
+	charts = [b["data"]["chart_name"] for b in blocks if b.get("type") == "chart"]
+	sections, current = {}, None
+	for link in doc.links:
+		if link.type == "Card Break":
+			current = link.label
+		elif current and not link.hidden and link.link_type == "DocType" and frappe.has_permission(link.link_to, "read"):
+			sections.setdefault(current, []).append(link.label or link.link_to)
+	cards = [b["data"]["card_name"] for b in blocks if b.get("type") == "card" and sections.get(b["data"]["card_name"])]
+	first = [f"{cards[0]}:", sections[cards[0]][0]] if cards else []
+	return [*labels, *charts, *first]
+
+
 FORBIDDEN_CALLS = []
 
 
@@ -487,7 +506,8 @@ class TestAnyPage(PageCase):
 			text = self.texts(self.say(question, {"route": ["Workspaces", "Stock"]}))
 			self.assertIn("“Stock” workspace", text, question)
 			self.assertIn("tracks items and their quantities", text, question)
-			self.assertIn("Stock Transactions:", text, question)
+			for needle in workspace_expectations("Stock"):  # from the installed workspace: ERPNext versions lay it out differently
+				self.assertIn(needle, text, question)
 		self.route.assert_not_called()
 
 	def test_unknown_or_forged_pages_are_not_echoed(self):
@@ -588,7 +608,7 @@ class TestWorkspaces(PageCase):
 	def test_what_does_this_page_show_is_answered_from_the_workspace_not_the_model(self):
 		for question in ("what this page shows?", "What does this page show", "what is on this page", "tell me about this dashboard", "what this page about"):
 			text = self.ask(self.u_a, question)
-			for needle in ("“Stock” workspace", "Total Stock Value", "Total Warehouses", "Total Active Items", "Stock Value by Item Group", "Stock Transactions:", "Material Request"):
+			for needle in ("“Stock” workspace", *workspace_expectations("Stock")):
 				self.assertIn(needle, text, question)
 			self.assertNotIn("main dashboard or home", text)
 		self.route.assert_not_called()

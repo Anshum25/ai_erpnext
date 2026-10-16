@@ -324,7 +324,9 @@ def _report(ctx, raw):
 		if text is None or text == "":
 			continue
 		if kind == "company":
-			if text not in set(readable_names("Company", {"name": text}, limit=1)):
+			from ai_erpnext.chat.queries import usable_companies
+
+			if text not in usable_companies(spec["ref_doctype"]):
 				ctx.limitations.append("The report is filtered on a company that is not available to you; that filter is not described.")
 				continue
 		elif kind == "date":

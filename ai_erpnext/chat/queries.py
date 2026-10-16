@@ -267,14 +267,29 @@ def has_company(doctype):
 	return bool(frappe.get_meta(doctype).has_field("company"))
 
 
-def permitted_companies():
-	"""Companies the user may read (User Permissions applied), or None if that can't be listed
-	(the user has no read access on Company); get_list's own User Permission check still applies then."""
-	try:
-		return frappe.get_list("Company", pluck="name", limit=0, order_by="name asc")
-	except frappe.PermissionError:
-		frappe.local.message_log = []
-		return None
+def permitted_companies(doctype=None):
+	"""The companies the user's Company User Permissions allow (for `doctype`), or None when none applies.
+
+	This is how ERPNext itself scopes a user to companies. It is deliberately *not* "the Company records the user can list":
+	other User Permissions apply to Company records too (since v16 a Company links to its default warehouse, so a Warehouse
+	User Permission hides companies), which would wrongly leave a warehouse-restricted user with no company at all.
+	None means no company restriction: role permissions and get_list's own User Permission checks still apply."""
+	from frappe.permissions import get_user_permissions
+
+	rows = (get_user_permissions(frappe.session.user) or {}).get("Company") or []
+	allowed = sorted({r.get("doc") for r in rows if r.get("doc") and (not r.get("applicable_for") or r.get("applicable_for") == doctype)})
+	return allowed or None
+
+
+def usable_companies(doctype=None):
+	"""Names of the companies the user may work with: their permitted companies, or every company when no Company User
+	Permission restricts them and they may read companies at all."""
+	allowed = permitted_companies(doctype)
+	if allowed is not None:
+		return allowed
+	if not frappe.has_permission("Company", "read"):
+		return []
+	return frappe.get_all("Company", pluck="name", order_by="name asc", limit=0)
 
 
 def _match_company(doctype, value):
@@ -283,9 +298,11 @@ def _match_company(doctype, value):
 		return None
 	if not has_company(doctype):
 		return None  # masters such as Customer or Item are shared by all companies
-	allowed = permitted_companies()
-	if allowed is not None:
-		rows = frappe.get_list("Company", filters={"name": ["in", allowed or [""]]}, fields=["name", "company_name", "abbr"], limit=0)
+	allowed = usable_companies(doctype)
+	if allowed:
+		# names and abbreviations of companies already known to be usable (not sensitive): get_all, so unrelated
+		# User Permissions on Company records (e.g. its default warehouse) can't hide them
+		rows = frappe.get_all("Company", filters={"name": ["in", allowed]}, fields=["name", "company_name", "abbr"], limit=0)
 		match = [r.name for r in rows if value.lower() in (r.name.lower(), (r.company_name or "").lower(), (r.abbr or "").lower())]
 		if len(match) == 1:
 			return match[0]
@@ -299,7 +316,7 @@ def _company_filter(q):
 		return [], None
 	if q.get("company"):
 		return [["company", "=", q["company"]]], f"company {q['company']}"
-	allowed = permitted_companies()
+	allowed = permitted_companies(q["doctype"])
 	if allowed is None:
 		return [], None
 	spec = REGISTRY.get(q["doctype"])

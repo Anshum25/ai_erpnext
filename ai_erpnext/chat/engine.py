@@ -902,7 +902,9 @@ def _plan(ctx, entry, results, validation, mapped):
 
 
 def _q_company(ctx, company, issuer):
-	options = [{"label": c, "value": c} for c in frappe.get_list("Company", pluck="name", limit=20)]
+	from ai_erpnext.chat.queries import usable_companies
+
+	options = [{"label": c, "value": c} for c in usable_companies("Sales Invoice")[:20]]
 	if issuer:
 		text = (f"The invoice is issued by “{issuer}”, which doesn't match any of your ERPNext companies. "
 			"Which of your companies is this sales invoice for?")

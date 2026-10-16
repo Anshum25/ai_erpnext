@@ -362,6 +362,36 @@ class TestGenericQueries(IntegrationTestCase):
 		with self.assertRaises(queries.QueryError):
 			queries.validate({"doctype": "Bin", "operation": "aggregate", "aggregate": {"fn": "avg", "field": "valuation_rate"}})
 
+	def test_company_scope_comes_from_company_user_permissions_not_from_listing_companies(self):
+		"""Since ERPNext v16 a Company links to its default warehouse, so a Warehouse User Permission can hide Company records.
+		The chat's company scope must still be the user's Company User Permissions (as ERPNext applies them), not "none"."""
+		real = frappe.get_list
+
+		def hidden_companies(doctype, *args, **kwargs):
+			# only permission-checked listings are hidden (frappe.get_all goes through get_list with ignore_permissions)
+			return [] if doctype == "Company" and not kwargs.get("ignore_permissions") else real(doctype, *args, **kwargs)
+
+		frappe.set_user(self.users["A"])
+		with mock.patch("frappe.get_list", side_effect=hidden_companies):
+			self.assertEqual(queries.permitted_companies("Sales Invoice"), [COMPANIES["A"]])
+			self.assertEqual(self.mine(run(self.plan())["names"]), set(self.invoices["A"]) | {self.usd})
+			self.assertEqual(self.names("Bin") & {self.records[("Bin", "A")], self.records[("Bin", "B")]}, {self.records[("Bin", "A")]})
+			self.assertEqual(queries.validate(self.plan(filters={"party": "AIQ Shared", "company": "AIQA"}))["company"], COMPANIES["A"])
+			with self.assertRaises(queries.QueryError):
+				queries.validate(self.plan(filters={"company": COMPANIES["B"]}))  # still not a company of this user
+		frappe.set_user("Administrator")
+		self.assertIsNone(queries.permitted_companies("Sales Invoice"))  # no restriction: get_list decides, as in ERPNext
+
+	def test_company_permissions_for_some_doctypes_only(self):
+		email = self.make_user("aiq-applicable@example.com", ROLES, [])
+		frappe.get_doc({"doctype": "User Permission", "user": email, "allow": "Company", "for_value": COMPANIES["A"], "apply_to_all_doctypes": 0,
+			"applicable_for": "Sales Invoice"}).insert(ignore_permissions=True)
+		frappe.cache.delete_value("user_permissions")
+		frappe.set_user(email)
+		self.assertEqual(queries.permitted_companies("Sales Invoice"), [COMPANIES["A"]])
+		self.assertIsNone(queries.permitted_companies("Bin"))  # the permission doesn't apply there
+		self.assertEqual(self.mine(run(self.plan())["names"]), set(self.invoices["A"]) | {self.usd})
+
 	def test_new_doctype_aggregates_are_company_scoped(self):
 		frappe.set_user(self.users["A"])
 		by_status = {r["status"]: r["value"] for r in rows(run({"doctype": "Task", "operation": "aggregate", "aggregate": {"fn": "count", "group_by": "status"}}))}
