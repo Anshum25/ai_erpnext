@@ -60,6 +60,8 @@ ignore = [
     "UP040", # Use type aliases instead of type annotations
 ]
 typing-modules = ["frappe.types.DF"]
+# Typography in user-facing chat text (row "2 × item", ranges "a – b", "Customer › Name", apostrophes), not code.
+allowed-confusables = ["×", "–", "›", "’"]
 
 [tool.ruff.format]
 quote-style = "double"

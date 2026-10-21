@@ -15,7 +15,14 @@ from ai_erpnext.mapping.normalize import clean_text, parse_date
 from ai_erpnext.validation.base import ValidationReport
 from ai_erpnext.validation.validator import validate_outcome
 
-DATE_OVERRIDE_KEYS = ("posting_date", "due_date", "transaction_date", "delivery_date", "schedule_date", "valid_till")
+DATE_OVERRIDE_KEYS = (
+	"posting_date",
+	"due_date",
+	"transaction_date",
+	"delivery_date",
+	"schedule_date",
+	"valid_till",
+)
 # Optional link overrides that have no mapping result until chosen (validated by the mapper).
 EXTRA_LINK_OVERRIDE_KEYS = ("taxes_and_charges",)
 # Reviewer answers with a fixed set of values (anything else is refused here, before mapping).
@@ -76,7 +83,15 @@ def apply_mapping(doc):
 			mapping_status=outcome.status,
 			can_create=False,
 			requires_review=True,
-			errors=[{"code": "unsupported_document_type", "message": outcome.message, "severity": "error", "category": "mapping", "field": "target_doctype"}],
+			errors=[
+				{
+					"code": "unsupported_document_type",
+					"message": outcome.message,
+					"severity": "error",
+					"category": "mapping",
+					"field": "target_doctype",
+				}
+			],
 		)
 		doc.status = DocumentStatus.NEEDS_REVIEW
 		doc.duplicate = 0
@@ -114,10 +129,14 @@ def set_overrides(doc, corrections):
 		elif key == "return_against":
 			pass  # an invoice name (re-checked against the party, company and permissions by the mapper) or "__none__"
 		elif key == "material_request_type":
-			options = (frappe.get_meta("Material Request").get_field("material_request_type").options or "").split("\n")
+			options = (
+				frappe.get_meta("Material Request").get_field("material_request_type").options or ""
+			).split("\n")
 			if value and value not in options:
 				frappe.throw(_("Invalid value for {0}").format(key))
-		elif key not in EXTRA_LINK_OVERRIDE_KEYS and not (isinstance(results.get(key), dict) and results[key].get("doctype")):
+		elif key not in EXTRA_LINK_OVERRIDE_KEYS and not (
+			isinstance(results.get(key), dict) and results[key].get("doctype")
+		):
 			frappe.throw(_("Field {0} cannot be corrected").format(key))
 		if value:
 			overrides[key] = value
@@ -141,8 +160,18 @@ def review_payload(doc, outcome=None, report=None):
 		"classification": ((results.get("document_type") or {}).get("classification")) or {},
 		"source": {
 			k: extracted.get(k)
-			for k in ("document_type", "invoice_number", "date", "invoice_date", "due_date", "subtotal", "discount_amount", "tax_rate",
-				"tax_amount", "total_amount")
+			for k in (
+				"document_type",
+				"invoice_number",
+				"date",
+				"invoice_date",
+				"due_date",
+				"subtotal",
+				"discount_amount",
+				"tax_rate",
+				"tax_amount",
+				"total_amount",
+			)
 			if isinstance(extracted, dict)
 		},
 		"resolved_statuses": list(FieldStatus.RESOLVED),

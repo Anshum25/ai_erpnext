@@ -1,4 +1,5 @@
 import re
+from typing import ClassVar
 
 from ai_erpnext.mapping.base import BaseMatcher, MatchResult
 from ai_erpnext.mapping.normalize import clean_text, normalize_name
@@ -62,7 +63,7 @@ def singularize(text):
 class UOMMatcher(BaseMatcher):
 	doctype = "UOM"
 	title_field = "uom_name"
-	base_filters = {"enabled": 1}
+	base_filters: ClassVar[dict] = {"enabled": 1}
 
 	def match(self, value) -> MatchResult:
 		text = clean_text(value, 140)

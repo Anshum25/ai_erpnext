@@ -5,6 +5,7 @@ No paid API calls are made.
 
 Run: bench --site ci-test.local run-tests --module ai_erpnext.tests.test_rate_limit_regression
 """
+
 import json
 from unittest import mock
 
@@ -39,8 +40,10 @@ class TestRateLimitRegression(IntegrationTestCase):
 
 	def send(self, text, provider=None):
 		if provider is not None:
-			with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=provider), \
-				 mock.patch("time.sleep"):
+			with (
+				mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=provider),
+				mock.patch("time.sleep"),
+			):
 				return chat.send_message(session=self.s, text=text)
 		return chat.send_message(session=self.s, text=text)
 
@@ -48,8 +51,10 @@ class TestRateLimitRegression(IntegrationTestCase):
 	def test_greeting_uses_shortcut_no_provider_call(self):
 		"""'hi', 'hello', 'thanks' are handled by shortcuts - zero LLM calls."""
 		for greeting in ("hi", "hello", "Good morning!", "thanks"):
-			with mock.patch("ai_erpnext.chat.llm.route", side_effect=NO_MODEL), \
-				 mock.patch("ai_erpnext.chat.llm.get_text_provider", side_effect=NO_MODEL):
+			with (
+				mock.patch("ai_erpnext.chat.llm.route", side_effect=NO_MODEL),
+				mock.patch("ai_erpnext.chat.llm.get_text_provider", side_effect=NO_MODEL),
+			):
 				r = chat.send_message(session=self.s, text=greeting)
 			last = r["messages"][-1]
 			self.assertIn("text", last, f"Greeting '{greeting}' got no reply")
@@ -78,8 +83,11 @@ class TestRateLimitRegression(IntegrationTestCase):
 		self.assertEqual(len(p.calls), 1)
 		sent_messages = p.calls[0]["messages"]
 		assistant_turns = [m for m in sent_messages if m["role"] == "assistant"]
-		self.assertLessEqual(len(assistant_turns), llm.HISTORY_MESSAGES,
-			f"History exceeded bound: {len(assistant_turns)} assistant turns")
+		self.assertLessEqual(
+			len(assistant_turns),
+			llm.HISTORY_MESSAGES,
+			f"History exceeded bound: {len(assistant_turns)} assistant turns",
+		)
 
 	def test_history_chars_are_bounded_per_message(self):
 		"""Each history message content is truncated to HISTORY_CHARS."""
@@ -89,8 +97,9 @@ class TestRateLimitRegression(IntegrationTestCase):
 		self.send("explain it more", provider=p2)
 		for m in p2.calls[0]["messages"]:
 			content = m.get("content") or ""
-			self.assertLessEqual(len(content), llm.HISTORY_CHARS + 200,
-				f"Sent message exceeded char limit: {len(content)}")
+			self.assertLessEqual(
+				len(content), llm.HISTORY_CHARS + 200, f"Sent message exceeded char limit: {len(content)}"
+			)
 
 	# --- Q4: Follow-up questions still get recent context ---
 	def test_follow_up_questions_receive_query_context(self):
@@ -106,19 +115,25 @@ class TestRateLimitRegression(IntegrationTestCase):
 	# --- Q5: Page context does not add extra LLM calls ---
 	def test_page_context_answer_makes_no_llm_call(self):
 		"""A page-context question is answered server-side, not via LLM."""
-		with mock.patch("ai_erpnext.chat.page_context.answer", return_value=True) as mock_answer, \
-			 mock.patch("ai_erpnext.chat.llm.route", side_effect=NO_MODEL), \
-			 mock.patch("ai_erpnext.chat.llm.get_text_provider", side_effect=NO_MODEL):
-			chat.send_message(session=self.s, text="explain this form",
-				context=json.dumps({"route": ["Form", "Sales Invoice", "SINV-0001"]}))
+		with (
+			mock.patch("ai_erpnext.chat.page_context.answer", return_value=True) as mock_answer,
+			mock.patch("ai_erpnext.chat.llm.route", side_effect=NO_MODEL),
+			mock.patch("ai_erpnext.chat.llm.get_text_provider", side_effect=NO_MODEL),
+		):
+			chat.send_message(
+				session=self.s,
+				text="explain this form",
+				context=json.dumps({"route": ["Form", "Sales Invoice", "SINV-0001"]}),
+			)
 		mock_answer.assert_called_once()
 
 	# --- Q6: Transient 429 bounded retries ---
 	def test_rate_limit_with_retry_after_retries_once_within_budget(self):
 		p = FakeProvider(err("rate_limited", status_code=429, retry_after=2.0), CHAT_PLAN)
 		sleeps = []
-		result = llm.complete_with_policy(p, "system", [{"role": "user", "content": "q"}],
-			sleep=sleeps.append, jitter=lambda: 0.0)
+		result = llm.complete_with_policy(
+			p, "system", [{"role": "user", "content": "q"}], sleep=sleeps.append, jitter=lambda: 0.0
+		)
 		self.assertEqual(len(p.calls), 2)
 		self.assertEqual(result["mode"], "chat")
 
@@ -139,13 +154,18 @@ class TestRateLimitRegression(IntegrationTestCase):
 	# --- Q7: Daily quota_exhausted message differs from rate_limited ---
 	def test_quota_exhausted_message_differs_from_rate_limited(self):
 		from ai_erpnext.chat.engine import CHAT_ERRORS
+
 		rate_msg = CHAT_ERRORS["rate_limited"]
 		quota_msg = CHAT_ERRORS["quota_exhausted"]
 		self.assertNotEqual(rate_msg, quota_msg)
-		self.assertTrue(any(w in quota_msg.lower() for w in ("today", "daily", "limit")),
-			"quota_exhausted should mention the daily nature")
-		self.assertTrue(any(w in rate_msg.lower() for w in ("wait", "minute", "per-minute")),
-			"rate_limited should mention waiting/per-minute")
+		self.assertTrue(
+			any(w in quota_msg.lower() for w in ("today", "daily", "limit")),
+			"quota_exhausted should mention the daily nature",
+		)
+		self.assertTrue(
+			any(w in rate_msg.lower() for w in ("wait", "minute", "per-minute")),
+			"rate_limited should mention waiting/per-minute",
+		)
 
 	def test_quota_exhausted_end_to_end_shows_daily_limit_message(self):
 		p = FakeProvider(err("quota_exhausted", status_code=429))
@@ -157,6 +177,7 @@ class TestRateLimitRegression(IntegrationTestCase):
 	# --- Q8: Auth/network/bad_request errors are classified correctly ---
 	def test_auth_error_classified_correctly_and_not_retried(self):
 		from ai_erpnext.chat.engine import CHAT_ERRORS
+
 		p = FakeProvider(err("auth", status_code=401))
 		r = self.send("list invoices", provider=p)
 		self.assertIn(CHAT_ERRORS["auth"], r["messages"][-1]["text"])
@@ -164,12 +185,14 @@ class TestRateLimitRegression(IntegrationTestCase):
 
 	def test_bad_request_not_retried(self):
 		p = FakeProvider(err("bad_request", status_code=400), CHAT_PLAN)
-		r = self.send("explain this", provider=p)
+		self.send("explain this", provider=p)
 		self.assertEqual(len(p.calls), 1, "bad_request must not be retried")
 
 	def test_billing_not_retried(self):
 		p = FakeProvider(err("billing", status_code=402), CHAT_PLAN)
-		r = self.send("which sales invoices did our biggest customers get recently?", provider=p)  # "show sales invoices" is a shortcut
+		self.send(
+			"which sales invoices did our biggest customers get recently?", provider=p
+		)  # "show sales invoices" is a shortcut
 		self.assertEqual(len(p.calls), 1, "billing errors must not be retried")
 
 	# --- Q9: Duplicate client_id not processed twice ---
@@ -177,24 +200,25 @@ class TestRateLimitRegression(IntegrationTestCase):
 		"""A message with the same client_id is not re-processed (network retry / double click)."""
 		client_id = "dedup-regression-test-001"
 		p1 = FakeProvider(CHAT_PLAN)
-		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=p1), \
-			 mock.patch("time.sleep"):
+		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=p1), mock.patch("time.sleep"):
 			r1 = chat.send_message(session=self.s, text="explain stock entry", client_id=client_id)
 		p2 = FakeProvider(CHAT_PLAN)
-		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=p2), \
-			 mock.patch("time.sleep"):
+		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=p2), mock.patch("time.sleep"):
 			r2 = chat.send_message(session=self.s, text="explain stock entry", client_id=client_id)
 		self.assertEqual(len(p2.calls), 0, "Duplicate client_id must not trigger another provider call")
-		self.assertEqual(len(r1["messages"]), len(r2["messages"]),
-			"Duplicate send must return same message set")
+		self.assertEqual(
+			len(r1["messages"]), len(r2["messages"]), "Duplicate send must return same message set"
+		)
 
 	# --- Q10: Diagnostic logging includes prompt size estimate ---
 	def test_route_log_includes_prompt_size_estimate(self):
 		"""Route log includes est_tokens so token usage is visible without expensive API calls."""
 		p = FakeProvider(CHAT_PLAN)
-		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=p), \
-			 mock.patch("time.sleep"), \
-			 self.assertLogs("ai_erpnext", level="INFO") as logs:
+		with (
+			mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=p),
+			mock.patch("time.sleep"),
+			self.assertLogs("ai_erpnext", level="INFO") as logs,
+		):
 			chat.send_message(session=self.s, text="what is a supplier?")
 		joined = "\n".join(logs.output)
 		self.assertIn("AI-CHAT route", joined)
@@ -217,13 +241,10 @@ class TestHistoryPrivacyIntact(IntegrationTestCase):
 	def test_erpnext_query_results_not_in_model_history(self):
 		"""Query result messages (source=erpnext) are excluded from the history sent to the model."""
 		p1 = FakeProvider(QUERY_PLAN)
-		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=p1), \
-			 mock.patch("time.sleep"):
+		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=p1), mock.patch("time.sleep"):
 			chat.send_message(session=self.s, text="how many customers?")
 		p2 = FakeProvider(CHAT_PLAN)
-		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=p2), \
-			 mock.patch("time.sleep"):
+		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=p2), mock.patch("time.sleep"):
 			chat.send_message(session=self.s, text="what does that number mean?")
 		sent = json.dumps(p2.calls[0]["messages"])
-		self.assertNotIn('"erpnext"', sent,
-			"erpnext-source messages must not be included in model history")
+		self.assertNotIn('"erpnext"', sent, "erpnext-source messages must not be included in model history")

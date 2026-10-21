@@ -84,8 +84,13 @@ def history(limit=HISTORY_LIMIT):
 	"""The user's own conversations that can still be opened (metadata only, newest first).
 	Conversations nobody wrote in yet (a page opened and left) are not listed."""
 	cutoff = add_days(now_datetime(), -EXPIRY_DAYS)
-	rows = frappe.get_all(DOCTYPE, filters={"owner": frappe.session.user, "last_activity": [">=", cutoff],
-		"title": ["!=", UNTITLED]}, fields=["name", "title", "last_activity"], order_by="last_activity desc", limit=limit)
+	rows = frappe.get_all(
+		DOCTYPE,
+		filters={"owner": frappe.session.user, "last_activity": [">=", cutoff], "title": ["!=", UNTITLED]},
+		fields=["name", "title", "last_activity"],
+		order_by="last_activity desc",
+		limit=limit,
+	)
 	return [{"session": r.name, "title": r.title, "last_activity": str(r.last_activity)} for r in rows]
 
 
@@ -102,8 +107,16 @@ def reopen(name):
 
 
 def new_session():
-	doc = frappe.get_doc({"doctype": DOCTYPE, "title": UNTITLED, "status": "Open",
-		"messages": "[]", "state": "{}", "last_activity": now_datetime()})
+	doc = frappe.get_doc(
+		{
+			"doctype": DOCTYPE,
+			"title": UNTITLED,
+			"status": "Open",
+			"messages": "[]",
+			"state": "{}",
+			"last_activity": now_datetime(),
+		}
+	)
 	doc.insert()
 	return doc
 
@@ -146,9 +159,15 @@ def state(doc):
 	if not isinstance(st, dict):
 		st = {}
 	pending = st.get("pending")
-	if pending is not None and not (isinstance(pending, dict) and isinstance(pending.get("id"), str) and isinstance(pending.get("kind"), str)):
+	if pending is not None and not (
+		isinstance(pending, dict)
+		and isinstance(pending.get("id"), str)
+		and isinstance(pending.get("kind"), str)
+	):
 		st["pending"] = None
-	if not isinstance(st.get("forms") or [], list) or not all(isinstance(f, dict) and f.get("doctype") for f in st.get("forms") or []):
+	if not isinstance(st.get("forms") or [], list) or not all(
+		isinstance(f, dict) and f.get("doctype") for f in st.get("forms") or []
+	):
 		st["forms"] = []
 	if not isinstance(st.get("processed") or [], list):
 		st["processed"] = []
@@ -175,14 +194,22 @@ def save(doc, msgs, st):
 	kept = set(st["processed"])
 	st["replies"] = {k: v for k, v in (st.get("replies") or {}).items() if k in kept}
 	# Messages that show browser-provided values (unsaved changes) are shown once and stored without them.
-	stored = [{k: v for k, v in m.items() if k not in ("card", "ref", "ephemeral", "source")} | {"text": EPHEMERAL_TEXT} if m.get("ephemeral") else m for m in msgs]
+	stored = [
+		{k: v for k, v in m.items() if k not in ("card", "ref", "ephemeral", "source")}
+		| {"text": EPHEMERAL_TEXT}
+		if m.get("ephemeral")
+		else m
+		for m in msgs
+	]
 	doc.messages = json.dumps(stored, default=str)
 	doc.state = json.dumps(st, default=str)
 	doc.last_activity = now_datetime()
 	if doc.title == UNTITLED:
 		first = next((m for m in msgs if m["role"] == "user"), None)
 		if first:
-			doc.title = (first.get("text") or (first.get("attachment") or {}).get("file_name") or "Attachment")[:60]
+			doc.title = (
+				first.get("text") or (first.get("attachment") or {}).get("file_name") or "Attachment"
+			)[:60]
 	doc.save()
 
 
@@ -190,6 +217,15 @@ def cleanup_expired_sessions():
 	"""Daily: close expired conversations and drop their message history. Every page that opens
 	the assistant starts a conversation, so ones nobody wrote in are deleted after a day."""
 	cutoff = add_days(now_datetime(), -EXPIRY_DAYS)
-	for name in frappe.get_all(DOCTYPE, filters={"last_activity": ["<", cutoff], "status": "Open"}, pluck="name"):
+	for name in frappe.get_all(
+		DOCTYPE, filters={"last_activity": ["<", cutoff], "status": "Open"}, pluck="name"
+	):
 		frappe.db.set_value(DOCTYPE, name, {"status": "Closed", "messages": "[]", "state": "{}"})
-	frappe.db.delete(DOCTYPE, {"title": UNTITLED, "active_entry": ["is", "not set"], "last_activity": ["<", add_days(now_datetime(), -1)]})
+	frappe.db.delete(
+		DOCTYPE,
+		{
+			"title": UNTITLED,
+			"active_entry": ["is", "not set"],
+			"last_activity": ["<", add_days(now_datetime(), -1)],
+		},
+	)

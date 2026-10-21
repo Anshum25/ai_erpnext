@@ -29,7 +29,9 @@ class TransactionBuilder(BaseDocumentBuilder):
 		if meta.has_field("ignore_pricing_rule"):
 			doc.ignore_pricing_rule = 1  # rates come from the source document, not from pricing rules
 		if meta.has_field("update_stock"):
-			doc.update_stock = 0  # stock moves through Delivery Notes / Purchase Receipts, never as a side effect
+			doc.update_stock = (
+				0  # stock moves through Delivery Notes / Purchase Receipts, never as a side effect
+			)
 		if d.target_doctype == "Quotation":
 			doc.quotation_to = "Customer"
 		if d.target_doctype == "BOM":
@@ -39,11 +41,17 @@ class TransactionBuilder(BaseDocumentBuilder):
 			doc.is_return = 1
 		if mapped.get("discount_amount") and mapped.get("apply_discount_on"):
 			doc.apply_discount_on = mapped["apply_discount_on"]
-			doc.discount_amount = -abs(flt(mapped["discount_amount"])) if d.is_return else abs(flt(mapped["discount_amount"]))
+			doc.discount_amount = (
+				-abs(flt(mapped["discount_amount"])) if d.is_return else abs(flt(mapped["discount_amount"]))
+			)
 		if doc.get("taxes_and_charges") and not doc.get("taxes"):
 			doc.set_taxes()  # standard ERPNext: copy rows from the chosen template
 		if meta.has_field("remarks"):
-			lines = [f"Created from AI Document Entry {context.get('entry')}" if context.get("entry") else "Created by AI Document Entry"]
+			lines = [
+				f"Created from AI Document Entry {context.get('entry')}"
+				if context.get("entry")
+				else "Created by AI Document Entry"
+			]
 			number = (context.get("canonical") or {}).get("invoice_number")
 			if number:
 				lines.append(source_remark(number))
@@ -58,5 +66,7 @@ def totals_note(doc, canonical, definition):
 	drafted, printed = abs(flt(doc.grand_total)), abs(flt(printed))
 	if abs(drafted - printed) <= max(0.05, printed * 0.001):
 		return None
-	return (f"The draft's grand total is {flt(drafted, 2)} {doc.get('currency') or ''}, but the document shows {flt(printed, 2)}. "
-		"Review the taxes and charges before submitting.").replace("  ", " ")
+	return (
+		f"The draft's grand total is {flt(drafted, 2)} {doc.get('currency') or ''}, but the document shows {flt(printed, 2)}. "
+		"Review the taxes and charges before submitting."
+	).replace("  ", " ")

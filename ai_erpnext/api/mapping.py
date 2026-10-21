@@ -20,17 +20,19 @@ def get_entry(entry, ptype="write"):
 
 def ensure_not_created(doc):
 	if doc.status == DocumentStatus.CREATED and doc.get("created_document"):
-		frappe.throw(_("{0} {1} was already created from this entry").format(doc.target_doctype, doc.created_document))
+		frappe.throw(
+			_("{0} {1} was already created from this entry").format(doc.target_doctype, doc.created_document)
+		)
 
 
 @frappe.whitelist(methods=["POST"])
-def get_review(entry):
+def get_review(entry: str):
 	"""Return the stored review data (no recomputation)."""
 	return review_payload(get_entry(entry, "read"))
 
 
 @frappe.whitelist(methods=["POST"])
-def remap(entry, target_doctype=None):
+def remap(entry: str, target_doctype: str | None = None):
 	"""Re-run master mapping + validation from the stored Extracted Data."""
 	doc = get_entry(entry)
 	if doc.status == DocumentStatus.CREATED and doc.get("created_document"):
@@ -40,19 +42,25 @@ def remap(entry, target_doctype=None):
 	if target_doctype is not None:
 		# The type comes from the browser: only a server-side registered document type is accepted, and only as a
 		# confirmation. The target follows from the document's parties (detection/direction.py); it can't be chosen.
-		if target_doctype and (not isinstance(target_doctype, str) or target_doctype not in supported_doctypes()):
+		if target_doctype and (
+			not isinstance(target_doctype, str) or target_doctype not in supported_doctypes()
+		):
 			frappe.throw(_("Document type not supported"), frappe.ValidationError)
 		doc.target_doctype = target_doctype or None
 	apply_mapping(doc)
 	if target_doctype and doc.target_doctype != target_doctype:
-		frappe.throw(_("This document is classified from who issued it and who it is for, so it can't be turned into a {0}.").format(target_doctype),
-			frappe.ValidationError)
+		frappe.throw(
+			_(
+				"This document is classified from who issued it and who it is for, so it can't be turned into a {0}."
+			).format(target_doctype),
+			frappe.ValidationError,
+		)
 	doc.save()
 	return review_payload(doc)
 
 
 @frappe.whitelist(methods=["POST"])
-def apply_corrections(entry, corrections):
+def apply_corrections(entry: str, corrections: str | dict):
 	"""Store reviewer-selected masters/dates, then re-map and re-validate."""
 	doc = get_entry(entry)
 	ensure_not_created(doc)

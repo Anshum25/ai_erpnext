@@ -8,5 +8,8 @@ import frappe
 
 
 def boot_session(bootinfo):
-	bootinfo.ai_chat_enabled = bool(frappe.session.user != "Guest" and frappe.db.exists("DocType", "AI Chat Session")
-		and frappe.has_permission("AI Chat Session", "create"))
+	bootinfo.ai_chat_enabled = False
+	if frappe.session.user == "Guest" or not frappe.db.exists("DocType", "AI Chat Session"):
+		return
+	if frappe.has_permission("AI Chat Session", "create"):
+		bootinfo.ai_chat_enabled = True

@@ -280,7 +280,12 @@ boot_session = "ai_erpnext.boot.boot_session"
 after_migrate = ["ai_erpnext.setup_doctypes.after_migrate"]
 
 # Close and trim expired assistant conversations (runs when the scheduler is enabled).
-scheduler_events = {"daily": ["ai_erpnext.chat.session.cleanup_expired_sessions", "ai_erpnext.pipeline.retention.purge_resolved_entries"]}
+scheduler_events = {
+	"daily": [
+		"ai_erpnext.chat.session.cleanup_expired_sessions",
+		"ai_erpnext.pipeline.retention.purge_resolved_entries",
+	]
+}
 
 # Other apps may add AI document definitions: list of modules calling
 # ai_erpnext.registry.document_registry.register() on import.

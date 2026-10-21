@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import frappe
 
 from ai_erpnext.mapping.base import CANDIDATE_POOL, BaseMatcher, MatchResult
@@ -10,7 +12,7 @@ class ItemMatcher(BaseMatcher):
 	doctype = "Item"
 	title_field = "item_name"
 	# Templates (has_variants) cannot be used on transactions.
-	base_filters = {"disabled": 0, "has_variants": 0}
+	base_filters: ClassVar[dict] = {"disabled": 0, "has_variants": 0}
 	extra_fields = ("stock_uom", "is_stock_item")
 
 	def match(self, value) -> MatchResult:
@@ -25,7 +27,9 @@ class ItemMatcher(BaseMatcher):
 			rows = self._get_list({"name": code}, limit=1)
 			if rows:
 				return self._with_input(self._found(rows[0], 1.0, "exact_code", code), label)
-			barcode_parents = frappe.get_all("Item Barcode", filters={"barcode": code}, pluck="parent", limit=2)
+			barcode_parents = frappe.get_all(
+				"Item Barcode", filters={"barcode": code}, pluck="parent", limit=2
+			)
 			rows = self._get_list({"name": ["in", barcode_parents]}, limit=2) if barcode_parents else []
 			if len(rows) == 1:
 				return self._with_input(self._found(rows[0], 0.97, "barcode", code), label)

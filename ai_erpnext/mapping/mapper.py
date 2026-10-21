@@ -39,32 +39,60 @@ def company_context():
 	from ai_erpnext.chat.queries import usable_companies
 
 	usable = usable_companies()
-	default = next((c for c in (frappe.defaults.get_user_default("Company"), frappe.db.get_single_value("Global Defaults", "default_company"))
-		if c and c in usable), None)
+	default = next(
+		(
+			c
+			for c in (
+				frappe.defaults.get_user_default("Company"),
+				frappe.db.get_single_value("Global Defaults", "default_company"),
+			)
+			if c and c in usable
+		),
+		None,
+	)
 	return usable, default
 
 
 def classify(extracted, overrides=None):
 	overrides = overrides or {}
 	usable, default = company_context()
-	return direction.classify(extracted or {}, usable, default_company=default, selected_company=overrides.get("company"),
-		selected_role=overrides.get(ROLE_KEY))
+	return direction.classify(
+		extracted or {},
+		usable,
+		default_company=default,
+		selected_company=overrides.get("company"),
+		selected_role=overrides.get(ROLE_KEY),
+	)
 
 
-def map_document(extracted: dict, target_doctype: str | None = None, overrides: dict | None = None) -> MappingOutcome:
+def map_document(
+	extracted: dict, target_doctype: str | None = None, overrides: dict | None = None
+) -> MappingOutcome:
 	overrides = dict(overrides or {})
 	cls = classify(extracted, overrides)
-	detection = {"input": cls.source_type, "kind": cls.kind, "target_doctype": cls.target_doctype, "target_key": cls.target_key,
-		"registered": cls.ok, "confidence": 1.0 if cls.ok else 0.0, "match_type": cls.status, "confident": cls.ok,
-		"classification": cls.to_dict()}
-	outcome = MappingOutcome(detection=detection, target_doctype=cls.target_doctype if cls.ok else None, classification=cls)
+	detection = {
+		"input": cls.source_type,
+		"kind": cls.kind,
+		"target_doctype": cls.target_doctype,
+		"target_key": cls.target_key,
+		"registered": cls.ok,
+		"confidence": 1.0 if cls.ok else 0.0,
+		"match_type": cls.status,
+		"confident": cls.ok,
+		"classification": cls.to_dict(),
+	}
+	outcome = MappingOutcome(
+		detection=detection, target_doctype=cls.target_doctype if cls.ok else None, classification=cls
+	)
 	if not cls.ok:
 		outcome.message = cls.message
 		return outcome
 	if target_doctype and target_doctype != cls.target_doctype:
 		outcome.target_doctype = None
-		outcome.message = (f"This document is a {cls.target_doctype} for {cls.company} (decided from who issued it and who it is for), "
-			f"not a {target_doctype}.")
+		outcome.message = (
+			f"This document is a {cls.target_doctype} for {cls.company} (decided from who issued it and who it is for), "
+			f"not a {target_doctype}."
+		)
 		return outcome
 
 	definition = get_definition(cls.target_key)

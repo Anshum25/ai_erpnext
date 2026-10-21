@@ -43,17 +43,29 @@ class TestInventory(IntegrationTestCase):
 	def test_tested_claims_are_only_made_where_a_test_manifest_names_them(self):
 		for dt, verified in I.VERIFIED.items():
 			self.assertIn(dt, P.REGISTRY, dt)
-			self.assertLessEqual(verified, {"read", "details", "filter", "aggregate", "child", "link", "summary", "company"}, dt)
+			self.assertLessEqual(
+				verified,
+				{"read", "details", "filter", "aggregate", "child", "link", "summary", "company"},
+				dt,
+			)
 		self.assertLessEqual(I.CREATE_TESTED, set(forms.CREATABLE))
 		for e in self.data["entries"]:
 			for key in I.QUERY_CAPABILITIES:
 				if "caps" in e and e["caps"][key] == I.IMPLEMENTED_TESTED:
-					self.assertIn(key, I.VERIFIED.get(e["doctype"], set()), f"{e['doctype']}.{key} is reported as tested without a manifest entry")
+					self.assertIn(
+						key,
+						I.VERIFIED.get(e["doctype"], set()),
+						f"{e['doctype']}.{key} is reported as tested without a manifest entry",
+					)
 
 	def test_edit_reports_and_workflow_are_never_reported_as_implemented(self):
 		for e in self.data["entries"]:
 			if "caps" in e:
-				self.assertEqual((e["caps"]["edit"], e["caps"]["reports"], e["caps"]["workflow"]), (I.NOT_IMPLEMENTED,) * 3, e["doctype"])
+				self.assertEqual(
+					(e["caps"]["edit"], e["caps"]["reports"], e["caps"]["workflow"]),
+					(I.NOT_IMPLEMENTED,) * 3,
+					e["doctype"],
+				)
 
 	def test_sensitive_and_consequential_doctypes_are_not_in_the_policy(self):
 		self.assertFalse(set(I.BLOCKED_REASONS) & set(P.REGISTRY))
@@ -71,15 +83,36 @@ class TestInventory(IntegrationTestCase):
 	def test_hrms_is_detected_not_assumed(self):
 		self.assertEqual(self.data["hrms_installed"], "hrms" in frappe.get_installed_apps())
 		text = I.render_markdown(self.data)
-		self.assertIn("HRMS installed: **no**" if not self.data["hrms_installed"] else "HRMS installed: **yes**", text)
+		self.assertIn(
+			"HRMS installed: **no**" if not self.data["hrms_installed"] else "HRMS installed: **yes**", text
+		)
 
 	def test_markdown_is_complete_and_states_the_blockers(self):
 		text = I.render_markdown(self.data)
 		for dt in P.REGISTRY:
 			self.assertIn(f"| {dt} |", text, dt)
-		for needle in ("Legend", "Summary by module", "Standard reports", "Page context", "not implemented for any DocType", I.REPORT_BLOCKER[:40]):
+		for needle in (
+			"Legend",
+			"Summary by module",
+			"Standard reports",
+			"Page context",
+			"not implemented for any DocType",
+			I.REPORT_BLOCKER[:40],
+		):
 			self.assertIn(needle, text)
-		for module in ("Selling", "Buying", "Stock", "Accounting", "CRM", "Projects", "Support", "Manufacturing", "Quality Management", "Assets", "Subcontracting"):
+		for module in (
+			"Selling",
+			"Buying",
+			"Stock",
+			"Accounting",
+			"CRM",
+			"Projects",
+			"Support",
+			"Manufacturing",
+			"Quality Management",
+			"Assets",
+			"Subcontracting",
+		):
 			self.assertIn(f"| {module} |", text, module)
 
 	def test_the_saved_inventory_lists_every_registered_doctype(self):
@@ -87,7 +120,9 @@ class TestInventory(IntegrationTestCase):
 		text = (DOCS / "coverage_inventory.md").read_text()
 		data = json.loads((DOCS / "coverage_inventory.json").read_text())
 		for dt in P.REGISTRY:
-			self.assertIn(f"| {dt} |", text, f"{dt} is missing from docs/coverage_inventory.md: regenerate it")
+			self.assertIn(
+				f"| {dt} |", text, f"{dt} is missing from docs/coverage_inventory.md: regenerate it"
+			)
 		self.assertEqual({e["doctype"] for e in data["entries"] if "caps" in e} >= set(P.REGISTRY), True)
 
 	def test_write_inventory_writes_files_only_where_asked(self):
@@ -103,8 +138,20 @@ class TestInventory(IntegrationTestCase):
 		self.assertTrue(callable(engine._view_context) and callable(page_context.parse))
 		js = Path(__file__).resolve().parents[1] / "public" / "js"
 		collector = (js / "ai_page_context.js").read_text()
-		for needle in ("get_checked_items", "get_filters_for_args", "is_dirty", "query_report", "get_selected"):
+		for needle in (
+			"get_checked_items",
+			"get_filters_for_args",
+			"is_dirty",
+			"query_report",
+			"get_selected",
+		):
 			self.assertIn(needle, collector)
 		self.assertFalse(P.REPORT_RESULTS_ENABLED)  # the report statement says results are never read
-		for key in ("Current form and record", "List filters and selected rows", "Reports and report filters", "Unsaved form changes", "Stale-record detection"):
+		for key in (
+			"Current form and record",
+			"List filters and selected rows",
+			"Reports and report filters",
+			"Unsaved form changes",
+			"Stale-record detection",
+		):
 			self.assertIn(key, I.PAGE_CONTEXT)

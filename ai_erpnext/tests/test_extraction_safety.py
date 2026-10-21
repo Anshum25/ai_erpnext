@@ -34,7 +34,9 @@ REQ = httpx.Request("POST", GROQ_URL + "/chat/completions")
 
 
 def our_company():
-	return frappe.defaults.get_user_default("Company") or frappe.db.get_single_value("Global Defaults", "default_company")
+	return frappe.defaults.get_user_default("Company") or frappe.db.get_single_value(
+		"Global Defaults", "default_company"
+	)
 
 
 def b2_output(**overrides):
@@ -47,8 +49,17 @@ def b2_output(**overrides):
 		"date": nowdate(),
 		"due_date": None,
 		"currency": None,
-		"items": [{"item_code": None, "item_name": "AISAFE Widget", "description": "Blue, size L",
-			"qty": 2, "uom": "No.", "rate": 100, "amount": 200}],
+		"items": [
+			{
+				"item_code": None,
+				"item_name": "AISAFE Widget",
+				"description": "Blue, size L",
+				"qty": 2,
+				"uom": "No.",
+				"rate": 100,
+				"amount": 200,
+			}
+		],
 		"subtotal": 200,
 		"discount_amount": None,
 		"taxes": [{"name": "CGST", "rate": 9, "amount": 18}, {"name": "SGST", "rate": 9, "amount": 18}],
@@ -78,28 +89,81 @@ class TestExtractionSafety(IntegrationTestCase):
 		frappe.set_user("Administrator")
 		group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
 		territory = frappe.db.get_value("Territory", {"is_group": 0}, "name")
-		cls.customer = frappe.get_doc({"doctype": "Customer", "customer_name": "AISAFE Customer",
-			"customer_group": group, "territory": territory}).insert().name
+		cls.customer = (
+			frappe.get_doc(
+				{
+					"doctype": "Customer",
+					"customer_name": "AISAFE Customer",
+					"customer_group": group,
+					"territory": territory,
+				}
+			)
+			.insert()
+			.name
+		)
 		ig = frappe.db.get_value("Item Group", {"is_group": 0}, "name")
-		cls.item = frappe.get_doc({"doctype": "Item", "item_code": "AISAFE-ITEM", "item_name": "AISAFE Widget",
-			"item_group": ig, "stock_uom": "Nos", "is_stock_item": 0, "is_sales_item": 1}).insert().name
+		cls.item = (
+			frappe.get_doc(
+				{
+					"doctype": "Item",
+					"item_code": "AISAFE-ITEM",
+					"item_name": "AISAFE Widget",
+					"item_group": ig,
+					"stock_uom": "Nos",
+					"is_stock_item": 0,
+					"is_sales_item": 1,
+				}
+			)
+			.insert()
+			.name
+		)
 		cls.company_currency = frappe.get_cached_value(
-			"Company", frappe.defaults.get_user_default("Company") or frappe.db.get_single_value("Global Defaults", "default_company"),
-			"default_currency")
+			"Company",
+			frappe.defaults.get_user_default("Company")
+			or frappe.db.get_single_value("Global Defaults", "default_company"),
+			"default_currency",
+		)
 		cls.image_url = test_file("png")
 
 	# --- Prompt B2 contract ----------------------------------------------------------
 	def test_prompt_b3_is_pinned_and_b2_is_kept(self):
-		self.assertEqual(hashlib.sha256(processor.EXTRACTION_PROMPT.encode()).hexdigest(), processor.EXTRACTION_PROMPT_SHA256)
-		self.assertEqual(processor.EXTRACTION_PROMPT_SHA256, "425fb2c08ae86f5cf8213a615b0ac7f382a79894ac291ac11c858686a7842253")
+		self.assertEqual(
+			hashlib.sha256(processor.EXTRACTION_PROMPT.encode()).hexdigest(),
+			processor.EXTRACTION_PROMPT_SHA256,
+		)
+		self.assertEqual(
+			processor.EXTRACTION_PROMPT_SHA256,
+			"425fb2c08ae86f5cf8213a615b0ac7f382a79894ac291ac11c858686a7842253",
+		)
 		self.assertEqual(processor.PROMPT_VERSION, "B3")
 		# the benchmarked B2 text is kept unchanged for reference and rollback
 		self.assertEqual(hashlib.sha256(processor.PROMPT_B2.encode()).hexdigest(), processor.PROMPT_B2_SHA256)
-		self.assertEqual(processor.PROMPT_B2_SHA256, "2d7e2cbc95efe288be15a41aa63b96caa37fbf009e1a263e8437cf43cbab9a1f")
+		self.assertEqual(
+			processor.PROMPT_B2_SHA256, "2d7e2cbc95efe288be15a41aa63b96caa37fbf009e1a263e8437cf43cbab9a1f"
+		)
 		# every B2 key is still requested, plus the parties the direction classifier needs
-		for key in ("document_type", "supplier_name", "customer_name", "invoice_number", '"date"', "due_date", "currency", "items",
-			"subtotal", "discount_amount", "taxes", "tax_rate", "tax_amount", "total_amount", "issuer_name", "recipient_name",
-			"original_invoice_number", "delivery_date", "bom_item_name", "material_request_type"):
+		for key in (
+			"document_type",
+			"supplier_name",
+			"customer_name",
+			"invoice_number",
+			'"date"',
+			"due_date",
+			"currency",
+			"items",
+			"subtotal",
+			"discount_amount",
+			"taxes",
+			"tax_rate",
+			"tax_amount",
+			"total_amount",
+			"issuer_name",
+			"recipient_name",
+			"original_invoice_number",
+			"delivery_date",
+			"bom_item_name",
+			"material_request_type",
+		):
 			self.assertIn(key, processor.EXTRACTION_PROMPT, key)
 		captured = {}
 
@@ -110,8 +174,13 @@ class TestExtractionSafety(IntegrationTestCase):
 
 		processor.DocumentProcessor(Capture()).process_file(b"", "png")
 		self.assertEqual(captured["prompt"], processor.EXTRACTION_PROMPT)
-		for rule in ("DEBIT MEMO", "HSN or SAC", "Never merge description lines into item_name",
-			"Never report one component's rate", "Never invent customers, invoice lines"):
+		for rule in (
+			"DEBIT MEMO",
+			"HSN or SAC",
+			"Never merge description lines into item_name",
+			"Never report one component's rate",
+			"Never invent customers, invoice lines",
+		):
 			self.assertIn(rule, processor.EXTRACTION_PROMPT)
 
 	def test_b2_output_is_compatible_with_adapter_and_maps(self):
@@ -129,7 +198,9 @@ class TestExtractionSafety(IntegrationTestCase):
 		self.assertEqual(outcome.mapped["items"][0]["item_code"], self.item)
 		self.assertEqual(outcome.mapped["items"][0]["uom"], "Nos")  # "No." resolved to the UOM master
 		self.assertFalse(report.blocking, [i.code for i in report.blocking])
-		self.assertFalse(report.data_errors, [i.code for i in report.data_errors])  # split GST totals are consistent
+		self.assertFalse(
+			report.data_errors, [i.code for i in report.data_errors]
+		)  # split GST totals are consistent
 		self.assertIn("taxes_not_mapped", [i.code for i in report.warnings])
 
 	def test_debit_memo_heading_is_never_auto_classified(self):
@@ -145,7 +216,15 @@ class TestExtractionSafety(IntegrationTestCase):
 			self.assertEqual(outcome.results["item_1"].match_type, "exact")
 
 	def test_description_line_as_extra_item_is_not_silently_accepted(self):
-		phantom = {"item_code": None, "item_name": "Blue, size L", "description": None, "qty": None, "uom": None, "rate": None, "amount": None}
+		phantom = {
+			"item_code": None,
+			"item_name": "Blue, size L",
+			"description": None,
+			"qty": None,
+			"uom": None,
+			"rate": None,
+			"amount": None,
+		}
 		outcome = map_document(b2_output(items=[b2_output()["items"][0], phantom]))
 		report = validate_outcome(outcome)
 		self.assertFalse(outcome.results["item_2"].matched)
@@ -170,8 +249,22 @@ class TestExtractionSafety(IntegrationTestCase):
 	# --- provider error handling ---------------------------------------------------------
 	def test_error_classification_is_safe(self):
 		cases = [
-			(api_error(openai.RateLimitError, 429, f"Rate limit reached in organization {ORG} on tokens per minute (TPM)"), "rate_limited"),
-			(api_error(openai.RateLimitError, 429, f"Rate limit reached in organization {ORG} on tokens per day (TPD)"), "quota_exhausted"),
+			(
+				api_error(
+					openai.RateLimitError,
+					429,
+					f"Rate limit reached in organization {ORG} on tokens per minute (TPM)",
+				),
+				"rate_limited",
+			),
+			(
+				api_error(
+					openai.RateLimitError,
+					429,
+					f"Rate limit reached in organization {ORG} on tokens per day (TPD)",
+				),
+				"quota_exhausted",
+			),
 			(api_error(openai.InternalServerError, 503, "Service Unavailable"), "unavailable"),
 			(api_error(openai.AuthenticationError, 401, f"Invalid API Key gsk_abc {ORG}"), "auth"),
 			(api_error(openai.NotFoundError, 404, "model not found"), "config"),
@@ -179,7 +272,10 @@ class TestExtractionSafety(IntegrationTestCase):
 			(openai.APITimeoutError(request=REQ), "timeout"),
 			(openai.APIConnectionError(request=REQ), "network"),
 			(ValueError("Expecting value"), "invalid_response"),
-			(api_error(openai.BadRequestError, 400, "json_validate_failed: Failed to generate JSON"), "invalid_response"),
+			(
+				api_error(openai.BadRequestError, 400, "json_validate_failed: Failed to generate JSON"),
+				"invalid_response",
+			),
 			(api_error(openai.BadRequestError, 400, "image too large"), "bad_request"),
 		]
 		for exc, category in cases:
@@ -188,22 +284,37 @@ class TestExtractionSafety(IntegrationTestCase):
 			self.assertEqual(str(err), USER_MESSAGES[category])
 			self.assertNotIn("org_", str(err))
 			self.assertNotIn("gsk_", str(err))
-		self.assertEqual(USER_MESSAGES["rate_limited"], "AI request limit reached. Please wait and try again.")
-		self.assertEqual(USER_MESSAGES["unavailable"], "AI service is temporarily unavailable. Please try again shortly.")
-		self.assertEqual(USER_MESSAGES["auth"], "AI service configuration needs attention. Please contact the administrator.")
+		self.assertEqual(
+			USER_MESSAGES["rate_limited"], "AI request limit reached. Please wait and try again."
+		)
+		self.assertEqual(
+			USER_MESSAGES["unavailable"], "AI service is temporarily unavailable. Please try again shortly."
+		)
+		self.assertEqual(
+			USER_MESSAGES["auth"],
+			"AI service configuration needs attention. Please contact the administrator.",
+		)
 		self.assertEqual(USER_MESSAGES["timeout"], "AI extraction timed out. Please retry.")
 
 	def test_provider_retries_and_timeout_are_bounded(self):
-		p = OpenAIProvider(api_key="test-key", base_url=GROQ_URL, model="qwen/qwen3.8-27b", provider_name="Groq")
+		p = OpenAIProvider(
+			api_key="test-key", base_url=GROQ_URL, model="qwen/qwen3.8-27b", provider_name="Groq"
+		)
 		self.assertEqual(p.client.max_retries, 2)
 		self.assertEqual(p.client.timeout, 90)
 
 	def test_provider_never_logs_response_content(self):
-		p = OpenAIProvider(api_key="test-key", base_url=GROQ_URL, model="qwen/qwen3.8-27b", provider_name="Groq")
+		p = OpenAIProvider(
+			api_key="test-key", base_url=GROQ_URL, model="qwen/qwen3.8-27b", provider_name="Groq"
+		)
 		content = json.dumps(b2_output(customer_name=SENTINEL))
 		out = io.StringIO()
-		with mock.patch.object(p.client.chat.completions, "create", return_value=fake_completion(content)), \
-			self.assertLogs("ai_erpnext", level="INFO") as logs, contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+		with (
+			mock.patch.object(p.client.chat.completions, "create", return_value=fake_completion(content)),
+			self.assertLogs("ai_erpnext", level="INFO") as logs,
+			contextlib.redirect_stdout(out),
+			contextlib.redirect_stderr(out),
+		):
 			data = p.extract_document_data(b"\x89PNG fake", "png", "prompt")
 		self.assertEqual(data["customer_name"], SENTINEL)
 		joined = "\n".join(logs.output) + out.getvalue()
@@ -215,31 +326,48 @@ class TestExtractionSafety(IntegrationTestCase):
 
 	def test_provider_rejects_non_object_json(self):
 		p = OpenAIProvider(api_key="k", base_url=GROQ_URL, model="m", provider_name="Groq")
-		for content in ("[{\"a\": 1}]", "not json", "```json\n{}\n```"):
-			with mock.patch.object(p.client.chat.completions, "create", return_value=fake_completion(content)):
+		for content in ('[{"a": 1}]', "not json", "```json\n{}\n```"):
+			with mock.patch.object(
+				p.client.chat.completions, "create", return_value=fake_completion(content)
+			):
 				with self.assertRaises(AIProviderError) as ctx:
 					p.extract_document_data(b"x", "png", "prompt")
 			self.assertEqual(ctx.exception.category, "invalid_response")
 
 	# --- pipeline: safe failure, no fallback, no reprocessing --------------------------------
 	def _entry(self, status):
-		name = frappe.get_doc({"doctype": "AI Document Entry", "status": "Processed",
-			"file": self.image_url}).insert().name
+		name = (
+			frappe.get_doc({"doctype": "AI Document Entry", "status": "Processed", "file": self.image_url})
+			.insert()
+			.name
+		)
 		frappe.db.set_value("AI Document Entry", name, "status", status)
 		return name
 
 	@contextlib.contextmanager
 	def _groq_settings(self):
 		real = frappe.get_single
-		settings = SimpleNamespace(provider="Groq", api_key="set", base_url=GROQ_URL, model="qwen/qwen3.8-27b",
-			get_password=lambda field: "test-key")
-		with mock.patch("frappe.get_single", side_effect=lambda dt: settings if dt == "AI Provider Settings" else real(dt)), \
-			mock.patch.object(frappe.db, "commit"):
+		settings = SimpleNamespace(
+			provider="Groq",
+			api_key="set",
+			base_url=GROQ_URL,
+			model="qwen/qwen3.8-27b",
+			get_password=lambda field: "test-key",
+		)
+		with (
+			mock.patch(
+				"frappe.get_single",
+				side_effect=lambda dt: settings if dt == "AI Provider Settings" else real(dt),
+			),
+			mock.patch.object(frappe.db, "commit"),
+		):
 			yield
 
 	def test_pipeline_failure_is_safe_and_has_no_fallback(self):
 		name = self._entry("Pending")
-		error = api_error(openai.RateLimitError, 429, f"Rate limit reached in organization {ORG} ... customer {SENTINEL}")
+		error = api_error(
+			openai.RateLimitError, 429, f"Rate limit reached in organization {ORG} ... customer {SENTINEL}"
+		)
 		created = []
 		real_init = OpenAIProvider.__init__
 
@@ -248,11 +376,16 @@ class TestExtractionSafety(IntegrationTestCase):
 			real_init(self_, *a, **kw)
 
 		out = io.StringIO()
-		with self._groq_settings(), \
-			mock.patch("openai.resources.chat.completions.Completions.create", side_effect=error) as create, \
-			mock.patch.object(OpenAIProvider, "__init__", tracking_init), \
-			mock.patch("ai_erpnext.ai.gemini.GeminiProvider.__init__", side_effect=AssertionError("fallback used")), \
-			self.assertLogs("ai_erpnext", level="INFO") as logs, contextlib.redirect_stdout(out):
+		with (
+			self._groq_settings(),
+			mock.patch("openai.resources.chat.completions.Completions.create", side_effect=error) as create,
+			mock.patch.object(OpenAIProvider, "__init__", tracking_init),
+			mock.patch(
+				"ai_erpnext.ai.gemini.GeminiProvider.__init__", side_effect=AssertionError("fallback used")
+			),
+			self.assertLogs("ai_erpnext", level="INFO") as logs,
+			contextlib.redirect_stdout(out),
+		):
 			from ai_erpnext.pipeline.controller import run_ai_pipeline
 
 			run_ai_pipeline(name)
@@ -271,21 +404,31 @@ class TestExtractionSafety(IntegrationTestCase):
 		name = self._entry("Pending")
 		content = json.dumps(b2_output(customer_name=SENTINEL))
 		out = io.StringIO()
-		with self._groq_settings(), \
-			mock.patch("openai.resources.chat.completions.Completions.create", return_value=fake_completion(content)), \
-			self.assertLogs("ai_erpnext", level="INFO") as logs, contextlib.redirect_stdout(out):
+		with (
+			self._groq_settings(),
+			mock.patch(
+				"openai.resources.chat.completions.Completions.create", return_value=fake_completion(content)
+			),
+			self.assertLogs("ai_erpnext", level="INFO") as logs,
+			contextlib.redirect_stdout(out),
+		):
 			from ai_erpnext.pipeline.controller import run_ai_pipeline
 
 			run_ai_pipeline(name)
 		doc = frappe.get_doc("AI Document Entry", name)
-		self.assertEqual(json.loads(doc.extracted_data)["customer_name"], SENTINEL)  # stored for review, not logged
+		self.assertEqual(
+			json.loads(doc.extracted_data)["customer_name"], SENTINEL
+		)  # stored for review, not logged
 		self.assertEqual(doc.target_doctype, "Sales Invoice")
 		self.assertNotIn(SENTINEL, "\n".join(logs.output) + out.getvalue())
 
 	def test_pipeline_does_not_reprocess_finished_entries(self):
 		for status in (DocumentStatus.NEEDS_REVIEW, DocumentStatus.CREATED, "Failed"):
 			name = self._entry(status)
-			with self._groq_settings(), mock.patch("openai.resources.chat.completions.Completions.create") as create:
+			with (
+				self._groq_settings(),
+				mock.patch("openai.resources.chat.completions.Completions.create") as create,
+			):
 				from ai_erpnext.pipeline.controller import run_ai_pipeline
 
 				run_ai_pipeline(name)
@@ -308,6 +451,8 @@ class TestExtractionSafety(IntegrationTestCase):
 
 	def test_saving_pending_entry_enqueues_deduplicated_job(self):
 		with mock.patch("frappe.enqueue") as enqueue:
-			doc = frappe.get_doc({"doctype": "AI Document Entry", "status": "Pending", "file": self.image_url}).insert()
+			doc = frappe.get_doc(
+				{"doctype": "AI Document Entry", "status": "Pending", "file": self.image_url}
+			).insert()
 		self.assertEqual(enqueue.call_args.kwargs["job_id"], f"ai-extract-{doc.name}")
 		self.assertTrue(enqueue.call_args.kwargs["deduplicate"])

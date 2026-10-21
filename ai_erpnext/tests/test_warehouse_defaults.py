@@ -29,7 +29,9 @@ def schema(company_field, stock_settings_field):
 	def get_meta(doctype, *args, **kwargs):
 		if doctype in ("Company", "Stock Settings"):
 			has = company_field if doctype == "Company" else stock_settings_field
-			return SimpleNamespace(has_field=lambda f, has=has: has if f == "default_warehouse" else real(doctype).has_field(f))
+			return SimpleNamespace(
+				has_field=lambda f, has=has: has if f == "default_warehouse" else real(doctype).has_field(f)
+			)
 		return real(doctype, *args, **kwargs)
 
 	return mock.patch.object(W.frappe, "get_meta", side_effect=get_meta)
@@ -45,9 +47,17 @@ class TestWarehouseDefaults(IntegrationTestCase):
 		cls.stores, cls.goods = f"Stores - {abbr}", f"Finished Goods - {abbr}"
 		if not frappe.db.exists("Company", OTHER):
 			currency = frappe.get_cached_value("Company", cls.company, "default_currency")
-			frappe.get_doc({"doctype": "Company", "company_name": OTHER, "abbr": "AIWD", "default_currency": currency,
-				"country": frappe.db.get_single_value("System Settings", "country") or "India",
-				"create_chart_of_accounts_based_on": "Standard Template", "chart_of_accounts": "Standard"}).insert()
+			frappe.get_doc(
+				{
+					"doctype": "Company",
+					"company_name": OTHER,
+					"abbr": "AIWD",
+					"default_currency": currency,
+					"country": frappe.db.get_single_value("System Settings", "country") or "India",
+					"create_chart_of_accounts_based_on": "Standard Template",
+					"chart_of_accounts": "Standard",
+				}
+			).insert()
 		cls.other_stores = "Stores - AIWD"
 
 	def set_default(self, warehouse, company=None):
@@ -69,27 +79,36 @@ class TestWarehouseDefaults(IntegrationTestCase):
 				raise AssertionError("must not read a field the schema doesn't have")
 			return original(doctype, field, *args, **kwargs)
 
-		with schema(company_field=False, stock_settings_field=False), mock.patch.object(W.frappe.db, "get_single_value", side_effect=single_value):
+		with (
+			schema(company_field=False, stock_settings_field=False),
+			mock.patch.object(W.frappe.db, "get_single_value", side_effect=single_value),
+		):
 			self.assertIsNone(configured_default_warehouse(self.company))
 			res = WarehouseMatcher(self.company).resolve(None)
 		self.assertEqual(res.status, FieldStatus.NOT_PROVIDED)
 		self.assertIn("Not required unless stock is updated", res.message)
 
 	def test_company_default_is_read_when_company_has_the_field(self):
-		with schema(company_field=True, stock_settings_field=False), \
-			mock.patch.object(W.frappe, "get_cached_value", return_value=self.stores) as cached, \
-			mock.patch.object(W.frappe.db, "get_single_value", side_effect=AssertionError("old field")):
+		with (
+			schema(company_field=True, stock_settings_field=False),
+			mock.patch.object(W.frappe, "get_cached_value", return_value=self.stores) as cached,
+			mock.patch.object(W.frappe.db, "get_single_value", side_effect=AssertionError("old field")),
+		):
 			self.assertEqual(configured_default_warehouse(self.company), self.stores)
 		cached.assert_called_once_with("Company", self.company, "default_warehouse")
 
 	def test_old_stock_settings_default_is_still_supported(self):
-		with schema(company_field=False, stock_settings_field=True), \
-			mock.patch.object(W.frappe.db, "get_single_value", return_value=self.goods) as single:
+		with (
+			schema(company_field=False, stock_settings_field=True),
+			mock.patch.object(W.frappe.db, "get_single_value", return_value=self.goods) as single,
+		):
 			self.assertEqual(configured_default_warehouse(self.company), self.goods)
 		single.assert_called_once_with("Stock Settings", "default_warehouse")
 
 	def test_no_company_means_no_default(self):
-		with mock.patch.object(W.frappe, "get_meta", side_effect=AssertionError("no lookup without a company")):
+		with mock.patch.object(
+			W.frappe, "get_meta", side_effect=AssertionError("no lookup without a company")
+		):
 			self.assertIsNone(configured_default_warehouse(None))
 			self.assertEqual(WarehouseMatcher(None).resolve("").status, FieldStatus.NOT_PROVIDED)
 
@@ -127,8 +146,18 @@ class TestWarehouseDefaults(IntegrationTestCase):
 	# ---- which documents need one ------------------------------------------------------------
 	def test_only_stock_moving_documents_require_a_warehouse(self):
 		ig = frappe.db.get_value("Item Group", {"is_group": 0}, "name")
-		frappe.get_doc({"doctype": "Item", "item_code": "AIWD-STOCK", "item_name": "AIWD Stock", "item_group": ig, "stock_uom": "Nos",
-			"is_stock_item": 1, "is_sales_item": 1, "is_purchase_item": 1}).insert()
+		frappe.get_doc(
+			{
+				"doctype": "Item",
+				"item_code": "AIWD-STOCK",
+				"item_name": "AIWD Stock",
+				"item_group": ig,
+				"stock_uom": "Nos",
+				"is_stock_item": 1,
+				"is_sales_item": 1,
+				"is_purchase_item": 1,
+			}
+		).insert()
 		for doctype in ("Purchase Order", "Purchase Receipt", "Sales Order", "Delivery Note"):
 			self.assertTrue(requirements.needs_warehouse(doctype, "AIWD-STOCK"), doctype)
 		for doctype in ("Sales Invoice", "Purchase Invoice", "Quotation"):
@@ -142,5 +171,7 @@ class TestWarehouseDefaults(IntegrationTestCase):
 		self.assertNotIn("set_warehouse", outcome.mapped)
 		report = validate_outcome(outcome)
 		self.assertFalse([i for i in report.blocking if i.field == "warehouse"])
-		bad = map_document(b2_output(warehouse="No Such Warehouse ZZ"))  # an explicit but unknown warehouse is asked about
+		bad = map_document(
+			b2_output(warehouse="No Such Warehouse ZZ")
+		)  # an explicit but unknown warehouse is asked about
 		self.assertIn("warehouse", {i.field for i in validate_outcome(bad).blocking})

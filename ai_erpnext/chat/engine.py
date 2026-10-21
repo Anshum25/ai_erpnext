@@ -50,24 +50,69 @@ HELP = (
 GREETING = "Hi! Ask me about ERPNext, look up your data, create records step by step (e.g. “create purchase invoice”), or attach a document image."
 
 # A caption asking for a payment: the image is still read, but nothing is ever paid (only Drafts are created).
-PAYMENT_CAPTION_RE = re.compile(r"\b(?:pay|record|make|post|process)\s+(?:a\s+|the\s+)?payments?\b|\bpayment\s+entry\b|\bpay\s+(?:this|it|the)\b", re.I)
+PAYMENT_CAPTION_RE = re.compile(
+	r"\b(?:pay|record|make|post|process)\s+(?:a\s+|the\s+)?payments?\b|\bpayment\s+entry\b|\bpay\s+(?:this|it|the)\b",
+	re.I,
+)
 CANCEL_RE = re.compile(r"^\s*(cancel|stop|abort|discard|never\s*mind|forget it)\b", re.I)
-RESTART_RE = re.compile(r"^\s*(?:please\s+)?(?:start\s+(?:over|again|from\s+scratch)|restart|begin\s+again|reset)\b", re.I)
+RESTART_RE = re.compile(
+	r"^\s*(?:please\s+)?(?:start\s+(?:over|again|from\s+scratch)|restart|begin\s+again|reset)\b", re.I
+)
 HELP_RE = re.compile(r"^\s*(help|\?)\s*$", re.I)
 # While an invoice question is pending, these cues mean "a separate question", not an answer.
-GENERAL_CUE_RE = re.compile(r"^\s*(show|list|count|how many|how much|what|which|who|when|explain|summari[sz]e|tell me|give me|display|hi|hello|hey|good (morning|afternoon|evening)|thanks|thank you)\b", re.I)
-ACTION_RE = re.compile(r"\b(create|make|raise|add|submit|cancel|delete|remove|update|edit|amend|pay|post|approve)\b", re.I)
+GENERAL_CUE_RE = re.compile(
+	r"^\s*(show|list|count|how many|how much|what|which|who|when|explain|summari[sz]e|tell me|give me|display|hi|hello|hey|good (morning|afternoon|evening)|thanks|thank you)\b",
+	re.I,
+)
+ACTION_RE = re.compile(
+	r"\b(create|make|raise|add|submit|cancel|delete|remove|update|edit|amend|pay|post|approve)\b", re.I
+)
 RETRY_RE = re.compile(r"^\s*(retry|try again|re-?check|refresh)\b", re.I)
-WHY_RE = re.compile(r"^\s*(why\b|what'?s wrong|what is wrong|why was .* rejected|show (the )?(errors|problems)|status\b)", re.I)
-YES_RE = re.compile(r"^\s*(yes|y|yeah|yep|ok|okay|sure|confirm|go ahead|proceed|do it|create( it)?( the)?( draft)?|continue)\b", re.I)
+WHY_RE = re.compile(
+	r"^\s*(why\b|what'?s wrong|what is wrong|why was .* rejected|show (the )?(errors|problems)|status\b)",
+	re.I,
+)
+YES_RE = re.compile(
+	r"^\s*(yes|y|yeah|yep|ok|okay|sure|confirm|go ahead|proceed|do it|create( it)?( the)?( draft)?|continue)\b",
+	re.I,
+)
 NO_RE = re.compile(r"^\s*(no|n|nope)\b", re.I)
 CREATE_INVOICE_RE = re.compile(r"\b(create|make|raise|generate|prepare|draft)\b.*\binvoice\b", re.I)
-_CREATE_NAMES = "|".join(sorted(["sales invoice", "purchase invoice", "sales order", "purchase order", "quotation", "delivery note",
-	"purchase receipt", "material request", "stock entry", "customer", "supplier", "item", "lead", "issue", *forms.DOCTYPE_ALIASES], key=len, reverse=True))
-CREATE_DOC_RE = re.compile(r"^\s*(?:please\s+)?(?:create|make|raise|add|new|prepare|draft|generate|start)\s+(?:a\s+|an\s+|new\s+|draft\s+)*"
-	r"(" + _CREATE_NAMES + r")s?\b", re.I)
+_CREATE_NAMES = "|".join(
+	sorted(
+		[
+			"sales invoice",
+			"purchase invoice",
+			"sales order",
+			"purchase order",
+			"quotation",
+			"delivery note",
+			"purchase receipt",
+			"material request",
+			"stock entry",
+			"customer",
+			"supplier",
+			"item",
+			"lead",
+			"issue",
+			*forms.DOCTYPE_ALIASES,
+		],
+		key=len,
+		reverse=True,
+	)
+)
+CREATE_DOC_RE = re.compile(
+	r"^\s*(?:please\s+)?(?:create|make|raise|add|new|prepare|draft|generate|start)\s+(?:a\s+|an\s+|new\s+|draft\s+)*"
+	r"(" + _CREATE_NAMES + r")s?\b",
+	re.I,
+)
 # A creation request anywhere in a longer message ("can you make a new po for Acme").
-CREATE_ANY_RE = re.compile(r"\b(?:create|make|raise|prepare|draft|generate|new)\s+(?:a\s+|an\s+|new\s+|draft\s+)*(" + _CREATE_NAMES + r")s?\b", re.I)
+CREATE_ANY_RE = re.compile(
+	r"\b(?:create|make|raise|prepare|draft|generate|new)\s+(?:a\s+|an\s+|new\s+|draft\s+)*("
+	+ _CREATE_NAMES
+	+ r")s?\b",
+	re.I,
+)
 CREATE_NEW_RE = re.compile(r"\b(create|add|make|new)\b", re.I)
 USE_EXISTING_RE = re.compile(r"\buse (the )?existing\b", re.I)
 FIELD_CORRECTION_RE = re.compile(
@@ -75,25 +120,57 @@ FIELD_CORRECTION_RE = re.compile(
 	r"(customer name|customer type|customer group|customer|supplier name|supplier type|supplier group|supplier|company|posting date|invoice date|"
 	r"order date|transaction date|due date|delivery date|required by date|required by|valid till|date|currency|warehouse|territory|item code|item name|"
 	r"item group|stock uom|uom|unit)"
-	r"\s*(?:to|as|=|:|is)?\s+(.+?)\s*$", re.I)
-ROW_CORRECTION_RE = re.compile(r"^\s*(?:please\s+)?(?:change|set|update|use)?\s*(?:row|line|item)\s*#?(\d+)\s+(item|uom|unit)\s*(?:to|as|=|:|is)?\s+(.+?)\s*$", re.I)
+	r"\s*(?:to|as|=|:|is)?\s+(.+?)\s*$",
+	re.I,
+)
+ROW_CORRECTION_RE = re.compile(
+	r"^\s*(?:please\s+)?(?:change|set|update|use)?\s*(?:row|line|item)\s*#?(\d+)\s+(item|uom|unit)\s*(?:to|as|=|:|is)?\s+(.+?)\s*$",
+	re.I,
+)
 
 # Field words -> a logical key, translated to the open document's own fieldnames by _correction_key.
-KEY_ALIASES = {"posting date": "@date", "invoice date": "@date", "order date": "@date", "transaction date": "@date", "date": "@date",
-	"due date": "@second", "delivery date": "@second", "required by date": "@second", "required by": "@second", "valid till": "@second",
-	"customer": "@party:Customer", "supplier": "@party:Supplier", "company": "company", "currency": "currency", "warehouse": "warehouse"}
-MASTER_ALIASES = {"customer name": "customer_name", "customer type": "customer_type", "customer group": "customer_group",
-	"supplier name": "supplier_name", "supplier type": "supplier_type", "supplier group": "supplier_group",
-	"territory": "territory", "item code": "item_code", "item name": "item_name", "item group": "item_group",
-	"stock uom": "stock_uom", "uom": "stock_uom", "unit": "stock_uom"}
+KEY_ALIASES = {
+	"posting date": "@date",
+	"invoice date": "@date",
+	"order date": "@date",
+	"transaction date": "@date",
+	"date": "@date",
+	"due date": "@second",
+	"delivery date": "@second",
+	"required by date": "@second",
+	"required by": "@second",
+	"valid till": "@second",
+	"customer": "@party:Customer",
+	"supplier": "@party:Supplier",
+	"company": "company",
+	"currency": "currency",
+	"warehouse": "warehouse",
+}
+MASTER_ALIASES = {
+	"customer name": "customer_name",
+	"customer type": "customer_type",
+	"customer group": "customer_group",
+	"supplier name": "supplier_name",
+	"supplier type": "supplier_type",
+	"supplier group": "supplier_group",
+	"territory": "territory",
+	"item code": "item_code",
+	"item name": "item_name",
+	"item group": "item_group",
+	"stock uom": "stock_uom",
+	"uom": "stock_uom",
+	"unit": "stock_uom",
+}
 
 
 # Loop guard: the same question (kind, field and wording) asked this many times in a row,
 # each time right after the user answered it, is replaced by a recovery message that says
 # what is still missing and how to get out (the question stays open; nothing is discarded).
 LOOP_THRESHOLD = 3
-LOOP_RECOVERY = ("I still don't have a value I can use here, so let's do this differently. {question}\n"
-	"Pick one of the options or type the exact value. You can also say “cancel” to stop, or “start over” to begin again.")
+LOOP_RECOVERY = (
+	"I still don't have a value I can use here, so let's do this differently. {question}\n"
+	"Pick one of the options or type the exact value. You can also say “cancel” to stop, or “start over” to begin again."
+)
 # A lookup question ("Which customer do you mean?") is asked again at most this many times.
 MAX_QUERY_ATTEMPTS = 2
 
@@ -104,7 +181,9 @@ class Ctx:
 		self.msgs = S.messages(doc)
 		self.st = S.state(doc)
 		self.start_seq = int(self.st.get("seq") or 0)
-		self.loaded_seq = self.start_seq  # messages up to here were stored by earlier requests (rechecked when shown again)
+		self.loaded_seq = (
+			self.start_seq
+		)  # messages up to here were stored by earlier requests (rechecked when shown again)
 		self.view = None  # (doctype, name) of the form the user has open, if readable
 		self.page = None  # the validated Desk page (chat/page_context.py): form, list or report; a hint, rechecked on the server
 		self.reasking = False  # True while re-asking a pending question after an unrelated message
@@ -122,7 +201,11 @@ class Ctx:
 		sig = f"{kind}|{key}|{re.sub(r'[^a-z0-9]+', ' ', (text or '').lower()).strip()}"
 		last = self.st.get("ask_sig") or {}
 		repeat = sig == last.get("sig") == self.answering_sig and not self.reasking
-		count = int(last.get("count") or 1) + 1 if repeat else (int(last.get("count") or 1) if sig == last.get("sig") else 1)
+		count = (
+			int(last.get("count") or 1) + 1
+			if repeat
+			else (int(last.get("count") or 1) if sig == last.get("sig") else 1)
+		)
 		self.answering_sig = None  # several questions in one reply: only the first can be a repeat
 		self.st["ask_sig"] = {"sig": sig, "count": count}
 		if count >= LOOP_THRESHOLD:
@@ -143,8 +226,12 @@ class Ctx:
 	def payload(self, since=None):
 		since = self.start_seq if since is None else int(since or 0)
 		pending = self.st.get("pending")
-		return {"session": self.doc.name, "messages": history.recheck([m for m in self.msgs if m["id"] > since], self.loaded_seq),
-			"busy": self.st.get("phase") == "extracting", "pending_id": pending["id"] if pending else None}
+		return {
+			"session": self.doc.name,
+			"messages": history.recheck([m for m in self.msgs if m["id"] > since], self.loaded_seq),
+			"busy": self.st.get("phase") == "extracting",
+			"pending_id": pending["id"] if pending else None,
+		}
 
 
 # --------------------------------------------------------------------------------------------
@@ -179,7 +266,12 @@ def handle_message(ctx, text=None, file_url=None, action=None, client_id=None, c
 
 	if file_url:
 		attachment = _attachment(file_url)
-		ctx.user(text, attachment={"file_name": attachment["file_name"], "file_url": attachment["file_url"]} if attachment["ok"] else None)
+		ctx.user(
+			text,
+			attachment={"file_name": attachment["file_name"], "file_url": attachment["file_url"]}
+			if attachment["ok"]
+			else None,
+		)
 		if not attachment["ok"]:
 			ctx.say(attachment["error"])
 			return
@@ -238,8 +330,11 @@ def poll(ctx):
 		return
 	if entry.status == "Failed":
 		ctx.st["phase"] = "failed"
-		ctx.ask("extraction_failed", f"I couldn't read the invoice. {entry.error_log or ''}".strip(),
-			options=[{"label": "Retry", "value": "__retry__"}, {"label": "Cancel", "value": "__cancel__"}])
+		ctx.ask(
+			"extraction_failed",
+			f"I couldn't read the invoice. {entry.error_log or ''}".strip(),
+			options=[{"label": "Retry", "value": "__retry__"}, {"label": "Cancel", "value": "__cancel__"}],
+		)
 		return
 	ctx.st["phase"] = "collecting"
 	_announce(ctx, entry)
@@ -288,11 +383,21 @@ def _resume_if_lost(ctx, entry):
 # --------------------------------------------------------------------------------------------
 def _on_image(ctx, attachment, text):
 	if text and PAYMENT_CAPTION_RE.search(text):
-		ctx.say("I never record or make payments. I'll read the document and suggest the draft it becomes; nothing is paid or submitted.")
-	if forms.active(ctx) or (ctx.st.get("phase") in ("extracting", "collecting", "failed") and ctx.st.get("entry")):
+		ctx.say(
+			"I never record or make payments. I'll read the document and suggest the draft it becomes; nothing is paid or submitted."
+		)
+	if forms.active(ctx) or (
+		ctx.st.get("phase") in ("extracting", "collecting", "failed") and ctx.st.get("entry")
+	):
 		ctx.st["queued_file"] = attachment["file_url"]
-		ctx.ask("replace_operation", "You're still working on another document. Do you want to set it aside and start on this new one?",
-			options=[{"label": "Start the new document", "value": "__new__"}, {"label": "Keep working on the current one", "value": "__keep__"}])
+		ctx.ask(
+			"replace_operation",
+			"You're still working on another document. Do you want to set it aside and start on this new one?",
+			options=[
+				{"label": "Start the new document", "value": "__new__"},
+				{"label": "Keep working on the current one", "value": "__keep__"},
+			],
+		)
 		return
 	_start_extraction(ctx, attachment["file_url"])
 
@@ -329,15 +434,20 @@ def _on_text(ctx, text):
 		if m:
 			row, what, value = int(m.group(1)), m.group(2).lower(), m.group(3)
 			key = f"item_{row}" if what == "item" else f"item_{row}_uom"
-			return _answer(ctx, {"kind": "item" if what == "item" else "uom", "key": key}, value, from_text=True, correction=True)
+			return _answer(
+				ctx,
+				{"kind": "item" if what == "item" else "uom", "key": key},
+				value,
+				from_text=True,
+				correction=True,
+			)
 		m = FIELD_CORRECTION_RE.match(text)
 		if m and m.group(1).lower() in KEY_ALIASES:
 			key = _correction_key(ctx, KEY_ALIASES[m.group(1).lower()])
 			if not key:
 				ctx.say(f"This document has no {m.group(1).lower()} I can change.")
 				return _reask_if_pending(ctx)
-			kind = key if key in DATE_LABELS else key
-			return _answer(ctx, {"kind": kind, "key": key}, m.group(2), from_text=True, correction=True)
+			return _answer(ctx, {"kind": key, "key": key}, m.group(2), from_text=True, correction=True)
 
 	if forms.active(ctx) and (forms.switch(ctx, text) or forms.correction(ctx, text)):
 		return
@@ -350,12 +460,26 @@ def _on_text(ctx, text):
 			return _general(ctx, text)
 		return _answer(ctx, pending, text, from_text=True)
 	if pending:
-		search_kinds = ("customer", "item", "uom", "company", "currency", "warehouse", "master_field", "form_field", "form_item", "form_warehouse")
+		search_kinds = (
+			"customer",
+			"item",
+			"uom",
+			"company",
+			"currency",
+			"warehouse",
+			"master_field",
+			"form_field",
+			"form_item",
+			"form_warehouse",
+		)
 		from ai_erpnext.chat import shortcuts
 
-		is_general = (GENERAL_CUE_RE.match(text) or CREATE_DOC_RE.match(text) or shortcuts.field_question(text)
-			or (ctx.page and page_context.classify(text, ctx.page))) and not (
-			pending["kind"] in search_kinds and re.match(r"^\s*(find|search)\b", text, re.I))
+		is_general = (
+			GENERAL_CUE_RE.match(text)
+			or CREATE_DOC_RE.match(text)
+			or shortcuts.field_question(text)
+			or (ctx.page and page_context.classify(text, ctx.page))
+		) and not (pending["kind"] in search_kinds and re.match(r"^\s*(find|search)\b", text, re.I))
 		if not is_general:
 			return _answer(ctx, pending, text, from_text=True)
 		_general(ctx, text)
@@ -368,7 +492,13 @@ def _is_new_request(text):
 	"""True if a message is a request of its own rather than the name/ID a lookup question asked for."""
 	from ai_erpnext.chat import capabilities, shortcuts
 
-	if "?" in text or len(text.split()) > 8 or GENERAL_CUE_RE.match(text) or CREATE_DOC_RE.match(text) or ACTION_RE.match(text):
+	if (
+		"?" in text
+		or len(text.split()) > 8
+		or GENERAL_CUE_RE.match(text)
+		or CREATE_DOC_RE.match(text)
+		or ACTION_RE.match(text)
+	):
 		return True
 	return bool(shortcuts.match(text) or capabilities.match(text))
 
@@ -403,27 +533,39 @@ def _general(ctx, text):
 	# Unambiguous messages are handled without an AI call (see chat/shortcuts.py).
 	plan = shortcuts.match(text, ctx.st.get("last_query"))
 	m = CREATE_DOC_RE.match(text)
-	if plan is None and m and not text[m.end():].strip(" .!?"):
+	if plan is None and m and not text[m.end() :].strip(" .!?"):
 		plan = {"mode": "create", "doctype": m.group(1)}  # "create purchase invoice" and nothing else
-	elif plan is None and m and CONTEXT_CREATE_RE.match(text[m.end():]):
+	elif plan is None and m and CONTEXT_CREATE_RE.match(text[m.end() :]):
 		# "create a purchase order for this supplier" / "... for these items": the page supplies the party or the items
-		rest = CONTEXT_CREATE_RE.match(text[m.end():])
-		plan = {"mode": "create", "doctype": m.group(1), "values": {"party": OPEN_RECORD} if rest.group("party") else {},
-			"items": [{"item": SELECTED_RECORDS}] if rest.group("items") else []}
+		rest = CONTEXT_CREATE_RE.match(text[m.end() :])
+		plan = {
+			"mode": "create",
+			"doctype": m.group(1),
+			"values": {"party": OPEN_RECORD} if rest.group("party") else {},
+			"items": [{"item": SELECTED_RECORDS}] if rest.group("items") else [],
+		}
 	via = "shortcut" if plan else "model"
 	if plan is None:
 		try:
-			plan = llm.route(ctx.msgs[:-1], text, ctx.st.get("last_query"), page=ctx.page.summary() if ctx.page else None)
+			plan = llm.route(
+				ctx.msgs[:-1], text, ctx.st.get("last_query"), page=ctx.page.summary() if ctx.page else None
+			)
 		except AIProviderError as e:
 			_count_route(ctx, "model", "error")
-			if ctx.page and page_context.answer(ctx, text, loose=True):  # “what is this page about” needs no AI service
+			if ctx.page and page_context.answer(
+				ctx, text, loose=True
+			):  # “what is this page about” needs no AI service
 				return
 			if m:  # creation works without the AI service: start the guided form with no prefill
 				return forms.start(ctx, forms.match_doctype(m.group(1)))
 			reason = CHAT_ERRORS.get(e.category, CHAT_ERRORS["unknown"])
 			guidance = capabilities.answer(text)
-			if guidance:  # known ERPNext questions are answered without the AI service, and the user is told why
-				ctx.say(f"{guidance}\n\n(Built-in guidance: {reason[0].lower() + reason[1:]})", source="guide")
+			if (
+				guidance
+			):  # known ERPNext questions are answered without the AI service, and the user is told why
+				ctx.say(
+					f"{guidance}\n\n(Built-in guidance: {reason[0].lower() + reason[1:]})", source="guide"
+				)
 				return
 			ctx.say(reason)
 			return
@@ -437,7 +579,11 @@ def _general(ctx, text):
 		if about and about[0] in ("how", "what", "after"):
 			reply += "\n\n" + capabilities.footer(about[1])  # what the chat itself can do, from the registry
 		ctx.say(reply, source="general")
-	elif mode == "clarify" and CREATE_ANY_RE.search(text) and forms.match_doctype(CREATE_ANY_RE.search(text).group(1)):
+	elif (
+		mode == "clarify"
+		and CREATE_ANY_RE.search(text)
+		and forms.match_doctype(CREATE_ANY_RE.search(text).group(1))
+	):
 		# A creation request is never clarified by the model in free text: the guided form asks,
 		# with the existing records as buttons and a separate "Create new".
 		return _start_form(ctx, forms.match_doctype(CREATE_ANY_RE.search(text).group(1)))
@@ -448,9 +594,11 @@ def _general(ctx, text):
 		previous = next((x for x in reversed(ctx.msgs[:-1]) if x["role"] == "assistant"), None)
 		if previous and previous.get("source") == "clarify" and _same_text(previous.get("text"), question):
 			# The model asked the same thing again although the user answered: don't repeat it.
-			ctx.say("I still can't tell exactly what you mean, so I won't ask the same question again. Please say it in one message, "
+			ctx.say(
+				"I still can't tell exactly what you mean, so I won't ask the same question again. Please say it in one message, "
 				"for example “mobile number of customer Amit Patel”, “status of Sales Order SAL-ORD-2026-00001” or "
-				"“create purchase order”.")
+				"“create purchase order”."
+			)
 			return
 		ctx.say(question, source="clarify")
 	elif mode == "create":
@@ -458,17 +606,27 @@ def _general(ctx, text):
 		if not doctype:
 			ctx.say(f"I can't create that from the chat. I can create: {', '.join(forms.CREATABLE)}.")
 			return
-		values, items = _page_prefill(ctx, doctype, plan.get("values") if isinstance(plan.get("values"), dict) else None,
-			plan.get("items") if isinstance(plan.get("items"), list) else None)
+		values, items = _page_prefill(
+			ctx,
+			doctype,
+			plan.get("values") if isinstance(plan.get("values"), dict) else None,
+			plan.get("items") if isinstance(plan.get("items"), list) else None,
+		)
 		return _start_form(ctx, doctype, values=values, items=items)
 	elif mode == "unsupported":
 		if via == "model" and plan.get("reply"):
 			plan = dict(plan, reply=claims.guard(plan["reply"], text, "unsupported"))
 		if ctx.page and ctx.page.dirty:
-			plan = dict(plan, reply=(plan.get("reply") or "I can't do that yet.") + " This form also has unsaved changes. Editing from the chat isn't available; "
-				"when it is, the form will first have to be saved or discarded and reloaded. Nothing you typed in the form was saved by me.")
-		ctx.say((plan.get("reply") or "I can't do that yet.") + " From the chat I can only create new records of "
-			f"{', '.join(forms.CREATABLE)} after you confirm (transactions only as Drafts); I never submit, cancel, delete or pay.")
+			plan = dict(
+				plan,
+				reply=(plan.get("reply") or "I can't do that yet.")
+				+ " This form also has unsaved changes. Editing from the chat isn't available; "
+				"when it is, the form will first have to be saved or discarded and reloaded. Nothing you typed in the form was saved by me.",
+			)
+		ctx.say(
+			(plan.get("reply") or "I can't do that yet.") + " From the chat I can only create new records of "
+			f"{', '.join(forms.CREATABLE)} after you confirm (transactions only as Drafts); I never submit, cancel, delete or pay."
+		)
 	elif mode == "open":
 		_open_result(ctx, plan.get("index"))
 	elif mode == "more":
@@ -488,8 +646,14 @@ def _general(ctx, text):
 def _start_form(ctx, doctype, values=None, items=None):
 	if ctx.st.get("phase") in ("extracting", "collecting") or forms.active(ctx):
 		current = ctx.st["forms"][-1]["doctype"] if forms.active(ctx) else "invoice"
-		ctx.say(f"Please finish or cancel the current {current} first (say “cancel”)"
-			+ (f", or say “I meant {doctype}” to switch and keep what you entered." if forms.active(ctx) else "."))
+		ctx.say(
+			f"Please finish or cancel the current {current} first (say “cancel”)"
+			+ (
+				f", or say “I meant {doctype}” to switch and keep what you entered."
+				if forms.active(ctx)
+				else "."
+			)
+		)
 		return _reask_if_pending(ctx)
 	return forms.start(ctx, doctype, values=values, items=items)
 
@@ -522,8 +686,11 @@ def _resolve_ref(ctx, query):
 
 
 OPEN_RECORD, SELECTED_RECORDS = "open_record", "selected_records"
-CONTEXT_CREATE_RE = re.compile(r"^\s*(?:for|from|to)\s+(?:(?P<party>(?:this|the\s+current|the\s+open|current)\s+(?:customer|supplier|client|vendor))"
-	r"|(?P<items>(?:these|the\s+selected|selected)\s+(?:items|products|records|rows)))\s*[.!?]*\s*$", re.I)
+CONTEXT_CREATE_RE = re.compile(
+	r"^\s*(?:for|from|to)\s+(?:(?P<party>(?:this|the\s+current|the\s+open|current)\s+(?:customer|supplier|client|vendor))"
+	r"|(?P<items>(?:these|the\s+selected|selected)\s+(?:items|products|records|rows)))\s*[.!?]*\s*$",
+	re.I,
+)
 
 
 def _open_record_query(ctx, query):
@@ -536,14 +703,22 @@ def _open_record_query(ctx, query):
 
 	query = {k: v for k, v in query.items() if k != "ref"}
 	if not ctx.view:
-		ctx.say("I can't see a record open on your screen that I can use. Open the record's form, or tell me its name.")
+		ctx.say(
+			"I can't see a record open on your screen that I can use. Open the record's form, or tell me its name."
+		)
 		return None
 	open_doctype, open_name = ctx.view
 	target = _match_doctype(query.get("doctype")) or open_doctype
 	if target == open_doctype:
-		return dict(query, doctype=target, filters={**(query.get("filters") or {}), "name": open_name, "search": None, "party": None})
+		return dict(
+			query,
+			doctype=target,
+			filters={**(query.get("filters") or {}), "name": open_name, "search": None, "party": None},
+		)
 	if query.get("operation") in ("details", "summary"):
-		ctx.say(f"The open record is a {open_doctype}, not a {target}. Tell me which {target.lower()} you mean.")
+		ctx.say(
+			f"The open record is a {open_doctype}, not a {target}. Tell me which {target.lower()} you mean."
+		)
 		return None
 	spec = REGISTRY.get(target)
 	try:
@@ -557,20 +732,39 @@ def _open_record_query(ctx, query):
 	if not candidates:
 		ctx.say(f"{target} records aren't linked to the open {open_doctype}, so I can't use it here.")
 		return None
-	where = [w for w in (query.get("where") or []) if not (isinstance(w, dict) and w.get("field") == candidates[0])]
+	where = [
+		w for w in (query.get("where") or []) if not (isinstance(w, dict) and w.get("field") == candidates[0])
+	]
 	filters = {k: v for k, v in (query.get("filters") or {}).items() if k not in ("party", "search", "name")}
-	return dict(query, doctype=target, filters=filters, where=[*where, {"field": candidates[0], "op": "=", "value": open_name}])
+	return dict(
+		query,
+		doctype=target,
+		filters=filters,
+		where=[*where, {"field": candidates[0], "op": "=", "value": open_name}],
+	)
 
 
 def _unapplied_page_filters(ctx, query):
 	"""A model-planned list/count on the DocType of the open list: say that the list's own filters were not used."""
 	page = ctx.page
-	if not (page and page.kind == "list" and isinstance(query, dict) and page.filters_known and (page.where or page.docstatus)):
+	if not (
+		page
+		and page.kind == "list"
+		and isinstance(query, dict)
+		and page.filters_known
+		and (page.where or page.docstatus)
+	):
 		return
 	from ai_erpnext.chat.queries import _match_doctype
 
-	if _match_doctype(query.get("doctype")) == page.doctype and query.get("operation", "list") in ("list", "count", "aggregate"):
-		ctx.say("Note: this answer doesn't use the filters of the list you have open. Ask “show my current list” for exactly what the list shows.")
+	if _match_doctype(query.get("doctype")) == page.doctype and query.get("operation", "list") in (
+		"list",
+		"count",
+		"aggregate",
+	):
+		ctx.say(
+			"Note: this answer doesn't use the filters of the list you have open. Ask “show my current list” for exactly what the list shows."
+		)
 
 
 def _page_prefill(ctx, doctype, values, items):
@@ -586,7 +780,9 @@ def _page_prefill(ctx, doctype, values, items):
 		if not ctx.view:
 			ctx.say("I can't see a record open on your screen, so I'll ask for the party.")
 		elif ctx.view[0] != needed:
-			ctx.say(f"The open record is a {ctx.view[0]}, which isn't a {(needed or 'party').lower()} for a {doctype}, so I didn't use it.")
+			ctx.say(
+				f"The open record is a {ctx.view[0]}, which isn't a {(needed or 'party').lower()} for a {doctype}, so I didn't use it."
+			)
 		else:
 			values["party"] = ctx.view[1]
 	if any(isinstance(i, dict) and i.get("item") == SELECTED_RECORDS for i in items):
@@ -617,7 +813,7 @@ CHAT_ERRORS = {
 	# A 429 that names neither a daily quota nor credits: usually a short (per-minute) limit, but the provider doesn't always say which.
 	"rate_limited": "The AI request limit was reached for now. Please wait about a minute and try again.",
 	"quota_exhausted": "Today's AI usage limit has been reached, so chat and data questions are paused until it resets. "
-		"You can still create records by typing, for example, “create purchase invoice”.",
+	"You can still create records by typing, for example, “create purchase invoice”.",
 	"auth": "The AI service isn't configured correctly. Please contact the administrator.",
 	"config": "The AI service isn't configured correctly. Please contact the administrator.",
 	"billing": "The AI service account needs attention. Please contact the administrator.",
@@ -653,25 +849,51 @@ def _run_query(ctx, raw_plan, page_of=None, prepared=None, attempts=0):
 	if result.get("not_found") and q["operation"] == "details" and not _operation_in_progress(ctx):
 		if attempts < MAX_QUERY_ATTEMPTS:
 			# Ask for the name again (bounded); the reply is applied to this same lookup.
-			question = ctx.ask("query_target", result["text"] + " Check the spelling and type the name or ID again, or ask something else.", input="text")
+			question = ctx.ask(
+				"query_target",
+				result["text"] + " Check the spelling and type the name or ID again, or ask something else.",
+				input="text",
+			)
 			question["plan"], question["attempts"] = _retarget(q), attempts + 1
 			return
-		ctx.say(result["text"] + " I've stopped searching for it. Try part of the name (for example “find customer Amit”), "
-			"or open the list in ERPNext.")
+		ctx.say(
+			result["text"]
+			+ " I've stopped searching for it. Try part of the name (for example “find customer Amit”), "
+			"or open the list in ERPNext."
+		)
 		return
-	plan = {k: v for k, v in q.items() if k != "pick"}  # a picked record name came from ERPNext, not from the user
-	ctx.st["last_query"] = {"plan": plan, "names": result.get("names", []), "titles": result.get("titles", []),
-		"doctype": result.get("result_doctype") or q["doctype"]}
-	ctx.say(result["text"], card=result.get("card"), source="erpnext",
-		ref={"doctype": result.get("result_doctype") or q["doctype"], "names": result.get("names", [])[:history.MAX_REFS],
-			"requires": result.get("requires") or ([q["doctype"]] if q["doctype"] and q["doctype"] != (result.get("result_doctype") or q["doctype"]) else [])})
+	plan = {
+		k: v for k, v in q.items() if k != "pick"
+	}  # a picked record name came from ERPNext, not from the user
+	ctx.st["last_query"] = {
+		"plan": plan,
+		"names": result.get("names", []),
+		"titles": result.get("titles", []),
+		"doctype": result.get("result_doctype") or q["doctype"],
+	}
+	ctx.say(
+		result["text"],
+		card=result.get("card"),
+		source="erpnext",
+		ref={
+			"doctype": result.get("result_doctype") or q["doctype"],
+			"names": result.get("names", [])[: history.MAX_REFS],
+			"requires": result.get("requires")
+			or (
+				[q["doctype"]]
+				if q["doctype"] and q["doctype"] != (result.get("result_doctype") or q["doctype"])
+				else []
+			),
+		},
+	)
 
 
 def _operation_in_progress(ctx):
 	"""An invoice or guided form is waiting for an answer; lookups must not take its question over."""
 	pending = ctx.st.get("pending")
-	return bool(pending and not pending["kind"].startswith("query_")) and (forms.active(ctx) or bool(ctx.st.get("entry"))
-		or bool(ctx.st.get("master")))
+	return bool(pending and not pending["kind"].startswith("query_")) and (
+		forms.active(ctx) or bool(ctx.st.get("entry")) or bool(ctx.st.get("master"))
+	)
 
 
 def _retarget(q):
@@ -684,22 +906,39 @@ def _query_clarify(ctx, c, attempts):
 		# Plain question (or an invoice/form question is open): no state; record names stay in the buttons/text.
 		labels = [o["label"] if isinstance(o, dict) else o for o in c.options]
 		suggestions = [o for o in c.options if isinstance(o, str)] or None
-		text = c.question + (("\nMatches: " + "; ".join(labels) + ". Ask again with the full name or ID.") if c.kind == "pick" else "")
+		text = c.question + (
+			("\nMatches: " + "; ".join(labels) + ". Ask again with the full name or ID.")
+			if c.kind == "pick"
+			else ""
+		)
 		ctx.say(text, suggestions=suggestions, source="clarify" if c.kind != "pick" else None)
 		return
 	options = [o for o in c.options if isinstance(o, dict)]
-	question = ctx.ask(f"query_{c.kind}", c.question, options=options, input="text" if c.kind != "period" else None)
+	question = ctx.ask(
+		f"query_{c.kind}", c.question, options=options, input="text" if c.kind != "period" else None
+	)
 	question["plan"], question["attempts"] = c.plan, attempts
 
 
-ORDINAL_RE = re.compile(r"^\s*(?:no,?\s*)?(?:use\s+|pick\s+|choose\s+|take\s+)?(?:the\s+)?(?:number\s+|#\s*)?"
-	r"(?P<n>\d{1,2}|first|second|third|fourth|fifth|sixth|last)(?:st|nd|rd|th)?(?:\s+(?:one|option|customer|supplier|item|record|contact|warehouse))?\s*[.!]*\s*$", re.I)
+ORDINAL_RE = re.compile(
+	r"^\s*(?:no,?\s*)?(?:use\s+|pick\s+|choose\s+|take\s+)?(?:the\s+)?(?:number\s+|#\s*)?"
+	r"(?P<n>\d{1,2}|first|second|third|fourth|fifth|sixth|last)(?:st|nd|rd|th)?(?:\s+(?:one|option|customer|supplier|item|record|contact|warehouse))?\s*[.!]*\s*$",
+	re.I,
+)
 _ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6}
 
 
 # Questions whose typed answer may itself be a number or code: “1” is a value there, not option 1.
-LITERAL_ANSWERS = {("form_item", "qty"), ("form_item", "rate"), ("master_field", "item_code"), ("master_field", "customer_name"),
-	("form_field", "item_code"), ("form_field", "bill_no"), ("form_field", "customer_name"), ("form_field", "supplier_name")}
+LITERAL_ANSWERS = {
+	("form_item", "qty"),
+	("form_item", "rate"),
+	("master_field", "item_code"),
+	("master_field", "customer_name"),
+	("form_field", "item_code"),
+	("form_field", "bill_no"),
+	("form_field", "customer_name"),
+	("form_field", "supplier_name"),
+}
 
 
 def ordinal_option(pending, text):
@@ -750,7 +989,15 @@ def _answer_query(ctx, pending, value, from_text):
 
 def _more(ctx):
 	last = ctx.st.get("last_query")
-	if not last or last["plan"]["operation"] in ("count", "details", "sales_summary", "aggregate", "summary", "outstanding_by_customer", "outstanding_by_supplier"):
+	if not last or last["plan"]["operation"] in (
+		"count",
+		"details",
+		"sales_summary",
+		"aggregate",
+		"summary",
+		"outstanding_by_customer",
+		"outstanding_by_supplier",
+	):
 		ctx.say("There's no list to continue. Ask me for some records first.")
 		return
 	q = dict(last["plan"], offset=last["plan"]["offset"] + last["plan"]["limit"])
@@ -776,8 +1023,18 @@ def _open_result(ctx, index):
 	if not frappe.has_permission(doctype, "read", name):
 		ctx.say("You don't have permission to open that record.")
 		return
-	ctx.say(f"Here is {doctype} {name}.", card={"type": "created", "title": f"{doctype} {name}", "doctype": doctype, "name": name,
-		"rows": [{"label": "ID", "value": name}], "action_label": f"Open {doctype}"}, source="erpnext")
+	ctx.say(
+		f"Here is {doctype} {name}.",
+		card={
+			"type": "created",
+			"title": f"{doctype} {name}",
+			"doctype": doctype,
+			"name": name,
+			"rows": [{"label": "ID", "value": name}],
+			"action_label": f"Open {doctype}",
+		},
+		source="erpnext",
+	)
 
 
 def _correction_key(ctx, logical):
@@ -801,14 +1058,32 @@ def _correction_key(ctx, logical):
 # --------------------------------------------------------------------------------------------
 def _attachment(file_url):
 	file_url = clean_text(file_url, 500)
-	rows = frappe.get_all("File", filters={"file_url": file_url, "owner": frappe.session.user},
-		fields=["name", "file_name", "file_url", "file_size"], order_by="creation desc", limit=1) if file_url else []
+	rows = (
+		frappe.get_all(
+			"File",
+			filters={"file_url": file_url, "owner": frappe.session.user},
+			fields=["name", "file_name", "file_url", "file_size"],
+			order_by="creation desc",
+			limit=1,
+		)
+		if file_url
+		else []
+	)
 	if not rows:
-		return {"ok": False, "file_name": None, "file_url": None, "error": "I couldn't access that attachment. Please upload it again."}
+		return {
+			"ok": False,
+			"file_name": None,
+			"file_url": None,
+			"error": "I couldn't access that attachment. Please upload it again.",
+		}
 	f = rows[0]
 	ext = (f.file_name or "").rsplit(".", 1)[-1].lower()
 	if ext == "pdf":
-		return {**f, "ok": False, "error": "PDF files aren't supported yet. Please upload a JPG, PNG or WEBP image of the invoice."}
+		return {
+			**f,
+			"ok": False,
+			"error": "PDF files aren't supported yet. Please upload a JPG, PNG or WEBP image of the invoice.",
+		}
 	if ext not in IMAGE_EXTENSIONS:
 		return {**f, "ok": False, "error": "Please upload a JPG, PNG or WEBP image of the invoice."}
 	if (f.file_size or 0) > MAX_IMAGE_BYTES:
@@ -820,7 +1095,9 @@ def _attachment(file_url):
 	except Exception:
 		frappe.local.message_log = []
 		content = None
-	problem = image_problem(content, ext)  # the bytes must really be an image of that format, whatever the name says
+	problem = image_problem(
+		content, ext
+	)  # the bytes must really be an image of that format, whatever the name says
 	if problem:
 		return {**f, "ok": False, "error": problem}
 	return {**f, "ok": True}
@@ -829,8 +1106,19 @@ def _attachment(file_url):
 def _start_extraction(ctx, file_url):
 	frappe.flags.ai_chat = True  # suppress the form-oriented "queued" popup
 	entry = frappe.get_doc({"doctype": "AI Document Entry", "file": file_url, "status": "Pending"}).insert()
-	ctx.st.update({"entry": entry.name, "phase": "extracting", "pending": None, "master": None, "acks": {},
-		"company_confirmed": None, "doctype_confirmed": False, "queued_file": None, "created": None})
+	ctx.st.update(
+		{
+			"entry": entry.name,
+			"phase": "extracting",
+			"pending": None,
+			"master": None,
+			"acks": {},
+			"company_confirmed": None,
+			"doctype_confirmed": False,
+			"queued_file": None,
+			"created": None,
+		}
+	)
 	ctx.doc.active_entry = entry.name
 	ctx.say("Thanks. I'm reading the invoice now; this usually takes a few seconds.")
 
@@ -865,7 +1153,9 @@ def _restart(ctx):
 		apply_mapping(entry)
 		entry.save()
 		ctx.st.update({"master": None, "acks": {}, "company_confirmed": None, "doctype_confirmed": False})
-		ctx.say("Starting this invoice over: your earlier answers are cleared; what was read from the image is kept.")
+		ctx.say(
+			"Starting this invoice over: your earlier answers are cleared; what was read from the image is kept."
+		)
 		return advance(ctx)
 	ctx.st["last_query"] = None
 	ctx.say("OK, starting fresh. What would you like to do?")
@@ -895,7 +1185,9 @@ def _explain(ctx):
 		ctx.say("There's no invoice in this conversation yet.")
 		return
 	if entry.status == "Failed":
-		ctx.say(f"The last extraction failed: {entry.error_log or 'unknown error'}. Say “retry” to try again.")
+		ctx.say(
+			f"The last extraction failed: {entry.error_log or 'unknown error'}. Say “retry” to try again."
+		)
 		return
 	validation = load_json(entry.validation_results, {}) or {}
 	errors = [e["message"] for e in validation.get("errors", [])]
@@ -903,7 +1195,13 @@ def _explain(ctx):
 	if not errors and not warnings:
 		ctx.say("There are no open problems with this invoice.")
 	else:
-		ctx.say("\n".join(["Open problems:"] + [f"• {e}" for e in errors] + (["Notes:"] + [f"• {w}" for w in warnings] if warnings else [])))
+		ctx.say(
+			"\n".join(
+				["Open problems:"]
+				+ [f"• {e}" for e in errors]
+				+ (["Notes:"] + [f"• {w}" for w in warnings] if warnings else [])
+			)
+		)
 	if ctx.st.get("pending"):
 		_reask(ctx)
 
@@ -950,7 +1248,11 @@ def _classification(entry):
 
 
 def _label(entry_or_definition):
-	d = entry_or_definition if hasattr(entry_or_definition, "target_doctype") and hasattr(entry_or_definition, "key") else _definition(entry_or_definition)
+	d = (
+		entry_or_definition
+		if hasattr(entry_or_definition, "target_doctype") and hasattr(entry_or_definition, "key")
+		else _definition(entry_or_definition)
+	)
 	return d.display if d else "document"
 
 
@@ -960,8 +1262,10 @@ def advance(ctx):
 		return
 	if entry.created_document:
 		ctx.st.update({"phase": "done", "pending": None})
-		ctx.say(f"This document was already created as {entry.target_doctype} {entry.created_document}.",
-			card=_created_card(entry.target_doctype, entry.created_document))
+		ctx.say(
+			f"This document was already created as {entry.target_doctype} {entry.created_document}.",
+			card=_created_card(entry.target_doctype, entry.created_document),
+		)
 		return
 	if ctx.st.get("master"):
 		return _master_next(ctx)
@@ -990,19 +1294,35 @@ def _q_classification(ctx, entry, cls):
 	if cls.get("ask") == "company" or (cls.get("ask") == "role" and not cls.get("company")):
 		first = [c for c in cls.get("company_candidates") or [] if c in usable]
 		options = [{"label": c, "value": c} for c in dict.fromkeys(first + list(usable))][:20]
-		text = message if cls.get("ask") == "company" else f"{message} Which of your companies is this document for?"
-		return ctx.ask("company", text, key="company", options=options + [cancel])
+		text = (
+			message
+			if cls.get("ask") == "company"
+			else f"{message} Which of your companies is this document for?"
+		)
+		return ctx.ask("company", text, key="company", options=[*options, cancel])
 	if cls.get("ask") == "role":
 		company, kind = cls["company"], (cls.get("kind") or "document").replace("_", " ")
-		options = [{"label": f"{company} is the seller (we supplied the goods or services)", "value": "seller"},
-			{"label": f"{company} is the buyer (we received the goods or services)", "value": "buyer"}]
+		options = [
+			{"label": f"{company} is the seller (we supplied the goods or services)", "value": "seller"},
+			{"label": f"{company} is the buyer (we received the goods or services)", "value": "buyer"},
+		]
 		if len(usable) > 1:
-			options.append({"label": "It's for another of my companies", "value": "__company__", "style": "secondary"})
-		return ctx.ask("role", f"{message} Before I create anything I need to know which side of this {kind} {company} is on.",
-			key="document_role", options=options + [cancel])
+			options.append(
+				{"label": "It's for another of my companies", "value": "__company__", "style": "secondary"}
+			)
+		return ctx.ask(
+			"role",
+			f"{message} Before I create anything I need to know which side of this {kind} {company} is on.",
+			key="document_role",
+			options=[*options, cancel],
+		)
 	supported = "invoices, credit and debit notes, purchase and sales orders, quotations, delivery documents, goods receipts, material requests and bills of materials"
-	return ctx.ask("blocked", f"{message} Nothing was created. I can read {supported}; I decide what each becomes from who issued it "
-		"and who it is for.", options=[cancel])
+	return ctx.ask(
+		"blocked",
+		f"{message} Nothing was created. I can read {supported}; I decide what each becomes from who issued it "
+		"and who it is for.",
+		options=[cancel],
+	)
 
 
 def _plan(ctx, entry, results, validation, mapped, d):
@@ -1020,9 +1340,15 @@ def _plan(ctx, entry, results, validation, mapped, d):
 	dups = sorted(dup["name"] for dup in validation.get("duplicates") or [])
 	if dups and not set(dups) <= set(acks.get("duplicate") or []):
 		reasons = "\n".join(f"• {dup['name']}: {dup['reason']}" for dup in validation["duplicates"])
-		return ctx.ask("duplicate", f"This document may already exist in ERPNext:\n{reasons}",
-			options=[{"label": "It's not a duplicate; continue", "value": "__ack__"}, {"label": "Cancel", "value": "__cancel__"}],
-			links=[{"label": f"Open {name}", "doctype": d.target_doctype, "name": name} for name in dups])
+		return ctx.ask(
+			"duplicate",
+			f"This document may already exist in ERPNext:\n{reasons}",
+			options=[
+				{"label": "It's not a duplicate; continue", "value": "__ack__"},
+				{"label": "Cancel", "value": "__cancel__"},
+			],
+			links=[{"label": f"Open {name}", "doctype": d.target_doctype, "name": name} for name in dups],
+		)
 	if "bom_item" in blocking:
 		return _q_master_choice(ctx, "bom_item", results.get("bom_item") or {}, doctype="Item")
 	for i in range(1, len(mapped.get("items") or []) + 1):
@@ -1032,31 +1358,72 @@ def _plan(ctx, entry, results, validation, mapped, d):
 			return _q_uom(ctx, i, results, mapped, blocking[f"item_{i}_uom"])
 	for key in (d.date_field, d.second_date_field):
 		if key and key in blocking:
-			return _q_date(ctx, key, results.get(key) or {}, blocking[key], posting=mapped.get(d.date_field), definition=d)
+			return _q_date(
+				ctx,
+				key,
+				results.get(key) or {},
+				blocking[key],
+				posting=mapped.get(d.date_field),
+				definition=d,
+			)
 	if "currency" in blocking:
 		return _q_currency(ctx, mapped, blocking["currency"], d)
 	if "warehouse" in blocking:
-		return _q_simple(ctx, "warehouse", "warehouse", f"{blocking['warehouse'][0]['message']}. Which warehouse should I use?", _warehouse_options(mapped))
+		return _q_simple(
+			ctx,
+			"warehouse",
+			"warehouse",
+			f"{blocking['warehouse'][0]['message']}. Which warehouse should I use?",
+			_warehouse_options(mapped),
+		)
 	if "apply_discount_on" in blocking:
-		return ctx.ask("discount_base", f"{blocking['apply_discount_on'][0]['message']} Is the discount taken off before tax (on the net total) "
-			"or after tax (on the grand total)?", key="apply_discount_on", options=[
-				{"label": "Before tax (net total)", "value": "Net Total"}, {"label": "After tax (grand total)", "value": "Grand Total"},
-				{"label": "Cancel", "value": "__cancel__", "style": "secondary"}])
+		return ctx.ask(
+			"discount_base",
+			f"{blocking['apply_discount_on'][0]['message']} Is the discount taken off before tax (on the net total) "
+			"or after tax (on the grand total)?",
+			key="apply_discount_on",
+			options=[
+				{"label": "Before tax (net total)", "value": "Net Total"},
+				{"label": "After tax (grand total)", "value": "Grand Total"},
+				{"label": "Cancel", "value": "__cancel__", "style": "secondary"},
+			],
+		)
 	if "return_against" in blocking:
 		res = results.get("return_against") or {}
 		options = [{"label": c["display_name"], "value": c["name"]} for c in res.get("candidates") or []][:5]
-		options += [{"label": "Create it without linking the original invoice", "value": "__none__", "style": "secondary"},
-			{"label": "Cancel", "value": "__cancel__", "style": "secondary"}]
-		return ctx.ask("return_against", f"{blocking['return_against'][0]['message']}. Which original {d.target_doctype} does this note return? "
-			"You can type its ID.", key="return_against", options=options, input="text")
+		options += [
+			{
+				"label": "Create it without linking the original invoice",
+				"value": "__none__",
+				"style": "secondary",
+			},
+			{"label": "Cancel", "value": "__cancel__", "style": "secondary"},
+		]
+		return ctx.ask(
+			"return_against",
+			f"{blocking['return_against'][0]['message']}. Which original {d.target_doctype} does this note return? "
+			"You can type its ID.",
+			key="return_against",
+			options=options,
+			input="text",
+		)
 	if "material_request_type" in blocking:
 		res = results.get("material_request_type") or {}
-		return ctx.ask("material_request_type", f"{res.get('message') or 'The purpose is missing'}. What is this material request for?",
-			key="material_request_type", options=[{"label": c["display_name"], "value": c["name"]} for c in res.get("candidates") or []])
+		return ctx.ask(
+			"material_request_type",
+			f"{res.get('message') or 'The purpose is missing'}. What is this material request for?",
+			key="material_request_type",
+			options=[{"label": c["display_name"], "value": c["name"]} for c in res.get("candidates") or []],
+		)
 	other = [e for field, errs in blocking.items() for e in errs]
 	if other:
-		return ctx.ask("blocked", "I can't continue because:\n" + "\n".join(f"• {e['message']}" for e in other)
-			+ "\nYou can correct this in ERPNext and say “retry”, or cancel.", options=[{"label": "Retry", "value": "__retry__"}, {"label": "Cancel", "value": "__cancel__"}])
+		return ctx.ask(
+			"blocked",
+			"I can't continue because:\n"
+			+ "\n".join(f"• {e['message']}" for e in other)
+			+ "\nYou can correct this in ERPNext and say “retry”, or cancel.",
+			options=[{"label": "Retry", "value": "__retry__"}, {"label": "Cancel", "value": "__cancel__"}],
+		)
 
 	warnings = {w["code"] for w in validation.get("warnings", [])}
 	if "taxes_not_mapped" in warnings and not acks.get("taxes"):
@@ -1064,9 +1431,16 @@ def _plan(ctx, entry, results, validation, mapped, d):
 	data_codes = sorted({e["code"] for e in errors if e.get("category") == "data"})
 	if data_codes and not set(data_codes) <= set(acks.get("data_errors") or []):
 		msgs = [e["message"] for e in errors if e.get("category") == "data"]
-		return ctx.ask("data_errors", "Some values on the document don't add up:\n" + "\n".join(f"• {m}" for m in msgs)
+		return ctx.ask(
+			"data_errors",
+			"Some values on the document don't add up:\n"
+			+ "\n".join(f"• {m}" for m in msgs)
 			+ "\nI won't change the numbers. You can correct them now (for example “row 1 item …”), or create the draft and fix it in ERPNext before submitting.",
-			options=[{"label": "Create the draft anyway; I'll fix it in ERPNext", "value": "__ack__"}, {"label": "Cancel", "value": "__cancel__"}])
+			options=[
+				{"label": "Create the draft anyway; I'll fix it in ERPNext", "value": "__ack__"},
+				{"label": "Cancel", "value": "__cancel__"},
+			],
+		)
 	return None
 
 
@@ -1085,10 +1459,23 @@ def _q_master_choice(ctx, key, res, row=None, doctype="Customer"):
 	else:
 		text = f"{where}I couldn't find the {label} “{shown}” in ERPNext."
 	text += f" Pick one, type a name to search, or create a new {doctype.lower()}."
-	options = [{"label": c["display_name"] + (f" ({c['name']})" if c["name"] != c["display_name"] else ""), "value": c["name"]}
-		for c in (res.get("candidates") or [])[:5]]
-	options.append({"label": f"Create new {doctype.lower()}" + (f" “{shown}”" if shown else ""), "value": "__create__", "style": "secondary"})
-	return ctx.ask("item" if doctype == "Item" else doctype.lower(), text, key=key, options=options, input="text")
+	options = [
+		{
+			"label": c["display_name"] + (f" ({c['name']})" if c["name"] != c["display_name"] else ""),
+			"value": c["name"],
+		}
+		for c in (res.get("candidates") or [])[:5]
+	]
+	options.append(
+		{
+			"label": f"Create new {doctype.lower()}" + (f" “{shown}”" if shown else ""),
+			"value": "__create__",
+			"style": "secondary",
+		}
+	)
+	return ctx.ask(
+		"item" if doctype == "Item" else doctype.lower(), text, key=key, options=options, input="text"
+	)
 
 
 def _q_uom(ctx, row, results, mapped, errors):
@@ -1096,26 +1483,43 @@ def _q_uom(ctx, row, results, mapped, errors):
 	res = results.get(f"item_{row}_uom") or {}
 	stock_uom = item.get("stock_uom")
 	if any(e["code"] == "uom_no_conversion" for e in errors):
-		text = (f"Row {row}: the document's unit “{item.get('uom')}” has no conversion to the item's stock unit "
-			f"“{stock_uom}” in ERPNext. Which unit should I use?")
+		text = (
+			f"Row {row}: the document's unit “{item.get('uom')}” has no conversion to the item's stock unit "
+			f"“{stock_uom}” in ERPNext. Which unit should I use?"
+		)
 	else:
 		text = f"Row {row}: I couldn't match the unit “{res.get('input') or ''}”. Which unit should I use?"
 	options = []
 	if item.get("item_code"):
-		uoms = [stock_uom] + frappe.get_all("UOM Conversion Detail", filters={"parent": item["item_code"], "parenttype": "Item"}, pluck="uom")
+		uoms = [
+			stock_uom,
+			*frappe.get_all(
+				"UOM Conversion Detail",
+				filters={"parent": item["item_code"], "parenttype": "Item"},
+				pluck="uom",
+			),
+		]
 		options = [{"label": u, "value": u} for u in dict.fromkeys(u for u in uoms if u)]
 	return ctx.ask("uom", text, key=f"item_{row}_uom", options=options, input="text")
 
 
-DATE_LABELS = {"posting_date": "posting date", "transaction_date": "document date", "due_date": "due date", "delivery_date": "delivery date",
-	"schedule_date": "required-by date", "valid_till": "valid-till date"}
+DATE_LABELS = {
+	"posting_date": "posting date",
+	"transaction_date": "document date",
+	"due_date": "due date",
+	"delivery_date": "delivery date",
+	"schedule_date": "required-by date",
+	"valid_till": "valid-till date",
+}
 
 
 def _q_date(ctx, key, res, errors, posting=None, definition=None):
 	label = DATE_LABELS.get(key, "date")
 	if any(e["code"] == "no_fiscal_year" for e in errors):
-		text = (f"{errors[0]['message']} Which {label} should I use instead? If the document date is right, "
-			"ask your administrator to add that Fiscal Year and then say “retry”.")
+		text = (
+			f"{errors[0]['message']} Which {label} should I use instead? If the document date is right, "
+			"ask your administrator to add that Fiscal Year and then say “retry”."
+		)
 	elif any(e["code"].endswith("_before_date") or e["code"] == "due_before_posting" for e in errors):
 		text = f"{errors[0]['message']}. Which {label} should I use?"
 	elif res.get("status") == "NOT_PROVIDED" or not res.get("input"):
@@ -1123,8 +1527,11 @@ def _q_date(ctx, key, res, errors, posting=None, definition=None):
 	else:
 		text = f"{res.get('message') or errors[0]['message']}. Which {label} should I use?"
 	first = definition.date_field if definition else "posting_date"
-	options = [{"label": f"Today ({nowdate()})", "value": nowdate()}] if key == first else (
-		[{"label": f"Same as the document date ({posting})", "value": posting}] if posting else [])
+	options = (
+		[{"label": f"Today ({nowdate()})", "value": nowdate()}]
+		if key == first
+		else ([{"label": f"Same as the document date ({posting})", "value": posting}] if posting else [])
+	)
 	return ctx.ask(key, text, key=key, options=options, input="date")
 
 
@@ -1137,13 +1544,24 @@ def _q_currency(ctx, mapped, errors, d):
 	if mismatch:
 		allowed = [c for c in [_required_party_currency(mapped, d)] if c and c != mapped.get("currency")]
 		account = "receivable" if d.party_doctype == "Customer" else "payable"
-		text = (f"{mismatch['message']} Options: use {allowed[0] if allowed else 'the account currency'} only if the document's "
+		text = (
+			f"{mismatch['message']} Options: use {allowed[0] if allowed else 'the account currency'} only if the document's "
 			f"amounts really are in that currency (I won't convert them), or ask an accountant to add a {account} account "
-			f"in {mapped.get('currency')} for this {d.party_doctype.lower()} (or enable multi-currency invoices in Accounts Settings) and then say “retry”.")
+			f"in {mapped.get('currency')} for this {d.party_doctype.lower()} (or enable multi-currency invoices in Accounts Settings) and then say “retry”."
+		)
 		options = [{"label": f"Use {c} (amounts unchanged)", "value": c} for c in allowed]
-		options += [{"label": "Retry", "value": "__retry_check__", "style": "secondary"}, {"label": "Cancel", "value": "__cancel__", "style": "secondary"}]
+		options += [
+			{"label": "Retry", "value": "__retry_check__", "style": "secondary"},
+			{"label": "Cancel", "value": "__cancel__", "style": "secondary"},
+		]
 		return ctx.ask("currency", text, key="currency", options=options)
-	return _q_simple(ctx, "currency", "currency", f"I need the document's currency. {errors[0]['message']}", _currency_options(mapped))
+	return _q_simple(
+		ctx,
+		"currency",
+		"currency",
+		f"I need the document's currency. {errors[0]['message']}",
+		_currency_options(mapped),
+	)
 
 
 def _required_party_currency(mapped, d):
@@ -1162,7 +1580,11 @@ def _required_party_currency(mapped, d):
 
 
 def _currency_options(mapped):
-	company_currency = frappe.get_cached_value("Company", mapped.get("company"), "default_currency") if mapped.get("company") else None
+	company_currency = (
+		frappe.get_cached_value("Company", mapped.get("company"), "default_currency")
+		if mapped.get("company")
+		else None
+	)
 	return [{"label": company_currency, "value": company_currency}] if company_currency else []
 
 
@@ -1170,28 +1592,46 @@ def _warehouse_options(mapped):
 	filters = {"is_group": 0, "disabled": 0}
 	if mapped.get("company"):
 		filters["company"] = mapped["company"]
-	return [{"label": w, "value": w} for w in frappe.get_list("Warehouse", filters=filters, pluck="name", limit=8)]
+	return [
+		{"label": w, "value": w} for w in frappe.get_list("Warehouse", filters=filters, pluck="name", limit=8)
+	]
 
 
 def _q_taxes(ctx, entry, mapped, d):
 	extracted = load_json(entry.extracted_data, {}) or {}
 	canonical = DocumentAdapter(None).adapt(extracted)
-	parts = [f"{t.get('name') or 'Tax'}{(' ' + str(t.get('rate')) + '%') if t.get('rate') not in (None, '') else ''}: {t.get('amount')}"
-		for t in (extracted.get("taxes") or []) if isinstance(t, dict)]
-	tax_text = f"tax of {flt(canonical.get('tax_amount'), 2)}" if canonical.get("tax_amount") is not None else "tax"
+	parts = [
+		f"{t.get('name') or 'Tax'}{(' ' + str(t.get('rate')) + '%') if t.get('rate') not in (None, '') else ''}: {t.get('amount')}"
+		for t in (extracted.get("taxes") or [])
+		if isinstance(t, dict)
+	]
+	tax_text = (
+		f"tax of {flt(canonical.get('tax_amount'), 2)}" if canonical.get("tax_amount") is not None else "tax"
+	)
 	if parts:
 		tax_text += " (" + ", ".join(parts) + ")"
 	template = d.tax_template_doctype
-	templates = frappe.get_list(template, filters={"company": mapped.get("company"), "disabled": 0}, pluck="name", limit=10) if mapped.get("company") else []
+	templates = (
+		frappe.get_list(
+			template, filters={"company": mapped.get("company"), "disabled": 0}, pluck="name", limit=10
+		)
+		if mapped.get("company")
+		else []
+	)
 	if templates:
 		text = f"The document shows {tax_text}. Which {template} should I apply? ERPNext will calculate the tax rows."
 		options = [{"label": t, "value": t} for t in templates]
 	else:
-		text = (f"The document shows {tax_text}, but there is no {template} for {mapped.get('company')}, "
+		text = (
+			f"The document shows {tax_text}, but there is no {template} for {mapped.get('company')}, "
 			"so I can't add tax rows. The draft would be created without tax and its total would be lower than the document; "
-			"add the taxes in ERPNext before submitting.")
+			"add the taxes in ERPNext before submitting."
+		)
 		options = []
-	options += [{"label": "Create the draft without taxes", "value": "__none__", "style": "secondary"}, {"label": "Cancel", "value": "__cancel__"}]
+	options += [
+		{"label": "Create the draft without taxes", "value": "__none__", "style": "secondary"},
+		{"label": "Cancel", "value": "__cancel__"},
+	]
 	return ctx.ask("taxes", text, key="taxes_and_charges", options=options)
 
 
@@ -1199,24 +1639,34 @@ def _role_text(cls):
 	role = cls.get("our_role")
 	if role == "internal":
 		return f"{cls.get('company')} (internal document)"
-	return f"{cls.get('company')} is the {role}" + (" (your choice)" if cls.get("role_source") == "selected" else "")
+	return f"{cls.get('company')} is the {role}" + (
+		" (your choice)" if cls.get("role_source") == "selected" else ""
+	)
 
 
 def _ask_confirm(ctx, entry, mapped, validation, d):
 	extracted = load_json(entry.extracted_data, {}) or {}
 	canonical = DocumentAdapter(None).adapt(extracted)
 	cls = _classification(entry)
-	rows = [{"label": "Source document", "value": _describe(cls)}, {"label": "Your company", "value": _role_text(cls)},
-		{"label": "Will create", "value": f"Draft {d.display}"}]
+	rows = [
+		{"label": "Source document", "value": _describe(cls)},
+		{"label": "Your company", "value": _role_text(cls)},
+		{"label": "Will create", "value": f"Draft {d.display}"},
+	]
 	if d.party_field:
 		rows.append({"label": d.party_doctype, "value": mapped.get(d.party_field)})
 	if d.target_doctype == "BOM":
-		rows += [{"label": "Finished item", "value": mapped.get("item")}, {"label": "Quantity", "value": mapped.get("quantity")}]
+		rows += [
+			{"label": "Finished item", "value": mapped.get("item")},
+			{"label": "Quantity", "value": mapped.get("quantity")},
+		]
 	if d.target_doctype == "Material Request":
 		rows.append({"label": "Purpose", "value": mapped.get("material_request_type")})
 	for key in (d.date_field, d.second_date_field):
 		if key:
-			rows.append({"label": DATE_LABELS[key].capitalize(), "value": mapped.get(key) or "ERPNext default"})
+			rows.append(
+				{"label": DATE_LABELS[key].capitalize(), "value": mapped.get(key) or "ERPNext default"}
+			)
 	if d.currency and d.target_doctype != "BOM":
 		rows.append({"label": "Currency", "value": mapped.get("currency")})
 	if mapped.get("set_warehouse"):
@@ -1224,17 +1674,61 @@ def _ask_confirm(ctx, entry, mapped, validation, d):
 	if d.is_return:
 		rows.append({"label": "Original invoice", "value": mapped.get("return_against") or "Not linked"})
 	if mapped.get("discount_amount"):
-		rows.append({"label": "Discount", "value": f"{flt(mapped['discount_amount'], 2)} on the {(mapped.get('apply_discount_on') or '').lower()}"})
+		rows.append(
+			{
+				"label": "Discount",
+				"value": f"{flt(mapped['discount_amount'], 2)} on the {(mapped.get('apply_discount_on') or '').lower()}",
+			}
+		)
 	if d.tax_template_doctype:
-		rows.append({"label": "Taxes", "value": mapped.get("taxes_and_charges") or ("None (add in ERPNext)" if canonical.get("tax_amount") else "None")})
+		rows.append(
+			{
+				"label": "Taxes",
+				"value": mapped.get("taxes_and_charges")
+				or ("None (add in ERPNext)" if canonical.get("tax_amount") else "None"),
+			}
+		)
 	if d.rate_required:
 		net = sum(abs(flt(i.get("qty"))) * flt(i.get("rate")) for i in mapped.get("items") or [])
-		rows.append({"label": "Net total (qty × rate)", "value": f"{flt(net, 2)} {mapped.get('currency') or ''}".strip()})
-		rows.append({"label": "Total on the document", "value": f"{canonical.get('total_amount')}" if canonical.get("total_amount") is not None else "Not printed"})
-	card = {"type": "draft_preview", "title": f"Draft {d.display}", "rows": rows, "items": [{"name": i.get("item_name") or i.get("item_code"),
-		"code": i.get("item_code"), "qty": i.get("qty"), "uom": i.get("uom"), "rate": i.get("rate"), "amount": i.get("amount")} for i in mapped.get("items") or []]}
-	ctx.ask("confirm", f"Everything required is resolved. Shall I create this {d.display} as a Draft? It will not be submitted.",
-		options=[{"label": f"Create draft {d.target_doctype}", "value": "__create__"}, {"label": "Cancel", "value": "__cancel__", "style": "secondary"}], card=card)
+		rows.append(
+			{
+				"label": "Net total (qty × rate)",
+				"value": f"{flt(net, 2)} {mapped.get('currency') or ''}".strip(),
+			}
+		)
+		rows.append(
+			{
+				"label": "Total on the document",
+				"value": f"{canonical.get('total_amount')}"
+				if canonical.get("total_amount") is not None
+				else "Not printed",
+			}
+		)
+	card = {
+		"type": "draft_preview",
+		"title": f"Draft {d.display}",
+		"rows": rows,
+		"items": [
+			{
+				"name": i.get("item_name") or i.get("item_code"),
+				"code": i.get("item_code"),
+				"qty": i.get("qty"),
+				"uom": i.get("uom"),
+				"rate": i.get("rate"),
+				"amount": i.get("amount"),
+			}
+			for i in mapped.get("items") or []
+		],
+	}
+	ctx.ask(
+		"confirm",
+		f"Everything required is resolved. Shall I create this {d.display} as a Draft? It will not be submitted.",
+		options=[
+			{"label": f"Create draft {d.target_doctype}", "value": "__create__"},
+			{"label": "Cancel", "value": "__cancel__", "style": "secondary"},
+		],
+		card=card,
+	)
 
 
 def _describe(cls):
@@ -1246,7 +1740,9 @@ def _describe(cls):
 	if cls.get("recipient"):
 		text += f" to {cls['recipient']}"
 	if not (cls.get("issuer") or cls.get("recipient")) and (cls.get("seller") or cls.get("buyer")):
-		text += f" from {cls.get('seller') or 'an unnamed seller'} to {cls.get('buyer') or 'an unnamed buyer'}"
+		text += (
+			f" from {cls.get('seller') or 'an unnamed seller'} to {cls.get('buyer') or 'an unnamed buyer'}"
+		)
 	if cls.get("source_type") and cls.get("source_type") != KIND_LABELS.get(cls.get("kind")):
 		text += f" (titled “{cls['source_type']}”)"
 	return text
@@ -1268,9 +1764,21 @@ def _option_value(pending, text):
 	return ordinal_option(pending, text)
 
 
-ROLE_RE = re.compile(r"\b(?P<role>seller|selling|sold|supplier|vendor|buyer|buying|bought|customer|purchaser)\b", re.I)
-_ROLE_WORDS = {"seller": "seller", "selling": "seller", "sold": "seller", "supplier": "seller", "vendor": "seller",
-	"buyer": "buyer", "buying": "buyer", "bought": "buyer", "customer": "buyer", "purchaser": "buyer"}
+ROLE_RE = re.compile(
+	r"\b(?P<role>seller|selling|sold|supplier|vendor|buyer|buying|bought|customer|purchaser)\b", re.I
+)
+_ROLE_WORDS = {
+	"seller": "seller",
+	"selling": "seller",
+	"sold": "seller",
+	"supplier": "seller",
+	"vendor": "seller",
+	"buyer": "buyer",
+	"buying": "buyer",
+	"bought": "buyer",
+	"customer": "buyer",
+	"purchaser": "buyer",
+}
 
 
 def _answer(ctx, pending, value, from_text, correction=False):
@@ -1285,10 +1793,24 @@ def _answer(ctx, pending, value, from_text, correction=False):
 		return forms.answer(ctx, pending, value, from_text)
 	if from_text and not correction:
 		value = _option_value(pending, value) or value
-		if NO_RE.match(value) and kind in ("confirm", "data_errors", "duplicate", "replace_operation", "master_confirm"):
+		if NO_RE.match(value) and kind in (
+			"confirm",
+			"data_errors",
+			"duplicate",
+			"replace_operation",
+			"master_confirm",
+		):
 			value = "__cancel__" if kind != "replace_operation" else "__keep__"
-		elif YES_RE.match(value) and kind in ("confirm", "data_errors", "duplicate", "master_confirm", "use_existing"):
-			value = {"confirm": "__create__", "master_confirm": "__create__", "use_existing": "__use__"}.get(kind, "__ack__")
+		elif YES_RE.match(value) and kind in (
+			"confirm",
+			"data_errors",
+			"duplicate",
+			"master_confirm",
+			"use_existing",
+		):
+			value = {"confirm": "__create__", "master_confirm": "__create__", "use_existing": "__use__"}.get(
+				kind, "__ack__"
+			)
 		elif kind == "role" and value not in ("seller", "buyer", "__company__", "__cancel__"):
 			m = ROLE_RE.search(value or "")
 			value = _ROLE_WORDS[m.group("role").lower()] if m else value
@@ -1309,8 +1831,12 @@ def _answer(ctx, pending, value, from_text, correction=False):
 		if value == "__company__":
 			from ai_erpnext.mapping.mapper import company_context
 
-			return ctx.ask("company", "Which of your companies is this document for?", key="company",
-				options=[{"label": c, "value": c} for c in company_context()[0][:20]])
+			return ctx.ask(
+				"company",
+				"Which of your companies is this document for?",
+				key="company",
+				options=[{"label": c, "value": c} for c in company_context()[0][:20]],
+			)
 		if value not in ("seller", "buyer"):
 			ctx.say("Please choose whether your company is the seller or the buyer, or cancel.")
 			return advance(ctx)
@@ -1328,7 +1854,9 @@ def _answer(ctx, pending, value, from_text, correction=False):
 		return _set_master(ctx, "currency", value, CurrencyMatcher(), "currency", from_text=from_text)
 	if kind == "warehouse":
 		mapped = load_json(_entry(ctx).mapped_data, {}) or {}
-		return _set_master(ctx, "warehouse", value, WarehouseMatcher(mapped.get("company")), "warehouse", from_text=from_text)
+		return _set_master(
+			ctx, "warehouse", value, WarehouseMatcher(mapped.get("company")), "warehouse", from_text=from_text
+		)
 	if kind in DATE_LABELS:
 		return _set_date(ctx, kind, value)
 	if kind == "discount_base":
@@ -1349,12 +1877,16 @@ def _answer(ctx, pending, value, from_text, correction=False):
 	if kind == "data_errors":
 		if value == "__ack__":
 			validation = load_json(_entry(ctx).validation_results, {}) or {}
-			ctx.st.setdefault("acks", {})["data_errors"] = sorted({e["code"] for e in validation.get("errors", []) if e.get("category") == "data"})
+			ctx.st.setdefault("acks", {})["data_errors"] = sorted(
+				{e["code"] for e in validation.get("errors", []) if e.get("category") == "data"}
+			)
 		return advance(ctx)
 	if kind == "duplicate":
 		if value == "__ack__":
 			validation = load_json(_entry(ctx).validation_results, {}) or {}
-			ctx.st.setdefault("acks", {})["duplicate"] = sorted(d["name"] for d in validation.get("duplicates") or [])
+			ctx.st.setdefault("acks", {})["duplicate"] = sorted(
+				d["name"] for d in validation.get("duplicates") or []
+			)
 		return advance(ctx)
 	if kind == "confirm":
 		if value == "__create__":
@@ -1403,7 +1935,11 @@ def _set_master(ctx, key, value, matcher, label, confirm_key=None, from_text=Tru
 		if res.matched:
 			row = {"name": res.name}
 		elif res.candidates:
-			ctx.say(f"“{value}” could be several {label}s: " + ", ".join(c["name"] for c in res.candidates[:5]) + ". Please pick one.")
+			ctx.say(
+				f"“{value}” could be several {label}s: "
+				+ ", ".join(c["name"] for c in res.candidates[:5])
+				+ ". Please pick one."
+			)
 			return advance(ctx)
 		else:
 			row = matcher.resolve_name(value)  # an exact record ID typed by the user
@@ -1421,7 +1957,11 @@ def _set_date(ctx, key, value):
 		value = nowdate()
 	parsed = parse_date(value)
 	if not parsed.ok:
-		ctx.say("Please give the date as YYYY-MM-DD." if not parsed.ambiguous else "That date could be read two ways. Please use YYYY-MM-DD.")
+		ctx.say(
+			"Please give the date as YYYY-MM-DD."
+			if not parsed.ambiguous
+			else "That date could be read two ways. Please use YYYY-MM-DD."
+		)
 		return advance(ctx)
 	ctx.say(f"Using {DATE_LABELS.get(key, 'date')} {parsed.value}.")
 	return _set_overrides(ctx, {key: parsed.value}, "date")
@@ -1441,7 +1981,12 @@ def _answer_master_choice(ctx, key, value, from_text):
 	is_item = key.startswith("item_") or key == "bom_item"
 	results = load_json(entry.mapping_results, {}) or {}
 	res = results.get(key) or {}
-	if value == "__create__" or (from_text and CREATE_NEW_RE.search(value) and len(value.split()) <= 6 and ("new" in value.lower() or "create" in value.lower())):
+	if value == "__create__" or (
+		from_text
+		and CREATE_NEW_RE.search(value)
+		and len(value.split()) <= 6
+		and ("new" in value.lower() or "create" in value.lower())
+	):
 		return _start_master(ctx, key, entry, res)
 	if value.startswith("__create__:"):
 		return _start_master(ctx, key, entry, res, name=value.split(":", 1)[1])
@@ -1459,10 +2004,28 @@ def _answer_master_choice(ctx, key, value, from_text):
 		if row:
 			ctx.say(f"Using {label} {row['name']}.")
 			return _set_overrides(ctx, {key: row["name"]}, label)
-	options = [{"label": c["display_name"] + (f" ({c['name']})" if c["name"] != c["display_name"] else ""), "value": c["name"]} for c in found.candidates[:5]]
-	options.append({"label": f"Create new {label} “{value}”", "value": f"__create__:{value}", "style": "secondary"})
-	text = (f"Several {label}s match “{value}”. Which one?" if found.candidates else f"I couldn't find a {label} matching “{value}”.")
-	ctx.ask("item" if is_item else label, text + " Pick one, search again, or create it.", key=key, options=options, input="text")
+	options = [
+		{
+			"label": c["display_name"] + (f" ({c['name']})" if c["name"] != c["display_name"] else ""),
+			"value": c["name"],
+		}
+		for c in found.candidates[:5]
+	]
+	options.append(
+		{"label": f"Create new {label} “{value}”", "value": f"__create__:{value}", "style": "secondary"}
+	)
+	text = (
+		f"Several {label}s match “{value}”. Which one?"
+		if found.candidates
+		else f"I couldn't find a {label} matching “{value}”."
+	)
+	ctx.ask(
+		"item" if is_item else label,
+		text + " Pick one, search again, or create it.",
+		key=key,
+		options=options,
+		input="text",
+	)
 
 
 # --------------------------------------------------------------------------------------------
@@ -1480,25 +2043,41 @@ def _start_master(ctx, key, entry, res, name=None):
 			src = extracted_rows["items"][row - 1] if len(extracted_rows["items"]) >= row else {}
 			uom = ((mapped.get("items") or [{}] * row)[row - 1]).get("uom")
 		flags = dict(d.item_filters) if d and d.item_filters else ({} if d else {"is_sales_item": 1})
-		draft = masters.item_draft(key, name or src.get("item_name"), src.get("description"), uom, flags=flags or {"is_stock_item": 1})
+		draft = masters.item_draft(
+			key,
+			name or src.get("item_name"),
+			src.get("description"),
+			uom,
+			flags=flags or {"is_stock_item": 1},
+		)
 	elif key == "supplier":
 		draft = masters.supplier_draft(key, name or res.get("input"))
 	else:
 		draft = masters.customer_draft(key, name or res.get("input"))
 	if draft["unsupported_required"]:
-		ctx.say(f"ERPNext requires fields I can't collect here ({', '.join(draft['unsupported_required'])}). "
-			f"Please create the {draft['doctype']} in ERPNext, then pick it here.")
+		ctx.say(
+			f"ERPNext requires fields I can't collect here ({', '.join(draft['unsupported_required'])}). "
+			f"Please create the {draft['doctype']} in ERPNext, then pick it here."
+		)
 		return advance(ctx)
 	if not frappe.has_permission(draft["doctype"], "create"):
-		ctx.say(f"You don't have permission to create {draft['doctype']} records. Please pick an existing one.")
+		ctx.say(
+			f"You don't have permission to create {draft['doctype']} records. Please pick an existing one."
+		)
 		return advance(ctx)
 	existing = masters.find_existing(draft)
 	ctx.st["master"] = draft
 	if existing:
 		draft["existing"] = existing
-		ctx.ask("use_existing", f"A {draft['doctype'].lower()} “{existing}” already exists. Should I use it instead of creating a new one?",
-			options=[{"label": f"Use {existing}", "value": "__use__"}, {"label": "Create a new one anyway", "value": "__new__", "style": "secondary"},
-				{"label": "Back", "value": "__cancel__", "style": "secondary"}])
+		ctx.ask(
+			"use_existing",
+			f"A {draft['doctype'].lower()} “{existing}” already exists. Should I use it instead of creating a new one?",
+			options=[
+				{"label": f"Use {existing}", "value": "__use__"},
+				{"label": "Create a new one anyway", "value": "__new__", "style": "secondary"},
+				{"label": "Back", "value": "__cancel__", "style": "secondary"},
+			],
+		)
 		return
 	ctx.say(f"OK, let's create a new {draft['doctype']}. I'll only ask for what ERPNext requires.")
 	return _master_next(ctx)
@@ -1521,14 +2100,36 @@ def _master_next(ctx):
 		spec = masters.FIELDS[draft["doctype"]][field]
 		options = masters.field_options(draft["doctype"], field)
 		prompt = MASTER_PROMPTS.get(field, f"Which {spec['label']} should I use?")
-		if field == "item_code" and draft["values"].get("item_name") and not readable_exists("Item", draft["values"]["item_name"]):
-			options = [{"label": f"Use the item name: {draft['values']['item_name']}", "value": draft["values"]["item_name"]}] + options
-		ctx.ask("master_field", prompt, key=field, options=options, input=None if spec["type"] in ("Select", "Check") else "text")
+		if (
+			field == "item_code"
+			and draft["values"].get("item_name")
+			and not readable_exists("Item", draft["values"]["item_name"])
+		):
+			options = [
+				{
+					"label": f"Use the item name: {draft['values']['item_name']}",
+					"value": draft["values"]["item_name"],
+				},
+				*options,
+			]
+		ctx.ask(
+			"master_field",
+			prompt,
+			key=field,
+			options=options,
+			input=None if spec["type"] in ("Select", "Check") else "text",
+		)
 		return
-	ctx.ask("master_confirm", f"Create this {draft['doctype']} in ERPNext? You can still change a value, for example "
+	ctx.ask(
+		"master_confirm",
+		f"Create this {draft['doctype']} in ERPNext? You can still change a value, for example "
 		f"“set {MASTER_GROUP_FIELD[draft['doctype']]} to …”.",
-		options=[{"label": f"Create {draft['doctype']}", "value": "__create__"}, {"label": "Back", "value": "__cancel__", "style": "secondary"}],
-		card={"type": "master_preview", "title": f"New {draft['doctype']}", "rows": masters.summary(draft)})
+		options=[
+			{"label": f"Create {draft['doctype']}", "value": "__create__"},
+			{"label": "Back", "value": "__cancel__", "style": "secondary"},
+		],
+		card={"type": "master_preview", "title": f"New {draft['doctype']}", "rows": masters.summary(draft)},
+	)
 
 
 def _master_correction(ctx, fieldname, value):
@@ -1577,8 +2178,17 @@ def _answer_master(ctx, pending, value):
 			ctx.say(f"ERPNext didn't accept the {draft['doctype'].lower()}: {_safe_error(e)}")
 			return _master_next(ctx)
 		ctx.st["master"] = None
-		ctx.say(f"{draft['doctype']} {name} created.", card={"type": "created", "title": f"{draft['doctype']} created",
-			"doctype": draft["doctype"], "name": name, "rows": [{"label": draft["doctype"], "value": name}], "action_label": f"Open {draft['doctype']}"})
+		ctx.say(
+			f"{draft['doctype']} {name} created.",
+			card={
+				"type": "created",
+				"title": f"{draft['doctype']} created",
+				"doctype": draft["doctype"],
+				"name": name,
+				"rows": [{"label": draft["doctype"], "value": name}],
+				"action_label": f"Open {draft['doctype']}",
+			},
+		)
 		return _set_overrides(ctx, {draft["for_key"]: name}, draft["doctype"].lower())
 
 
@@ -1592,8 +2202,11 @@ def _create_document(ctx):
 	acks = ctx.st.get("acks") or {}
 	frappe.db.savepoint("ai_chat_create")
 	try:
-		result = create_document(entry.name, acknowledge_errors=1 if acks.get("data_errors") else 0,
-			acknowledge_duplicate=1 if acks.get("duplicate") else 0)
+		result = create_document(
+			entry.name,
+			acknowledge_errors=1 if acks.get("data_errors") else 0,
+			acknowledge_duplicate=1 if acks.get("duplicate") else 0,
+		)
 	except Exception as e:
 		frappe.db.rollback(save_point="ai_chat_create")
 		frappe.local.message_log = []
@@ -1627,19 +2240,33 @@ def _creation_failed(ctx, reason):
 	if pending and pending.get("kind") == "confirm":
 		ctx.msgs.pop()  # drop the identical confirmation that advance() just added
 		ctx.st["pending"] = None
-		ctx.ask("blocked", "Nothing was created. Correct the problem above (in ERPNext, or tell me the corrected value), then choose Retry.",
-			options=[{"label": "Retry", "value": "__retry__"}, {"label": "Cancel", "value": "__cancel__", "style": "secondary"}])
+		ctx.ask(
+			"blocked",
+			"Nothing was created. Correct the problem above (in ERPNext, or tell me the corrected value), then choose Retry.",
+			options=[
+				{"label": "Retry", "value": "__retry__"},
+				{"label": "Cancel", "value": "__cancel__", "style": "secondary"},
+			],
+		)
 	return before
 
 
-PARTY_FIELDS = (("customer_name", "Customer"), ("customer", "Customer"), ("supplier_name", "Supplier"), ("supplier", "Supplier"), ("party_name", "Customer"))
+PARTY_FIELDS = (
+	("customer_name", "Customer"),
+	("customer", "Customer"),
+	("supplier_name", "Supplier"),
+	("supplier", "Supplier"),
+	("party_name", "Customer"),
+)
 
 
 def _created_card(doctype, name, doc=None, status=None):
 	doc = doc or frappe.get_doc(doctype, name)
 	status = status or ("Draft" if doc.docstatus == 0 else "Submitted" if doc.docstatus == 1 else "Cancelled")
 	rows = [{"label": "ID", "value": name}]
-	party = next(((label, doc.get(f)) for f, label in PARTY_FIELDS if doc.meta.has_field(f) and doc.get(f)), None)
+	party = next(
+		((label, doc.get(f)) for f, label in PARTY_FIELDS if doc.meta.has_field(f) and doc.get(f)), None
+	)
 	if party:
 		rows.append({"label": party[0], "value": party[1]})
 	if doctype == "BOM":
@@ -1648,9 +2275,21 @@ def _created_card(doctype, name, doc=None, status=None):
 	if date:
 		rows.append({"label": "Posting date" if doc.get("posting_date") else "Date", "value": str(date)})
 	if doc.meta.has_field("grand_total"):
-		rows.append({"label": "Grand total", "value": f"{flt(doc.get('grand_total'), 2)} {doc.get('currency') or ''}".strip()})
+		rows.append(
+			{
+				"label": "Grand total",
+				"value": f"{flt(doc.get('grand_total'), 2)} {doc.get('currency') or ''}".strip(),
+			}
+		)
 	rows.append({"label": "Status", "value": status})
-	return {"type": "created", "title": f"{doctype} {name}", "doctype": doctype, "name": name, "action_label": f"Open {doctype}", "rows": rows}
+	return {
+		"type": "created",
+		"title": f"{doctype} {name}",
+		"doctype": doctype,
+		"name": name,
+		"action_label": f"Open {doctype}",
+		"rows": rows,
+	}
 
 
 def _announce(ctx, entry):
@@ -1669,9 +2308,17 @@ def _announce(ctx, entry):
 		note = None if status == "ok" else (r.get("message") or ("Not found" if status == "error" else None))
 		return {"label": label, "value": shown or "Not on document", "status": status, "note": note}
 
-	rows = [{"label": "Document", "value": _describe(cls), "status": "ok" if cls.get("status") == "ok" else "warn"}]
+	rows = [
+		{
+			"label": "Document",
+			"value": _describe(cls),
+			"status": "ok" if cls.get("status") == "ok" else "warn",
+		}
+	]
 	if d:
-		rows.append({"label": "For your company", "value": f"{_role_text(cls)}: a Draft {d.display}", "status": "ok"})
+		rows.append(
+			{"label": "For your company", "value": f"{_role_text(cls)}: a Draft {d.display}", "status": "ok"}
+		)
 		if d.party_doctype:
 			rows.append(row(d.party_doctype, d.party_doctype.lower()))
 		for key in (d.date_field, d.second_date_field):
@@ -1680,23 +2327,59 @@ def _announce(ctx, entry):
 		if d.currency and d.target_doctype != "BOM":
 			rows.append(row("Currency", "currency"))
 	else:
-		rows.append({"label": "For your company", "value": cls.get("message") or "Not determined yet", "status": "warn"})
+		rows.append(
+			{
+				"label": "For your company",
+				"value": cls.get("message") or "Not determined yet",
+				"status": "warn",
+			}
+		)
 
 	items = []
 	for i, it in enumerate(mapped.get("items") or [], start=1):
 		ir, ur = results.get(f"item_{i}") or {}, results.get(f"item_{i}_uom") or {}
-		items.append({"name": ir.get("input") or it.get("description"), "matched": it.get("item_code"),
-			"status": "ok" if it.get("item_code") else "error", "qty": it.get("qty"),
-			"uom": (f"{ur.get('input')} → {it.get('uom')}" if ur.get("input") and it.get("uom") and ur.get("input") != it.get("uom") else (it.get("uom") or ur.get("input"))),
-			"rate": it.get("rate"), "amount": it.get("amount")})
-	notes = [w["message"] for w in validation.get("warnings", []) if w["code"].startswith(("uom_", "currency_defaulted", "foreign_currency", "item_", "apply_discount_on"))]
-	card = {"type": "summary", "title": f"{(d.display if d else 'Document')} {canonical.get('invoice_number') or ''}".strip(),
-		"rows": rows, "items": items, "totals": {"subtotal": canonical.get("subtotal"), "discount": canonical.get("discount_amount"),
-			"tax": canonical.get("tax_amount"), "total": canonical.get("total_amount")}, "notes": notes[:5]}
+		items.append(
+			{
+				"name": ir.get("input") or it.get("description"),
+				"matched": it.get("item_code"),
+				"status": "ok" if it.get("item_code") else "error",
+				"qty": it.get("qty"),
+				"uom": (
+					f"{ur.get('input')} → {it.get('uom')}"
+					if ur.get("input") and it.get("uom") and ur.get("input") != it.get("uom")
+					else (it.get("uom") or ur.get("input"))
+				),
+				"rate": it.get("rate"),
+				"amount": it.get("amount"),
+			}
+		)
+	notes = [
+		w["message"]
+		for w in validation.get("warnings", [])
+		if w["code"].startswith(
+			("uom_", "currency_defaulted", "foreign_currency", "item_", "apply_discount_on")
+		)
+	]
+	card = {
+		"type": "summary",
+		"title": f"{(d.display if d else 'Document')} {canonical.get('invoice_number') or ''}".strip(),
+		"rows": rows,
+		"items": items,
+		"totals": {
+			"subtotal": canonical.get("subtotal"),
+			"discount": canonical.get("discount_amount"),
+			"tax": canonical.get("tax_amount"),
+			"total": canonical.get("total_amount"),
+		},
+		"notes": notes[:5],
+	}
 	matched_items = sum(1 for i in items if i["matched"])
 	what = f"a {d.display} for your company" if d else "a document I can't classify yet"
-	ctx.say(f"I've read the document: it is {what}. {len(items)} line item{'s' if len(items) != 1 else ''}, {matched_items} matched to ERPNext items. "
-		"I'll ask only about what still needs your input.", card=card)
+	ctx.say(
+		f"I've read the document: it is {what}. {len(items)} line item{'s' if len(items) != 1 else ''}, {matched_items} matched to ERPNext items. "
+		"I'll ask only about what still needs your input.",
+		card=card,
+	)
 
 
 def _safe_error(exc):

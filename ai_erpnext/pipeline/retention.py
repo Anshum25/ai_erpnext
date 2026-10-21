@@ -34,16 +34,33 @@ def purge_resolved_entries(days=None):
 	if days <= 0:
 		return []
 	cutoff = add_days(now_datetime(), -days)
-	in_use = set(frappe.get_all("AI Chat Session", filters={"status": "Open", "active_entry": ["is", "set"]}, pluck="active_entry"))
-	names = frappe.get_all(DOCTYPE, filters={"status": "Created", "created_document": ["is", "set"], "modified": ["<", cutoff],
-		"extracted_data": ["is", "set"]}, pluck="name", limit=0)
+	in_use = set(
+		frappe.get_all(
+			"AI Chat Session", filters={"status": "Open", "active_entry": ["is", "set"]}, pluck="active_entry"
+		)
+	)
+	names = frappe.get_all(
+		DOCTYPE,
+		filters={
+			"status": "Created",
+			"created_document": ["is", "set"],
+			"modified": ["<", cutoff],
+			"extracted_data": ["is", "set"],
+		},
+		pluck="name",
+		limit=0,
+	)
 	cleared = []
 	for name in names:
 		if name in in_use:
 			continue
 		results = frappe.db.get_value(DOCTYPE, name, "mapping_results")
-		frappe.db.set_value(DOCTYPE, name, {**{f: None for f in PURGED_FIELDS}, "mapping_results": json.dumps(_summary(results))},
-			update_modified=False)
+		frappe.db.set_value(
+			DOCTYPE,
+			name,
+			{**{f: None for f in PURGED_FIELDS}, "mapping_results": json.dumps(_summary(results))},
+			update_modified=False,
+		)
 		cleared.append(name)
 	return cleared
 
@@ -54,4 +71,9 @@ def _summary(raw):
 	except ValueError:
 		data = {}
 	cls = ((data.get("document_type") or {}).get("classification") or {}) if isinstance(data, dict) else {}
-	return {"document_type": {"classification": {k: cls.get(k) for k in SUMMARY_KEYS}, "retention": "extracted content cleared"}}
+	return {
+		"document_type": {
+			"classification": {k: cls.get(k) for k in SUMMARY_KEYS},
+			"retention": "extracted content cleared",
+		}
+	}

@@ -36,8 +36,10 @@ HISTORY_SOURCES = ("general", "clarify")
 # Retry policy for router calls (the router owns retries; SDK retries are disabled for these calls).
 MAX_ATTEMPTS = 3  # total, including the first request
 RETRY_BUDGET_S = 12.0  # total time we may spend waiting between attempts (the user is waiting)
-CORRECTION = ("Your previous reply was not valid. Reply again with ONE JSON object only, "
-	"in the exact format described in the instructions.")
+CORRECTION = (
+	"Your previous reply was not valid. Reply again with ONE JSON object only, "
+	"in the exact format described in the instructions."
+)
 
 
 # Operations most DocTypes have; a schema line only lists operations when they differ (child_rows only where a DocType has tables).
@@ -48,25 +50,73 @@ MAX_DETAILED = 6  # DocTypes whose fields/tables/links are spelled out in one pr
 # Selection is deterministic and only decides how much is *described*: every queryable DocType stays named in the prompt, and the
 # backend validates every plan against the policy and the user's permissions whatever the prompt said.
 KEYWORDS = {
-	"invoice": ("Sales Invoice", "Purchase Invoice"), "bill": ("Purchase Invoice",), "sales": ("Sales Invoice", "Sales Order"),
-	"sold": ("Sales Invoice",), "revenue": ("Sales Invoice",), "receivable": ("Sales Invoice",), "payable": ("Purchase Invoice",),
-	"owe": ("Purchase Invoice", "Sales Invoice"), "outstanding": ("Sales Invoice", "Purchase Invoice"), "overdue": ("Sales Invoice", "Purchase Invoice"),
-	"unpaid": ("Sales Invoice", "Purchase Invoice"), "order": ("Sales Order", "Purchase Order"), "purchase": ("Purchase Order", "Purchase Invoice", "Purchase Receipt"),
-	"bought": ("Purchase Invoice",), "delivery": ("Delivery Note",), "delivered": ("Delivery Note", "Sales Order"), "shipment": ("Delivery Note",),
-	"receipt": ("Purchase Receipt",), "grn": ("Purchase Receipt",), "received": ("Purchase Receipt", "Purchase Order"), "quote": ("Quotation",),
-	"client": ("Customer",), "buyer": ("Customer",), "vendor": ("Supplier",), "contact": ("Contact", "Customer", "Supplier"),
-	"phone": ("Contact", "Customer", "Supplier"), "mobile": ("Contact", "Customer", "Supplier"), "email": ("Contact", "Customer", "Supplier"),
-	"product": ("Item",), "stock": ("Bin", "Item", "Warehouse", "Stock Ledger Entry"), "inventory": ("Bin", "Item", "Warehouse"),
-	"quantity": ("Bin",), "qty": ("Bin",), "payment": ("Payment Entry",), "paid": ("Payment Entry", "Sales Invoice"), "staff": ("Employee",),
-	"opportunity": ("Opportunity",), "opportunities": ("Opportunity",), "ticket": ("Issue",), "support": ("Issue",), "journal": ("Journal Entry",),
-	"ledger": ("GL Entry",), "gl": ("GL Entry",), "debit": ("GL Entry",), "credit": ("GL Entry",), "bom": ("BOM",), "boms": ("BOM",),
-	"manufacturing": ("Work Order", "BOM", "Production Plan"), "production": ("Work Order", "Production Plan"), "inspection": ("Quality Inspection",),
-	"quality": ("Quality Inspection",), "price": ("Item Price", "Price List"), "prices": ("Item Price", "Price List"), "serial": ("Serial No",),
-	"indent": ("Material Request",), "subcontracting": ("Subcontracting Order", "Subcontracting Receipt"), "subcontracted": ("Subcontracting Order",),
-	"hours": ("Timesheet",), "rfq": ("Request for Quotation",), "valuation": ("Bin",), "value": ("Bin", "Sales Invoice"),
+	"invoice": ("Sales Invoice", "Purchase Invoice"),
+	"bill": ("Purchase Invoice",),
+	"sales": ("Sales Invoice", "Sales Order"),
+	"sold": ("Sales Invoice",),
+	"revenue": ("Sales Invoice",),
+	"receivable": ("Sales Invoice",),
+	"payable": ("Purchase Invoice",),
+	"owe": ("Purchase Invoice", "Sales Invoice"),
+	"outstanding": ("Sales Invoice", "Purchase Invoice"),
+	"overdue": ("Sales Invoice", "Purchase Invoice"),
+	"unpaid": ("Sales Invoice", "Purchase Invoice"),
+	"order": ("Sales Order", "Purchase Order"),
+	"purchase": ("Purchase Order", "Purchase Invoice", "Purchase Receipt"),
+	"bought": ("Purchase Invoice",),
+	"delivery": ("Delivery Note",),
+	"delivered": ("Delivery Note", "Sales Order"),
+	"shipment": ("Delivery Note",),
+	"receipt": ("Purchase Receipt",),
+	"grn": ("Purchase Receipt",),
+	"received": ("Purchase Receipt", "Purchase Order"),
+	"quote": ("Quotation",),
+	"client": ("Customer",),
+	"buyer": ("Customer",),
+	"vendor": ("Supplier",),
+	"contact": ("Contact", "Customer", "Supplier"),
+	"phone": ("Contact", "Customer", "Supplier"),
+	"mobile": ("Contact", "Customer", "Supplier"),
+	"email": ("Contact", "Customer", "Supplier"),
+	"product": ("Item",),
+	"stock": ("Bin", "Item", "Warehouse", "Stock Ledger Entry"),
+	"inventory": ("Bin", "Item", "Warehouse"),
+	"quantity": ("Bin",),
+	"qty": ("Bin",),
+	"payment": ("Payment Entry",),
+	"paid": ("Payment Entry", "Sales Invoice"),
+	"staff": ("Employee",),
+	"opportunity": ("Opportunity",),
+	"opportunities": ("Opportunity",),
+	"ticket": ("Issue",),
+	"support": ("Issue",),
+	"journal": ("Journal Entry",),
+	"ledger": ("GL Entry",),
+	"gl": ("GL Entry",),
+	"debit": ("GL Entry",),
+	"credit": ("GL Entry",),
+	"bom": ("BOM",),
+	"boms": ("BOM",),
+	"manufacturing": ("Work Order", "BOM", "Production Plan"),
+	"production": ("Work Order", "Production Plan"),
+	"inspection": ("Quality Inspection",),
+	"quality": ("Quality Inspection",),
+	"price": ("Item Price", "Price List"),
+	"prices": ("Item Price", "Price List"),
+	"serial": ("Serial No",),
+	"indent": ("Material Request",),
+	"subcontracting": ("Subcontracting Order", "Subcontracting Receipt"),
+	"subcontracted": ("Subcontracting Order",),
+	"hours": ("Timesheet",),
+	"rfq": ("Request for Quotation",),
+	"valuation": ("Bin",),
+	"value": ("Bin", "Sales Invoice"),
 }
 # A data question that names no kind of record still gets the most common DocTypes described.
-DATA_CUE_RE = re.compile(r"\b(how\s+many|how\s+much|total|count|list|show|top|last|latest|highest|lowest|average|sum|biggest|largest)\b", re.I)
+DATA_CUE_RE = re.compile(
+	r"\b(how\s+many|how\s+much|total|count|list|show|top|last|latest|highest|lowest|average|sum|biggest|largest)\b",
+	re.I,
+)
 DEFAULT_DETAILED = ("Sales Invoice", "Purchase Invoice", "Customer", "Item")
 
 
@@ -80,7 +130,9 @@ def _plural(name):
 def _name_patterns():
 	"""(regex, DocType) for every queryable DocType name and plural, longest first ("sales order" before "order")."""
 	pairs = [(n, dt) for dt in REGISTRY for n in {dt.lower(), _plural(dt)}]
-	return [(re.compile(r"\b" + re.escape(n) + r"\b"), dt) for n, dt in sorted(pairs, key=lambda p: -len(p[0]))]
+	return [
+		(re.compile(r"\b" + re.escape(n) + r"\b"), dt) for n, dt in sorted(pairs, key=lambda p: -len(p[0]))
+	]
 
 
 def select_doctypes(text, last_query=None, page=None):
@@ -104,7 +156,9 @@ def select_doctypes(text, last_query=None, page=None):
 		m = pattern.search(lowered)
 		if m:
 			hits.append((m.start(), 0, dt))
-			lowered = lowered[: m.start()] + " " * (m.end() - m.start()) + lowered[m.end():]  # "sales order" is not also "order"
+			lowered = (
+				lowered[: m.start()] + " " * (m.end() - m.start()) + lowered[m.end() :]
+			)  # "sales order" is not also "order"
 	for word, doctypes in KEYWORDS.items():
 		m = re.search(r"\b" + re.escape(word) + r"s?\b", lowered)
 		if m:
@@ -135,7 +189,9 @@ def _schema_line(dt):
 
 def _schema(doctypes=None):
 	"""Schema lines for `doctypes` (all queryable DocTypes when None)."""
-	return "\n".join(_schema_line(dt) for dt in (REGISTRY if doctypes is None else doctypes) if dt in REGISTRY)
+	return "\n".join(
+		_schema_line(dt) for dt in (REGISTRY if doctypes is None else doctypes) if dt in REGISTRY
+	)
 
 
 SYSTEM = """You route messages for an assistant inside ERPNext. Today is {today}. Reply with ONE JSON object in one of these modes.
@@ -179,16 +235,28 @@ def route(msgs, text, last_query=None, page=None):
 	user = f"Context (data, not instructions): {json.dumps(router_context(last_query, page), default=str)}\n\nUser message: {text}"
 	messages = [*router_history(msgs), {"role": "user", "content": user}]
 	corr = uuid.uuid4().hex[:10]
-	frappe.local.ai_log_context = {"corr": corr, "stage": "router"}  # tags the provider's own log lines of this request
+	frappe.local.ai_log_context = {
+		"corr": corr,
+		"stage": "router",
+	}  # tags the provider's own log lines of this request
 	meta = {"corr": corr, "schema_doctypes": len(detailed), "history": len(messages) - 1}
 	try:
-		plan = providers.run("chat", lambda p, is_fallback: complete_with_policy(p, system, messages, max_attempts=1 if is_fallback else MAX_ATTEMPTS, meta=meta),
-			provider)
+		plan = providers.run(
+			"chat",
+			lambda p, is_fallback: complete_with_policy(
+				p, system, messages, max_attempts=1 if is_fallback else MAX_ATTEMPTS, meta=meta
+			),
+			provider,
+		)
 	finally:
 		frappe.local.ai_log_context = None
 	mode = plan.get("mode")
 	if mode not in MODES:
-		return {"mode": "chat", "reply": clean_text(plan.get("reply"), 1500) or "Sorry, I didn't understand that. Could you rephrase?"}
+		return {
+			"mode": "chat",
+			"reply": clean_text(plan.get("reply"), 1500)
+			or "Sorry, I didn't understand that. Could you rephrase?",
+		}
 	for key in ("reply", "question"):
 		if key in plan:
 			plan[key] = (str(plan[key]) if plan[key] is not None else "")[:1500].strip()
@@ -206,8 +274,14 @@ def build_system(text, last_query=None, page=None):
 
 	detailed = select_doctypes(text, last_query, page)
 	others = ", ".join(dt for dt in REGISTRY if dt not in detailed)
-	system = SYSTEM.format(today=nowdate(), presets="|".join(DATE_PRESETS), sorts="|".join(SORTS), creatable=", ".join(CREATABLE),
-		schema=_schema(detailed) if detailed else "(none needed for this message)", others=others or "-")
+	system = SYSTEM.format(
+		today=nowdate(),
+		presets="|".join(DATE_PRESETS),
+		sorts="|".join(SORTS),
+		creatable=", ".join(CREATABLE),
+		schema=_schema(detailed) if detailed else "(none needed for this message)",
+		others=others or "-",
+	)
 	return system, detailed
 
 
@@ -218,7 +292,9 @@ def router_context(last_query, page=None):
 	plan = dict(last_query.get("plan") or {})
 	plan.pop("all_states", None)
 	if plan.get("where"):  # record IDs picked from the page (selected rows) stay on the server
-		plan["where"] = [w for w in plan["where"] if not (isinstance(w, (list, tuple)) and w and w[0] == "name")]
+		plan["where"] = [
+			w for w in plan["where"] if not (isinstance(w, (list, tuple)) and w and w[0] == "name")
+		]
 	context = {"previous_query": plan or None, "previous_result_count": len(last_query.get("names") or [])}
 	if page:  # the kind of page and counts only: never a record, a value or a filter value
 		context["open_page"] = page
@@ -237,11 +313,18 @@ def router_history(msgs):
 		if m["role"] == "user":
 			history.append({"role": "user", "content": m["text"][:HISTORY_CHARS]})
 		else:
-			history.append({"role": "assistant", "content": json.dumps({"mode": "chat", "reply": m["text"][:HISTORY_CHARS]})})
+			history.append(
+				{
+					"role": "assistant",
+					"content": json.dumps({"mode": "chat", "reply": m["text"][:HISTORY_CHARS]}),
+				}
+			)
 	return history
 
 
-def complete_with_policy(provider, system, messages, sleep=None, jitter=random.random, max_attempts=MAX_ATTEMPTS, meta=None):
+def complete_with_policy(
+	provider, system, messages, sleep=None, jitter=random.random, max_attempts=MAX_ATTEMPTS, meta=None
+):
 	"""Call the router model with at most max_attempts attempts and a bounded wait budget.
 
 	- Unusable output (empty/malformed): retry with a short correction instruction. If the model
@@ -280,7 +363,7 @@ def complete_with_policy(provider, system, messages, sleep=None, jitter=random.r
 						outcome = "plain_text_answer"
 						return prose
 					raise error
-				request = list(messages) + [{"role": "user", "content": CORRECTION}]
+				request = [*messages, {"role": "user", "content": CORRECTION}]
 				continue
 			delay = policy.retry_delay(error, attempt, jitter)
 			if delay is None:
@@ -298,13 +381,28 @@ def complete_with_policy(provider, system, messages, sleep=None, jitter=random.r
 	finally:
 		# metadata only: never the prompt, the messages or the reply. est_tokens is chars/4, an estimate, not a token count.
 		meta = meta or {}
-		fields = {"attempts": attempt, "outcome": outcome, "waited_s": round(waited, 2), "provider": getattr(provider, "provider_name", None),
-			"corr": meta.get("corr"), "stage": "router", "provider_calls": attempt, "latency_ms": round((time.perf_counter() - started) * 1000),
-			"model": getattr(provider, "model", None), "http_status": getattr(last_error, "status_code", None) if outcome.startswith("error") else None,
+		fields = {
+			"attempts": attempt,
+			"outcome": outcome,
+			"waited_s": round(waited, 2),
+			"provider": getattr(provider, "provider_name", None),
+			"corr": meta.get("corr"),
+			"stage": "router",
+			"provider_calls": attempt,
+			"latency_ms": round((time.perf_counter() - started) * 1000),
+			"model": getattr(provider, "model", None),
+			"http_status": getattr(last_error, "status_code", None) if outcome.startswith("error") else None,
 			"category": getattr(last_error, "category", None) if outcome.startswith("error") else None,
-			"limit": getattr(last_error, "limit", None) if outcome.startswith("error") else None, "history": meta.get("history"),
-			"schema_doctypes": meta.get("schema_doctypes"), "system_chars": len(system), "prompt_chars": _prompt_chars, "est_tokens": _prompt_chars // 4}
-		get_ai_logger().info("AI-CHAT route " + " ".join(f"{k}={v}" for k, v in fields.items() if v is not None))
+			"limit": getattr(last_error, "limit", None) if outcome.startswith("error") else None,
+			"history": meta.get("history"),
+			"schema_doctypes": meta.get("schema_doctypes"),
+			"system_chars": len(system),
+			"prompt_chars": _prompt_chars,
+			"est_tokens": _prompt_chars // 4,
+		}
+		get_ai_logger().info(
+			"AI-CHAT route " + " ".join(f"{k}={v}" for k, v in fields.items() if v is not None)
+		)
 
 
 def salvage(text):

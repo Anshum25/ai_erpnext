@@ -56,13 +56,23 @@ class DocumentAdapter(BaseAdapter):
 				)
 				if clean_text(v)
 			],
-			"invoice_number": clean_text(first(data, "invoice_number", "document_number", "invoice_no", "bill_no", "number"), 140),
-			"invoice_date": clean_text(first(data, "invoice_date", "document_date", "posting_date", "date"), 64),
+			"invoice_number": clean_text(
+				first(data, "invoice_number", "document_number", "invoice_no", "bill_no", "number"), 140
+			),
+			"invoice_date": clean_text(
+				first(data, "invoice_date", "document_date", "posting_date", "date"), 64
+			),
 			"due_date": clean_text(data.get("due_date"), 64),
-			"delivery_date": clean_text(first(data, "delivery_date", "required_by_date", "required_by", "schedule_date"), 64),
+			"delivery_date": clean_text(
+				first(data, "delivery_date", "required_by_date", "required_by", "schedule_date"), 64
+			),
 			"valid_till": clean_text(first(data, "valid_till", "valid_until"), 64),
-			"reference_number": clean_text(first(data, "reference_number", "customer_po_number", "po_number"), 140),
-			"original_invoice_number": clean_text(first(data, "original_invoice_number", "against_invoice", "return_against"), 140),
+			"reference_number": clean_text(
+				first(data, "reference_number", "customer_po_number", "po_number"), 140
+			),
+			"original_invoice_number": clean_text(
+				first(data, "original_invoice_number", "against_invoice", "return_against"), 140
+			),
 			"terms": clean_text(first(data, "terms", "payment_terms"), 140),
 			"currency": clean_text(first(data, "currency", "currency_code"), 60),
 			"warehouse": clean_text(first(data, "warehouse", "set_warehouse"), 140),

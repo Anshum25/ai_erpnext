@@ -39,55 +39,142 @@ ISSUER_ROLE = {
 	"material_request": INTERNAL,
 	"bom": INTERNAL,
 }
-KIND_LABELS = {"invoice": "Invoice", "credit_note": "Credit Note", "debit_note": "Debit Note", "purchase_order": "Purchase Order",
-	"sales_order": "Sales Order / Order Confirmation", "quotation": "Quotation", "delivery_note": "Delivery Note",
-	"goods_receipt": "Goods Receipt Note", "material_request": "Material Request", "bom": "Bill of Materials"}
+KIND_LABELS = {
+	"invoice": "Invoice",
+	"credit_note": "Credit Note",
+	"debit_note": "Debit Note",
+	"purchase_order": "Purchase Order",
+	"sales_order": "Sales Order / Order Confirmation",
+	"quotation": "Quotation",
+	"delivery_note": "Delivery Note",
+	"goods_receipt": "Goods Receipt Note",
+	"material_request": "Material Request",
+	"bom": "Bill of Materials",
+}
 
 # Printed titles (normalised) -> kind. "Sales Invoice" and "Purchase Invoice" are both just invoices: which one it is for us
 # depends on who issued it. Titles that are not listed (Proforma Invoice, Packing List ...) are unknown, never guessed.
 SOURCE_ALIASES = {
-	"invoice": "invoice", "sales invoice": "invoice", "purchase invoice": "invoice", "tax invoice": "invoice", "bill": "invoice",
-	"cash memo": "invoice", "commercial invoice": "invoice", "retail invoice": "invoice", "gst invoice": "invoice", "vat invoice": "invoice",
-	"supplier invoice": "invoice", "vendor invoice": "invoice", "customer invoice": "invoice", "invoice sales": "invoice",
-	"credit note": "credit_note", "credit memo": "credit_note", "sales return": "credit_note", "sales invoice return": "credit_note",
-	"debit note": "debit_note", "debit memo": "debit_note", "purchase return": "debit_note", "purchase invoice return": "debit_note",
-	"purchase order": "purchase_order", "po": "purchase_order",
-	"sales order": "sales_order", "order confirmation": "sales_order", "order acknowledgement": "sales_order",
-	"order acknowledgment": "sales_order", "sales order confirmation": "sales_order",
-	"quotation": "quotation", "quote": "quotation", "estimate": "quotation", "sales quotation": "quotation",
-	"supplier quotation": "quotation", "price quotation": "quotation",
-	"delivery note": "delivery_note", "delivery challan": "delivery_note", "dispatch note": "delivery_note", "challan": "delivery_note",
-	"goods receipt note": "goods_receipt", "goods received note": "goods_receipt", "grn": "goods_receipt",
-	"purchase receipt": "goods_receipt", "receiving report": "goods_receipt",
-	"material request": "material_request", "material requisition": "material_request", "purchase requisition": "material_request",
-	"store requisition": "material_request", "indent": "material_request",
-	"bom": "bom", "bill of materials": "bom", "bill of material": "bom",
+	"invoice": "invoice",
+	"sales invoice": "invoice",
+	"purchase invoice": "invoice",
+	"tax invoice": "invoice",
+	"bill": "invoice",
+	"cash memo": "invoice",
+	"commercial invoice": "invoice",
+	"retail invoice": "invoice",
+	"gst invoice": "invoice",
+	"vat invoice": "invoice",
+	"supplier invoice": "invoice",
+	"vendor invoice": "invoice",
+	"customer invoice": "invoice",
+	"invoice sales": "invoice",
+	"credit note": "credit_note",
+	"credit memo": "credit_note",
+	"sales return": "credit_note",
+	"sales invoice return": "credit_note",
+	"debit note": "debit_note",
+	"debit memo": "debit_note",
+	"purchase return": "debit_note",
+	"purchase invoice return": "debit_note",
+	"purchase order": "purchase_order",
+	"po": "purchase_order",
+	"sales order": "sales_order",
+	"order confirmation": "sales_order",
+	"order acknowledgement": "sales_order",
+	"order acknowledgment": "sales_order",
+	"sales order confirmation": "sales_order",
+	"quotation": "quotation",
+	"quote": "quotation",
+	"estimate": "quotation",
+	"sales quotation": "quotation",
+	"supplier quotation": "quotation",
+	"price quotation": "quotation",
+	"delivery note": "delivery_note",
+	"delivery challan": "delivery_note",
+	"dispatch note": "delivery_note",
+	"challan": "delivery_note",
+	"goods receipt note": "goods_receipt",
+	"goods received note": "goods_receipt",
+	"grn": "goods_receipt",
+	"purchase receipt": "goods_receipt",
+	"receiving report": "goods_receipt",
+	"material request": "material_request",
+	"material requisition": "material_request",
+	"purchase requisition": "material_request",
+	"store requisition": "material_request",
+	"indent": "material_request",
+	"bom": "bom",
+	"bill of materials": "bom",
+	"bill of material": "bom",
 }
 
 # The explicit allowlist: (kind, our role) -> registry key of the document we create. None: recognised, but not something we
 # may create (a supplier's quotation is a Supplier Quotation; a customer's goods receipt note is their record, not ours).
 TARGETS = {
-	("invoice", SELLER): "Sales Invoice", ("invoice", BUYER): "Purchase Invoice",
-	("credit_note", SELLER): "Sales Invoice Return", ("credit_note", BUYER): "Purchase Invoice Return",
-	("debit_note", BUYER): "Purchase Invoice Return", ("debit_note", SELLER): "Sales Invoice Return",
-	("purchase_order", BUYER): "Purchase Order", ("purchase_order", SELLER): "Sales Order",
-	("sales_order", SELLER): "Sales Order", ("sales_order", BUYER): "Purchase Order",
-	("quotation", SELLER): "Quotation", ("quotation", BUYER): None,
-	("delivery_note", SELLER): "Delivery Note", ("delivery_note", BUYER): "Purchase Receipt",
-	("goods_receipt", BUYER): "Purchase Receipt", ("goods_receipt", SELLER): None,
-	("material_request", INTERNAL): "Material Request", ("bom", INTERNAL): "BOM",
+	("invoice", SELLER): "Sales Invoice",
+	("invoice", BUYER): "Purchase Invoice",
+	("credit_note", SELLER): "Sales Invoice Return",
+	("credit_note", BUYER): "Purchase Invoice Return",
+	("debit_note", BUYER): "Purchase Invoice Return",
+	("debit_note", SELLER): "Sales Invoice Return",
+	("purchase_order", BUYER): "Purchase Order",
+	("purchase_order", SELLER): "Sales Order",
+	("sales_order", SELLER): "Sales Order",
+	("sales_order", BUYER): "Purchase Order",
+	("quotation", SELLER): "Quotation",
+	("quotation", BUYER): None,
+	("delivery_note", SELLER): "Delivery Note",
+	("delivery_note", BUYER): "Purchase Receipt",
+	("goods_receipt", BUYER): "Purchase Receipt",
+	("goods_receipt", SELLER): None,
+	("material_request", INTERNAL): "Material Request",
+	("bom", INTERNAL): "BOM",
 }
 UNSUPPORTED_REASONS = {
-	("quotation", BUYER): "a supplier's quotation to your company is a Supplier Quotation, which I can't create from an image",
-	("goods_receipt", SELLER): "a customer's goods receipt note is their own record; your delivery is recorded as a Delivery Note",
+	(
+		"quotation",
+		BUYER,
+	): "a supplier's quotation to your company is a Supplier Quotation, which I can't create from an image",
+	(
+		"goods_receipt",
+		SELLER,
+	): "a customer's goods receipt note is their own record; your delivery is recorded as a Delivery Note",
 }
 
 # Statuses: only "ok" may lead to a document.
-OK, UNKNOWN_TYPE, NEEDS_COMPANY, NEEDS_ROLE, CONFLICT, UNSUPPORTED = "ok", "unknown_type", "needs_company", "needs_role", "conflict", "unsupported"
+OK, UNKNOWN_TYPE, NEEDS_COMPANY, NEEDS_ROLE, CONFLICT, UNSUPPORTED = (
+	"ok",
+	"unknown_type",
+	"needs_company",
+	"needs_role",
+	"conflict",
+	"unsupported",
+)
 
 # Legal-form words that don't distinguish two names of the *same* organisation ("AI Test Company Pvt. Ltd." = "AI Test Company").
-_LEGAL_WORDS = {"pvt", "private", "ltd", "limited", "llc", "llp", "inc", "incorporated", "corp", "corporation", "co", "company", "plc",
-	"gmbh", "ag", "sa", "bv", "pte", "pty", "the"}
+_LEGAL_WORDS = {
+	"pvt",
+	"private",
+	"ltd",
+	"limited",
+	"llc",
+	"llp",
+	"inc",
+	"incorporated",
+	"corp",
+	"corporation",
+	"co",
+	"company",
+	"plc",
+	"gmbh",
+	"ag",
+	"sa",
+	"bv",
+	"pte",
+	"pty",
+	"the",
+}
 
 
 @dataclass
@@ -99,17 +186,23 @@ class Classification:
 	seller: str | None = None
 	buyer: str | None = None
 	company: str | None = None
-	company_source: str | None = None  # "selected" (by the user), "document" (named on it and confirmed context), "default"
+	company_source: str | None = (
+		None  # "selected" (by the user), "document" (named on it and confirmed context), "default"
+	)
 	company_candidates: list = field(default_factory=list)
 	our_role: str | None = None
 	role_source: str | None = None  # "document" or "selected"
-	counterparty: str | None = None  # the other party's name as printed (resolved to a Customer/Supplier by the mapper)
+	counterparty: str | None = (
+		None  # the other party's name as printed (resolved to a Customer/Supplier by the mapper)
+	)
 	target_key: str | None = None
 	target_doctype: str | None = None
 	status: str = UNKNOWN_TYPE
 	message: str | None = None
 	confidence: float | None = None
-	ask: str | None = None  # the question that can resolve a non-ok status: "company", "role" or None (cancel only)
+	ask: str | None = (
+		None  # the question that can resolve a non-ok status: "company", "role" or None (cancel only)
+	)
 
 	def to_dict(self):
 		return asdict(self)
@@ -133,7 +226,9 @@ def source_kind(raw):
 	text = normalize_name(raw)
 	if not text:
 		return None
-	return SOURCE_ALIASES.get(text) or SOURCE_ALIASES.get(re.sub(r"\s+(document|copy|original|duplicate)$", "", text))
+	return SOURCE_ALIASES.get(text) or SOURCE_ALIASES.get(
+		re.sub(r"\s+(document|copy|original|duplicate)$", "", text)
+	)
 
 
 def _legal_free(text):
@@ -144,7 +239,9 @@ def company_rows(usable):
 	"""(name, company_name, abbr) of the user's usable companies (names only; already permission-derived)."""
 	if not usable:
 		return []
-	return frappe.get_all("Company", filters={"name": ["in", list(usable)]}, fields=["name", "company_name", "abbr"], limit=0)
+	return frappe.get_all(
+		"Company", filters={"name": ["in", list(usable)]}, fields=["name", "company_name", "abbr"], limit=0
+	)
 
 
 def company_of(name, rows):
@@ -158,13 +255,19 @@ def company_of(name, rows):
 	for r in rows:
 		names = {normalize_name(r.name), normalize_name(r.company_name)}
 		cores = {_legal_free(r.name), _legal_free(r.company_name)} - {""}
-		if wanted in names or (wanted_core and wanted_core in cores) or (r.abbr and text.strip().lower() == r.abbr.lower()):
+		if (
+			wanted in names
+			or (wanted_core and wanted_core in cores)
+			or (r.abbr and text.strip().lower() == r.abbr.lower())
+		):
 			hits.add(r.name)
 	return hits.pop() if len(hits) == 1 else None
 
 
 def _same(a, b):
-	return bool(a and b) and (normalize_name(a) == normalize_name(b) or (_legal_free(a) and _legal_free(a) == _legal_free(b)))
+	return bool(a and b) and (
+		normalize_name(a) == normalize_name(b) or (_legal_free(a) and _legal_free(a) == _legal_free(b))
+	)
 
 
 def evidence(extracted):
@@ -203,14 +306,23 @@ def classify(extracted, usable_companies, default_company=None, selected_company
 	usable_companies: the companies the user may work with (already permission-derived). default_company: the user's
 	validated default (must be usable). selected_company / selected_role: explicit answers given in this conversation."""
 	ev = evidence(extracted)
-	c = Classification(source_type=ev["source_type"], issuer=ev["issuer"], recipient=ev["recipient"], confidence=_confidence(extracted))
+	c = Classification(
+		source_type=ev["source_type"],
+		issuer=ev["issuer"],
+		recipient=ev["recipient"],
+		confidence=_confidence(extracted),
+	)
 	kind = source_kind(ev["source_type"])
 	if kind == "invoice" and ev["is_return"]:
 		kind = "credit_note"  # an invoice flagged as a return; the issuer decides which side's return it is
 	c.kind = kind
 	if not kind:
 		c.status = UNKNOWN_TYPE
-		c.message = (f"I can't tell what kind of document “{ev['source_type']}” is" if ev["source_type"] else "I can't tell what kind of document this is") + "."
+		c.message = (
+			f"I can't tell what kind of document “{ev['source_type']}” is"
+			if ev["source_type"]
+			else "I can't tell what kind of document this is"
+		) + "."
 		return c
 	if c.confidence is not None and c.confidence < DOCUMENT_TYPE_CONFIDENCE_THRESHOLD:
 		c.status = UNKNOWN_TYPE
@@ -233,19 +345,31 @@ def classify(extracted, usable_companies, default_company=None, selected_company
 	if issuer_role in (SELLER, BUYER) and (ev["issuer"] or ev["recipient"]):
 		d_seller = ev["issuer"] if issuer_role == SELLER else ev["recipient"]
 		d_buyer = ev["recipient"] if issuer_role == SELLER else ev["issuer"]
-		swapped = (_same(seller, d_buyer) and not _same(seller, d_seller)) or (_same(buyer, d_seller) and not _same(buyer, d_buyer))
+		swapped = (_same(seller, d_buyer) and not _same(seller, d_seller)) or (
+			_same(buyer, d_seller) and not _same(buyer, d_buyer)
+		)
 		if swapped:
 			_company(c, rows, usable, default_company, selected_company, ev, final=False)
 			# Two readings of the same document. Only an explicit answer from the user picks one: the reading that puts
 			# our company on the side the user named. Without one (or if neither reading fits), nothing is created.
 			readings = [(seller, buyer), (d_seller, d_buyer)]
-			chosen = next((r for r in readings if c.company and selected_role in (SELLER, BUYER)
-				and company_of(r[0 if selected_role == SELLER else 1], rows) == c.company), None)
+			chosen = next(
+				(
+					r
+					for r in readings
+					if c.company
+					and selected_role in (SELLER, BUYER)
+					and company_of(r[0 if selected_role == SELLER else 1], rows) == c.company
+				),
+				None,
+			)
 			if not chosen:
 				c.seller, c.buyer = seller, buyer
 				c.status, c.ask = CONFLICT, "role"
-				c.message = (f"The document's parties contradict each other: a {KIND_LABELS[kind].lower()} is issued by the "
-					f"{issuer_role}, but “{ev['issuer'] or ev['recipient']}” is also named as the {'buyer' if issuer_role == SELLER else 'seller'}.")
+				c.message = (
+					f"The document's parties contradict each other: a {KIND_LABELS[kind].lower()} is issued by the "
+					f"{issuer_role}, but “{ev['issuer'] or ev['recipient']}” is also named as the {'buyer' if issuer_role == SELLER else 'seller'}."
+				)
 				return c
 			seller, buyer = chosen
 		else:
@@ -257,7 +381,14 @@ def classify(extracted, usable_companies, default_company=None, selected_company
 		return c
 
 	if issuer_role == INTERNAL:
-		outsider = next((n for n in (ev["issuer"], ev["seller"], ev["buyer"], ev["recipient"]) if n and company_of(n, rows) not in (None, c.company)), None)
+		outsider = next(
+			(
+				n
+				for n in (ev["issuer"], ev["seller"], ev["buyer"], ev["recipient"])
+				if n and company_of(n, rows) not in (None, c.company)
+			),
+			None,
+		)
 		if outsider:
 			c.status, c.ask = CONFLICT, "company"
 			c.message = f"This {KIND_LABELS[kind].lower()} names “{outsider}”, another of your companies, so I can't tell which company it belongs to."
@@ -267,30 +398,38 @@ def classify(extracted, usable_companies, default_company=None, selected_company
 
 	seller_us = bool(seller) and company_of(seller, rows) == c.company
 	buyer_us = bool(buyer) and company_of(buyer, rows) == c.company
-	other_company = next((n for n in (seller, buyer) if n and company_of(n, rows) not in (None, c.company)), None)
+	other_company = next(
+		(n for n in (seller, buyer) if n and company_of(n, rows) not in (None, c.company)), None
+	)
 	if seller_us and buyer_us:
 		c.status = CONFLICT
 		c.message = f"Both the seller and the buyer on this document are {c.company}, so I can't tell which side your company is on."
 		return c
 	if other_company and not (seller_us or buyer_us):
 		c.status, c.ask = CONFLICT, "company"
-		c.message = (f"This document is between “{seller or '?'}” and “{buyer or '?'}”, and one of them is another of your companies, "
-			f"not {c.company}. Choose the company it belongs to.")
+		c.message = (
+			f"This document is between “{seller or '?'}” and “{buyer or '?'}”, and one of them is another of your companies, "
+			f"not {c.company}. Choose the company it belongs to."
+		)
 		return c
 	document_role = SELLER if seller_us else BUYER if buyer_us else None
 	if selected_role in (SELLER, BUYER):
 		if document_role and selected_role != document_role:
 			c.status, c.ask = CONFLICT, "role"
-			c.message = (f"The document names {c.company} as the {document_role}, so I can't record it with your company as the "
-				f"{selected_role}.")
+			c.message = (
+				f"The document names {c.company} as the {document_role}, so I can't record it with your company as the "
+				f"{selected_role}."
+			)
 			return c
 		c.our_role, c.role_source = selected_role, "document" if document_role else "selected"
 	elif document_role:
 		c.our_role, c.role_source = document_role, "document"
 	else:
 		c.status, c.ask = NEEDS_ROLE, "role"
-		c.message = (f"Neither the seller (“{seller or 'not printed'}”) nor the buyer (“{buyer or 'not printed'}”) on this "
-			f"{KIND_LABELS[kind].lower()} is {c.company}.")
+		c.message = (
+			f"Neither the seller (“{seller or 'not printed'}”) nor the buyer (“{buyer or 'not printed'}”) on this "
+			f"{KIND_LABELS[kind].lower()} is {c.company}."
+		)
 		return c
 	# The other party may be missing from the document: the direction is still proven, and the mapper asks which
 	# customer/supplier it is instead of guessing.
@@ -304,8 +443,10 @@ def classify(extracted, usable_companies, default_company=None, selected_company
 		# Between two of the user's companies: whose books it belongs in (a sale for one, a purchase for the other) is the
 		# user's decision.
 		c.status, c.ask = CONFLICT, "company"
-		c.message = (f"This document is between two of your companies ({c.company} and {counter_company}). Choose the company "
-			"whose books it belongs in.")
+		c.message = (
+			f"This document is between two of your companies ({c.company} and {counter_company}). Choose the company "
+			"whose books it belongs in."
+		)
 		return c
 	return _target(c)
 
@@ -313,7 +454,13 @@ def classify(extracted, usable_companies, default_company=None, selected_company
 def _company(c, rows, usable, default_company, selected_company, ev, final=True):
 	"""Our company: the user's explicit choice, else the default (validated context). A non-default company named on the
 	document is only a candidate the user must confirm."""
-	named = [x for x in dict.fromkeys(company_of(n, rows) for n in (ev["seller"], ev["buyer"], ev["issuer"], ev["recipient"]) if n) if x]
+	named = [
+		x
+		for x in dict.fromkeys(
+			company_of(n, rows) for n in (ev["seller"], ev["buyer"], ev["issuer"], ev["recipient"]) if n
+		)
+		if x
+	]
 	c.company_candidates = named
 	if selected_company and selected_company in usable:
 		c.company, c.company_source = selected_company, "selected"
@@ -323,8 +470,11 @@ def _company(c, rows, usable, default_company, selected_company, ev, final=True)
 		c.company, c.company_source = next(iter(usable)), "document" if named else "default"
 	if not c.company and final:
 		c.status, c.ask = NEEDS_COMPANY, "company"
-		c.message = (f"The document names {', '.join(named)}, which isn't your default company. Which of your companies is it for?" if named
-			else "Which of your companies is this document for?")
+		c.message = (
+			f"The document names {', '.join(named)}, which isn't your default company. Which of your companies is it for?"
+			if named
+			else "Which of your companies is this document for?"
+		)
 	return c
 
 

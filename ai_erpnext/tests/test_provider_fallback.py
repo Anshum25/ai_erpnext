@@ -29,9 +29,16 @@ TPM = "Rate limit reached for model `qwen/qwen3.8-27b` on tokens per minute (TPM
 
 
 def completion(content, model="m"):
-	return {"id": "chatcmpl-test", "object": "chat.completion", "created": 0, "model": model,
-		"choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-		"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+	return {
+		"id": "chatcmpl-test",
+		"object": "chat.completion",
+		"created": 0,
+		"model": model,
+		"choices": [
+			{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+		],
+		"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+	}
 
 
 def ok(payload, model="m"):
@@ -54,8 +61,14 @@ class FakeNet:
 
 		raw = request.read() or b"{}"
 		body = json.loads(raw)
-		self.requests.append({"host": request.url.host, "model": body.get("model"), "auth": request.headers.get("authorization"),
-			"has_image": b"image_url" in raw})
+		self.requests.append(
+			{
+				"host": request.url.host,
+				"model": body.get("model"),
+				"auth": request.headers.get("authorization"),
+				"has_image": b"image_url" in raw,
+			}
+		)
 		queue = self.scripts.get(request.url.host)
 		if not queue:
 			raise AssertionError(f"unexpected request to {request.url.host}")
@@ -67,9 +80,18 @@ class FakeNet:
 
 
 def settings(**overrides):
-	values = {"provider": "Groq", "api_key": "set", "base_url": GROQ_URL, "model": "qwen/qwen3.8-27b",
-		"fallback_enabled": 0, "fallback_provider": "OpenAI", "fallback_model": "gpt-4.1-mini", "fallback_base_url": None,
-		"fallback_api_key": "set", "fallback_daily_limit": 20}
+	values = {
+		"provider": "Groq",
+		"api_key": "set",
+		"base_url": GROQ_URL,
+		"model": "qwen/qwen3.8-27b",
+		"fallback_enabled": 0,
+		"fallback_provider": "OpenAI",
+		"fallback_model": "gpt-4.1-mini",
+		"fallback_base_url": None,
+		"fallback_api_key": "set",
+		"fallback_daily_limit": 20,
+	}
 	values.update(overrides)
 	secrets = {"api_key": GROQ_KEY, "fallback_api_key": OPENAI_KEY}
 	return SimpleNamespace(**values, get_password=lambda field: secrets[field])
@@ -88,8 +110,13 @@ class TestProviderFallback(IntegrationTestCase):
 	def network(self, net, config):
 		import httpx2
 
-		with mock.patch.object(httpx2.HTTPTransport, "handle_request", lambda _transport, request: net.handle(request)), \
-			mock.patch.object(providers, "get_settings", return_value=config), mock.patch("time.sleep") as sleep:
+		with (
+			mock.patch.object(
+				httpx2.HTTPTransport, "handle_request", lambda _transport, request: net.handle(request)
+			),
+			mock.patch.object(providers, "get_settings", return_value=config),
+			mock.patch("time.sleep") as sleep,
+		):
 			yield sleep
 
 	def route(self, net, config, text="What is a sales order?"):
@@ -114,8 +141,15 @@ class TestProviderFallback(IntegrationTestCase):
 
 	# ---- the one case the fallback is for ---------------------------------------------------
 	def test_groq_daily_quota_uses_openai_fallback_once(self):
-		net = FakeNet(api_groq_com=[error(429, TPD, {"retry-after": "3600"})],
-			api_openai_com=[ok({"mode": "chat", "reply": "A Sales Order is a confirmed order from a customer."}, "gpt-4.1-mini")])
+		net = FakeNet(
+			api_groq_com=[error(429, TPD, {"retry-after": "3600"})],
+			api_openai_com=[
+				ok(
+					{"mode": "chat", "reply": "A Sales Order is a confirmed order from a customer."},
+					"gpt-4.1-mini",
+				)
+			],
+		)
 		with self.assertLogs("ai_erpnext", level="INFO") as logs:
 			plan = self.route(net, settings(fallback_enabled=1))
 		self.assertEqual(plan["mode"], "chat")
@@ -125,7 +159,10 @@ class TestProviderFallback(IntegrationTestCase):
 		self.assertEqual(net.requests[0]["auth"], f"Bearer {GROQ_KEY}")
 		self.assertEqual(net.requests[1]["auth"], f"Bearer {OPENAI_KEY}")
 		joined = "\n".join(logs.output)
-		self.assertIn("AI-FALLBACK used operation=chat from=Groq to=OpenAI model=gpt-4.1-mini reason=quota_exhausted", joined)
+		self.assertIn(
+			"AI-FALLBACK used operation=chat from=Groq to=OpenAI model=gpt-4.1-mini reason=quota_exhausted",
+			joined,
+		)
 		for secret in (GROQ_KEY, OPENAI_KEY, "confirmed order"):
 			self.assertNotIn(secret, joined)
 
@@ -142,7 +179,11 @@ class TestProviderFallback(IntegrationTestCase):
 		self.assertEqual(net.hosts(), [GROQ])
 
 	def test_openai_out_of_credits_or_rejected_key_is_a_clear_error(self):
-		credits = error(429, "You exceeded your current quota, please check your plan and billing details.", code="insufficient_quota")
+		credits = error(
+			429,
+			"You exceeded your current quota, please check your plan and billing details.",
+			code="insufficient_quota",
+		)
 		# no credits is a billing problem, not a daily quota: it is reported as such and never retried
 		for response, category in ((credits, "billing"), (error(401, "Incorrect API key provided"), "auth")):
 			net = FakeNet(api_groq_com=[error(429, TPD)], api_openai_com=[response])
@@ -169,13 +210,18 @@ class TestProviderFallback(IntegrationTestCase):
 	# ---- never for anything else ------------------------------------------------------------
 	def test_other_errors_never_use_the_fallback(self):
 		cases = {
-			"rate_limited": [error(429, TPM, {"retry-after": "30"})],  # per-minute limit, wait exceeds the budget
+			"rate_limited": [
+				error(429, TPM, {"retry-after": "30"})
+			],  # per-minute limit, wait exceeds the budget
 			"unavailable": [error(503, "overloaded")] * llm.MAX_ATTEMPTS,
 			"auth": [error(401, "Invalid API Key")],
 			"billing": [error(402, "payment required")],
 			"bad_request": [error(400, "invalid request: unsupported parameter")],
-			"request_too_large": [error(400, "context length exceeded")],  # too big for the model: retrying or a fallback can't help
-			"invalid_response": [error(400, "Failed to generate JSON", code="json_validate_failed")] * llm.MAX_ATTEMPTS,
+			"request_too_large": [
+				error(400, "context length exceeded")
+			],  # too big for the model: retrying or a fallback can't help
+			"invalid_response": [error(400, "Failed to generate JSON", code="json_validate_failed")]
+			* llm.MAX_ATTEMPTS,
 		}
 		for category, responses in cases.items():
 			net = FakeNet(api_groq_com=list(responses))
@@ -185,7 +231,12 @@ class TestProviderFallback(IntegrationTestCase):
 			self.assertNotIn(OPENAI, net.hosts(), category)
 
 	def test_fallback_only_from_groq(self):
-		config = settings(fallback_enabled=1, provider="OpenRouter", base_url="https://openrouter.ai/api/v1", model="some/model")
+		config = settings(
+			fallback_enabled=1,
+			provider="OpenRouter",
+			base_url="https://openrouter.ai/api/v1",
+			model="some/model",
+		)
 		net = FakeNet(openrouter_ai=[error(429, "You have exceeded your daily quota")])
 		with self.assertRaises(AIProviderError) as ctx:
 			self.route(net, config)
@@ -193,7 +244,12 @@ class TestProviderFallback(IntegrationTestCase):
 		self.assertEqual(net.hosts(), [OPENROUTER])
 
 	def test_fallback_needs_complete_configuration(self):
-		for missing in ({"fallback_api_key": None}, {"fallback_model": ""}, {"fallback_provider": ""}, {"fallback_provider": "Gemini"}):
+		for missing in (
+			{"fallback_api_key": None},
+			{"fallback_model": ""},
+			{"fallback_provider": ""},
+			{"fallback_provider": "Gemini"},
+		):
 			net = FakeNet(api_groq_com=[error(429, TPD)])
 			with self.assertRaises(AIProviderError):
 				self.route(net, settings(fallback_enabled=1, **missing))
@@ -201,7 +257,10 @@ class TestProviderFallback(IntegrationTestCase):
 
 	def test_daily_limit_caps_fallback_requests(self):
 		config = settings(fallback_enabled=1, fallback_daily_limit=1)
-		net = FakeNet(api_groq_com=[error(429, TPD), error(429, TPD)], api_openai_com=[ok({"mode": "chat", "reply": "ok"})])
+		net = FakeNet(
+			api_groq_com=[error(429, TPD), error(429, TPD)],
+			api_openai_com=[ok({"mode": "chat", "reply": "ok"})],
+		)
 		self.assertEqual(self.route(net, config)["reply"], "ok")
 		with self.assertLogs("ai_erpnext", level="INFO") as logs, self.assertRaises(AIProviderError) as ctx:
 			self.route(net, config)
@@ -215,7 +274,11 @@ class TestProviderFallback(IntegrationTestCase):
 
 	# ---- invoice extraction uses the same rules -----------------------------------------------
 	def _pending_entry(self):
-		name = frappe.get_doc({"doctype": "AI Document Entry", "status": "Processed", "file": test_file("png")}).insert().name
+		name = (
+			frappe.get_doc({"doctype": "AI Document Entry", "status": "Processed", "file": test_file("png")})
+			.insert()
+			.name
+		)
 		frappe.db.set_value("AI Document Entry", name, "status", "Pending")
 		return name
 
@@ -248,7 +311,10 @@ class TestProviderFallback(IntegrationTestCase):
 	def test_failed_extraction_keeps_the_upload_for_retry(self):
 		from ai_erpnext.api.extraction import retry_extraction
 
-		net = FakeNet(api_groq_com=[error(429, TPD)], api_openai_com=[error(429, "You exceeded your current quota", code="insufficient_quota")])
+		net = FakeNet(
+			api_groq_com=[error(429, TPD)],
+			api_openai_com=[error(429, "You exceeded your current quota", code="insufficient_quota")],
+		)
 		doc, _ = self._extract(net, settings(fallback_enabled=1))
 		self.assertEqual(doc.status, "Failed")
 		self.assertTrue(frappe.db.exists("File", {"file_url": doc.file}))  # the uploaded image is kept
@@ -263,7 +329,9 @@ class TestProviderFallback(IntegrationTestCase):
 		net = FakeNet(api_groq_com=[error(503, "overloaded"), error(503, "overloaded"), ok(b2_output())])
 		doc, sleep = self._extract(net, settings(fallback_enabled=1))
 		self.assertNotEqual(doc.status, "Failed")
-		self.assertEqual(net.hosts(), [GROQ, GROQ, GROQ])  # retried on Groq; an outage never triggers the paid fallback
+		self.assertEqual(
+			net.hosts(), [GROQ, GROQ, GROQ]
+		)  # retried on Groq; an outage never triggers the paid fallback
 		self.assertEqual(sleep.call_count, 2)
 		net = FakeNet(api_groq_com=[error(503, "overloaded")] * 3)
 		doc, _ = self._extract(net, settings(fallback_enabled=1))

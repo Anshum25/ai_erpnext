@@ -31,7 +31,10 @@ from ai_erpnext.tests.test_provider_fallback import (
 
 # Groq's real 429 messages end with a link to its billing page; that must not turn them into "no credits".
 GROQ_TPD = TPD + " Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing"
-GROQ_TPM = TPM + " Please try again in 2.48s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing"
+GROQ_TPM = (
+	TPM
+	+ " Please try again in 2.48s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing"
+)
 
 
 class TestProviderConfig(IntegrationTestCase):
@@ -46,8 +49,13 @@ class TestProviderConfig(IntegrationTestCase):
 	def route(self, net, config, text="What is a sales order?"):
 		import httpx2
 
-		with mock.patch.object(httpx2.HTTPTransport, "handle_request", lambda _t, request: net.handle(request)), \
-			mock.patch.object(providers, "get_settings", return_value=config), mock.patch("time.sleep"):
+		with (
+			mock.patch.object(
+				httpx2.HTTPTransport, "handle_request", lambda _t, request: net.handle(request)
+			),
+			mock.patch.object(providers, "get_settings", return_value=config),
+			mock.patch("time.sleep"),
+		):
 			return llm.route([], text)
 
 	# ---- settings form -----------------------------------------------------------------------
@@ -57,20 +65,46 @@ class TestProviderConfig(IntegrationTestCase):
 		self.assertEqual((provider.label, provider.fieldtype), ("Primary AI Provider", "Select"))
 		self.assertEqual([p for p in providers.PROVIDERS if p not in provider.options.split("\n")], [])
 		self.assertEqual((key.label, key.fieldtype), ("Primary API Key", "Password"))
-		fields = {f: meta.get_field(f) for f in ("fallback_enabled", "fallback_provider", "fallback_api_key", "fallback_model",
-			"fallback_base_url", "fallback_daily_limit")}
+		fields = {
+			f: meta.get_field(f)
+			for f in (
+				"fallback_enabled",
+				"fallback_provider",
+				"fallback_api_key",
+				"fallback_model",
+				"fallback_base_url",
+				"fallback_daily_limit",
+			)
+		}
 		self.assertEqual(fields["fallback_enabled"].label, "Enable Fallback Provider")
 		self.assertEqual(fields["fallback_enabled"].default, "0")
 		self.assertEqual(fields["fallback_api_key"].fieldtype, "Password")
-		for name in ("fallback_provider", "fallback_api_key", "fallback_model", "fallback_base_url", "fallback_daily_limit"):
-			self.assertEqual(fields[name].depends_on, "eval:doc.fallback_enabled", name)  # shown only once enabled
+		for name in (
+			"fallback_provider",
+			"fallback_api_key",
+			"fallback_model",
+			"fallback_base_url",
+			"fallback_daily_limit",
+		):
+			self.assertEqual(
+				fields[name].depends_on, "eval:doc.fallback_enabled", name
+			)  # shown only once enabled
 		self.assertEqual(fields["fallback_daily_limit"].label, "Fallback Daily Request Limit")
 		self.assertEqual([p.role for p in meta.permissions], ["System Manager"])
 
 	def test_saved_keys_are_never_returned_in_clear(self):
 		doc = frappe.get_single("AI Provider Settings")
-		doc.update({"provider": "Groq", "api_key": GROQ_KEY, "fallback_enabled": 1, "fallback_provider": "OpenAI",
-			"fallback_model": "gpt-4.1-mini", "fallback_api_key": OPENAI_KEY, "fallback_daily_limit": 5})
+		doc.update(
+			{
+				"provider": "Groq",
+				"api_key": GROQ_KEY,
+				"fallback_enabled": 1,
+				"fallback_provider": "OpenAI",
+				"fallback_model": "gpt-4.1-mini",
+				"fallback_api_key": OPENAI_KEY,
+				"fallback_daily_limit": 5,
+			}
+		)
 		doc.save()
 		loaded = frappe.get_single("AI Provider Settings")
 		dumped = frappe.as_json(loaded.as_dict())
@@ -78,13 +112,22 @@ class TestProviderConfig(IntegrationTestCase):
 			self.assertNotIn(secret, dumped)  # the form / API only ever sees the mask
 		self.assertTrue(set(loaded.api_key) == {"*"})
 		self.assertEqual(loaded.get_password("fallback_api_key"), OPENAI_KEY)  # server side only
-		self.assertEqual(frappe.db.get_single_value("AI Provider Settings", "fallback_api_key"), loaded.fallback_api_key)
+		self.assertEqual(
+			frappe.db.get_single_value("AI Provider Settings", "fallback_api_key"), loaded.fallback_api_key
+		)
 
 	def test_non_admin_users_cannot_read_provider_settings(self):
 		email = "ai-provider-nonadmin@example.com"
 		if not frappe.db.exists("User", email):
-			frappe.get_doc({"doctype": "User", "email": email, "first_name": "No Admin", "send_welcome_email": 0,
-				"roles": [{"role": "Sales User"}]}).insert(ignore_permissions=True)
+			frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": email,
+					"first_name": "No Admin",
+					"send_welcome_email": 0,
+					"roles": [{"role": "Sales User"}],
+				}
+			).insert(ignore_permissions=True)
 		frappe.set_user(email)
 		try:
 			self.assertFalse(frappe.has_permission("AI Provider Settings", "read"))
@@ -97,16 +140,27 @@ class TestProviderConfig(IntegrationTestCase):
 
 	def test_configuration_is_validated_locally(self):
 		cases = {
-			"fallback without key": (settings(fallback_enabled=1, fallback_api_key=None), "no Fallback API Key"),
+			"fallback without key": (
+				settings(fallback_enabled=1, fallback_api_key=None),
+				"no Fallback API Key",
+			),
 			"fallback without cap": (settings(fallback_enabled=1, fallback_daily_limit=0), "at least 1"),
-			"unsupported fallback": (settings(fallback_enabled=1, fallback_provider="Gemini"), "Fallback AI Provider"),
+			"unsupported fallback": (
+				settings(fallback_enabled=1, fallback_provider="Gemini"),
+				"Fallback AI Provider",
+			),
 			"unsupported primary": (settings(provider="SomeCloud"), "supported Primary AI Provider"),
-			"model required": (settings(provider="OpenRouter", model=None, base_url=None), "Model Name is required for OpenRouter"),
+			"model required": (
+				settings(provider="OpenRouter", model=None, base_url=None),
+				"Model Name is required for OpenRouter",
+			),
 			"plain http": (settings(base_url="http://api.groq.com/openai/v1"), "https://"),
 		}
 		import httpx2
 
-		with mock.patch.object(httpx2.HTTPTransport, "handle_request", side_effect=AssertionError("no request may be sent")):
+		with mock.patch.object(
+			httpx2.HTTPTransport, "handle_request", side_effect=AssertionError("no request may be sent")
+		):
 			for label, (config, message) in cases.items():
 				errors, _warnings = providers.configuration_issues(config)
 				self.assertTrue(any(message in e for e in errors), (label, errors))
@@ -121,13 +175,20 @@ class TestProviderConfig(IntegrationTestCase):
 	# ---- adapter selection ---------------------------------------------------------------------
 	def test_selected_provider_picks_adapter_endpoint_and_default_model(self):
 		p = providers.primary(settings(base_url=None, model=None))
-		self.assertEqual((p.provider_name, p.model, str(p.client.base_url).rstrip("/")), ("Groq", "qwen/qwen3.8-27b", "https://api.groq.com/openai/v1"))
+		self.assertEqual(
+			(p.provider_name, p.model, str(p.client.base_url).rstrip("/")),
+			("Groq", "qwen/qwen3.8-27b", "https://api.groq.com/openai/v1"),
+		)
 		p = providers.primary(settings(provider="OpenAI", base_url=None, model=None))
-		self.assertEqual((p.provider_name, p.model, p.client.base_url.host), ("OpenAI", "gpt-4.1-mini", "api.openai.com"))
+		self.assertEqual(
+			(p.provider_name, p.model, p.client.base_url.host), ("OpenAI", "gpt-4.1-mini", "api.openai.com")
+		)
 		p = providers.primary(settings(provider="Nvidia NIM", base_url=None, model="some/vision-model"))
 		self.assertEqual(p.client.base_url.host, "integrate.api.nvidia.com")
 		with self.assertRaises(AIProviderError):
-			providers.primary(settings(provider="OpenRouter", base_url=None, model=None))  # no safe default model
+			providers.primary(
+				settings(provider="OpenRouter", base_url=None, model=None)
+			)  # no safe default model
 		with self.assertRaises(AIProviderError):
 			providers.primary(settings(provider="Gemini"), text_only=True)  # Gemini can't route chat
 		gemini = providers.primary(settings(provider="Gemini", model=None))
@@ -143,18 +204,30 @@ class TestProviderConfig(IntegrationTestCase):
 		self.assertEqual(rate_limit_category(GROQ_TPD.lower()), "quota_exhausted")
 		self.assertEqual(rate_limit_category(GROQ_TPM.lower()), "rate_limited")
 		self.assertEqual(rate_limit_category("rate limit exceeded: free-models-per-day"), "quota_exhausted")
-		self.assertEqual(rate_limit_category("you exceeded your current quota", "insufficient_quota"), "billing")
-		self.assertEqual(rate_limit_category("too many requests"), "rate_limited")  # unknown window: never the paid fallback
+		self.assertEqual(
+			rate_limit_category("you exceeded your current quota", "insufficient_quota"), "billing"
+		)
+		self.assertEqual(
+			rate_limit_category("too many requests"), "rate_limited"
+		)  # unknown window: never the paid fallback
 		self.assertEqual(rate_limit_category("quota exceeded"), "rate_limited")
 
 	# ---- fallback rules not covered by test_provider_fallback -----------------------------------
 	def test_realistic_groq_daily_quota_message_uses_the_fallback(self):
-		net = FakeNet(api_groq_com=[error(429, GROQ_TPD, {"retry-after": "3600"})], api_openai_com=[ok({"mode": "chat", "reply": "ok"})])
+		net = FakeNet(
+			api_groq_com=[error(429, GROQ_TPD, {"retry-after": "3600"})],
+			api_openai_com=[ok({"mode": "chat", "reply": "ok"})],
+		)
 		self.assertEqual(self.route(net, settings(fallback_enabled=1))["reply"], "ok")
 		self.assertEqual(net.hosts(), [GROQ, OPENAI])
 
 	def test_per_minute_limit_waits_on_groq_and_never_uses_the_fallback(self):
-		net = FakeNet(api_groq_com=[error(429, GROQ_TPM, {"retry-after": "2"}), ok({"mode": "chat", "reply": "after the wait"})])
+		net = FakeNet(
+			api_groq_com=[
+				error(429, GROQ_TPM, {"retry-after": "2"}),
+				ok({"mode": "chat", "reply": "after the wait"}),
+			]
+		)
 		self.assertEqual(self.route(net, settings(fallback_enabled=1))["reply"], "after the wait")
 		self.assertEqual(net.hosts(), [GROQ, GROQ])
 
@@ -166,17 +239,25 @@ class TestProviderConfig(IntegrationTestCase):
 		self.assertEqual(net.hosts(), [GROQ])
 
 	def test_failing_fallback_is_never_retried_or_chained(self):
-		for response, category in ((error(429, TPM, {"retry-after": "1"}), "rate_limited"), (error(429, TPD), "quota_exhausted"),
-				(error(503, "overloaded"), "unavailable")):
+		for response, category in (
+			(error(429, TPM, {"retry-after": "1"}), "rate_limited"),
+			(error(429, TPD), "quota_exhausted"),
+			(error(503, "overloaded"), "unavailable"),
+		):
 			net = FakeNet(api_groq_com=[error(429, TPD)], api_openai_com=[response])
 			with self.assertRaises(AIProviderError) as ctx:
 				self.route(net, settings(fallback_enabled=1))
 			self.assertEqual(ctx.exception.category, category)
-			self.assertEqual(net.hosts(), [GROQ, OPENAI], category)  # one fallback request, then a clear error
+			self.assertEqual(
+				net.hosts(), [GROQ, OPENAI], category
+			)  # one fallback request, then a clear error
 
 	def test_primary_out_of_credits_or_bad_key_never_falls_back(self):
-		for response, category in ((error(429, "You exceeded your current quota", code="insufficient_quota"), "billing"),
-				(error(401, "Invalid API Key"), "auth"), (error(402, "Payment required"), "billing")):
+		for response, category in (
+			(error(429, "You exceeded your current quota", code="insufficient_quota"), "billing"),
+			(error(401, "Invalid API Key"), "auth"),
+			(error(402, "Payment required"), "billing"),
+		):
 			net = FakeNet(api_groq_com=[response])
 			with self.assertRaises(AIProviderError) as ctx:
 				self.route(net, settings(fallback_enabled=1))
@@ -184,13 +265,18 @@ class TestProviderConfig(IntegrationTestCase):
 			self.assertEqual(net.hosts(), [GROQ])
 
 	def test_errors_and_logs_never_contain_keys_or_provider_text(self):
-		net = FakeNet(api_groq_com=[error(429, TPD)], api_openai_com=[error(401, f"Incorrect API key provided: {OPENAI_KEY[:12]}…")])
+		net = FakeNet(
+			api_groq_com=[error(429, TPD)],
+			api_openai_com=[error(401, f"Incorrect API key provided: {OPENAI_KEY[:12]}…")],
+		)
 		with self.assertLogs("ai_erpnext", level="INFO") as logs, self.assertRaises(AIProviderError) as ctx:
 			self.route(net, settings(fallback_enabled=1))
 		joined = "\n".join(logs.output) + str(ctx.exception)
 		for secret in (GROQ_KEY, OPENAI_KEY, OPENAI_KEY[:12], "Incorrect API key"):
 			self.assertNotIn(secret, joined)
-		self.assertEqual(net.requests[1]["auth"], f"Bearer {OPENAI_KEY}")  # the key is only in the request header
+		self.assertEqual(
+			net.requests[1]["auth"], f"Bearer {OPENAI_KEY}"
+		)  # the key is only in the request header
 
 	def test_disabled_fallback_settings_object_is_never_contacted(self):
 		config = SimpleNamespace(**{**vars(settings()), "fallback_enabled": 0})

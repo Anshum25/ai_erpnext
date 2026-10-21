@@ -5,7 +5,7 @@ from ai_erpnext.api.mapping import get_entry
 
 
 @frappe.whitelist(methods=["POST"])
-def retry_extraction(entry):
+def retry_extraction(entry: str):
 	"""Re-queue AI extraction for a Failed entry (e.g. after a rate limit or outage).
 
 	Only Failed entries without a created document can be retried, and the job is

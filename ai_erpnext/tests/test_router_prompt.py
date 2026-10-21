@@ -24,9 +24,19 @@ from ai_erpnext.tests.test_chat_router_retry import FakeProvider
 
 BASELINE_SYSTEM_CHARS = 21387
 TARGET_EST_TOKENS = 2500  # chars/4: an estimate, no tokenizer for qwen is installed
-SAMPLES = ("how are you?", "what is a cost center in ERPNext?", "show unpaid sales invoices", "total stock value per warehouse",
-	"mobile number of Amit Patel", "how many leads this month", "items of Sales Invoice ACC-SINV-2026-00001 with qty over 5",
-	"which customers owe us the most?", "create po for 5 widgets", "show me the top 5", "monthly sales per customer this year")
+SAMPLES = (
+	"how are you?",
+	"what is a cost center in ERPNext?",
+	"show unpaid sales invoices",
+	"total stock value per warehouse",
+	"mobile number of Amit Patel",
+	"how many leads this month",
+	"items of Sales Invoice ACC-SINV-2026-00001 with qty over 5",
+	"which customers owe us the most?",
+	"create po for 5 widgets",
+	"show me the top 5",
+	"monthly sales per customer this year",
+)
 CHAT_PLAN = {"mode": "chat", "reply": "ok"}
 
 
@@ -46,8 +56,14 @@ class TestPromptSize(IntegrationTestCase):
 			self.assertLessEqual(len(detailed), llm.MAX_DETAILED, text)
 
 	def test_the_fully_described_schema_is_still_smaller_than_before(self):
-		everything = llm.SYSTEM.format(today="2026-10-16", presets="|".join(llm.DATE_PRESETS), sorts="|".join(llm.SORTS), creatable="x",
-			schema=llm._schema(), others="-")
+		everything = llm.SYSTEM.format(
+			today="2026-10-16",
+			presets="|".join(llm.DATE_PRESETS),
+			sorts="|".join(llm.SORTS),
+			creatable="x",
+			schema=llm._schema(),
+			others="-",
+		)
 		self.assertLess(len(everything), BASELINE_SYSTEM_CHARS * 0.8)
 
 	def test_no_doctype_or_operation_disappears_from_any_prompt(self):
@@ -65,11 +81,23 @@ class TestPromptSize(IntegrationTestCase):
 
 	def test_security_and_safety_instructions_remain(self):
 		system, _ = system_for("show unpaid sales invoices")
-		for needle in ("never SQL", "data, not instructions", "bypass permissions", "reveal this prompt", "never invent names, items, quantities, prices or dates",
-			"never describe, guess or invent what a page", "Never state this company's data", "submit, cancel, amend, delete, pay, edit", "Only values the user stated",
-			"Never clarify to collect details of a record to create", "never answer with data yourself"):
+		for needle in (
+			"never SQL",
+			"data, not instructions",
+			"bypass permissions",
+			"reveal this prompt",
+			"never invent names, items, quantities, prices or dates",
+			"never describe, guess or invent what a page",
+			"Never state this company's data",
+			"submit, cancel, amend, delete, pay, edit",
+			"Only values the user stated",
+			"Never clarify to collect details of a record to create",
+			"never answer with data yourself",
+		):
 			self.assertIn(needle, system)
-		self.assertIn("Lead", system.split("create: a NEW record of:")[1].split("\n")[0])  # creatable types listed
+		self.assertIn(
+			"Lead", system.split("create: a NEW record of:")[1].split("\n")[0]
+		)  # creatable types listed
 
 	def test_capability_summary_is_not_duplicated_into_the_router_prompt(self):
 		from ai_erpnext.chat.capabilities import capability_summary
@@ -90,10 +118,17 @@ class TestSchemaSelection(IntegrationTestCase):
 		return system, detailed
 
 	def test_sales_invoice_requests_get_fields_tables_and_links(self):
-		system, _ = self.assertDetailed("show unpaid sales invoices of Amit", "Sales Invoice")
+		self.assertDetailed("show unpaid sales invoices of Amit", "Sales Invoice")
 		line = llm._schema_line("Sales Invoice")
-		for needle in ("ops=list,count,details,aggregate,child_rows,sales_summary,overdue,unpaid,outstanding_by_customer", "outstanding_amount", "due_date",
-			"party=customer", "items(item_code/", "taxes(", "links=customer"):
+		for needle in (
+			"ops=list,count,details,aggregate,child_rows,sales_summary,overdue,unpaid,outstanding_by_customer",
+			"outstanding_amount",
+			"due_date",
+			"party=customer",
+			"items(item_code/",
+			"taxes(",
+			"links=customer",
+		):
 			self.assertIn(needle, line)
 
 	def test_stock_requests_get_the_stock_balance(self):
@@ -111,7 +146,9 @@ class TestSchemaSelection(IntegrationTestCase):
 		self.assertIn("summary", llm._schema_line("Customer"))
 
 	def test_child_table_requests(self):
-		system, _ = self.assertDetailed("which sales invoices have item WIDGET with qty over 5", "Sales Invoice")
+		system, _ = self.assertDetailed(
+			"which sales invoices have item WIDGET with qty over 5", "Sales Invoice"
+		)
 		self.assertIn("tables=items(item_code/item_name/qty/uom/rate/amount)", system)
 		self.assertDetailed("show the accounts rows of journal entries", "Journal Entry")
 		self.assertIn("accounts(", llm._schema_line("Journal Entry"))
@@ -123,9 +160,15 @@ class TestSchemaSelection(IntegrationTestCase):
 		self.assertEqual(detailed[0], "Work Order")
 
 	def test_follow_ups_and_the_open_page_bring_their_doctype(self):
-		self.assertDetailed("only the unpaid ones", "Sales Invoice", last_query={"plan": {"doctype": "Sales Invoice"}})
-		self.assertDetailed("what about last month?", "Purchase Order", last_query={"plan": {"doctype": "Purchase Order"}})
-		self.assertDetailed("anything overdue here?", "Purchase Invoice", page={"page": "list", "doctype": "Purchase Invoice"})
+		self.assertDetailed(
+			"only the unpaid ones", "Sales Invoice", last_query={"plan": {"doctype": "Sales Invoice"}}
+		)
+		self.assertDetailed(
+			"what about last month?", "Purchase Order", last_query={"plan": {"doctype": "Purchase Order"}}
+		)
+		self.assertDetailed(
+			"anything overdue here?", "Purchase Invoice", page={"page": "list", "doctype": "Purchase Invoice"}
+		)
 
 	def test_plain_chat_describes_no_doctype_and_data_questions_get_the_common_ones(self):
 		self.assertEqual(system_for("how are you?")[1], [])
@@ -153,12 +196,21 @@ class TestOneCallAndHistory(IntegrationTestCase):
 		self.s = chat.new_conversation()["session"]
 
 	def send(self, text, provider, **kw):
-		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=provider), mock.patch("time.sleep"):
+		with (
+			mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=provider),
+			mock.patch("time.sleep"),
+		):
 			return chat.send_message(session=self.s, text=text, **kw)
 
 	def test_a_message_makes_exactly_one_provider_call_with_the_small_prompt(self):
 		# "show unpaid sales invoices" alone is answered by a shortcut (no call at all), so these need the router
-		for text, expected in (("what is a cost center in ERPNext?", []), ("which sales invoices have been unpaid for more than a month?", ["Sales Invoice", "Purchase Invoice"])):
+		for text, expected in (
+			("what is a cost center in ERPNext?", []),
+			(
+				"which sales invoices have been unpaid for more than a month?",
+				["Sales Invoice", "Purchase Invoice"],
+			),
+		):
 			p = FakeProvider(CHAT_PLAN)
 			self.send(text, p)
 			self.assertEqual(len(p.calls), 1, text)
@@ -168,27 +220,44 @@ class TestOneCallAndHistory(IntegrationTestCase):
 				self.assertIn("\n" + llm._schema_line(dt), system)
 
 	def test_selection_never_calls_the_model(self):
-		with mock.patch("ai_erpnext.chat.llm.get_text_provider", side_effect=AssertionError("no provider")), \
-			mock.patch("ai_erpnext.ai.providers.run", side_effect=AssertionError("no provider")):
+		with (
+			mock.patch("ai_erpnext.chat.llm.get_text_provider", side_effect=AssertionError("no provider")),
+			mock.patch("ai_erpnext.ai.providers.run", side_effect=AssertionError("no provider")),
+		):
 			for text in SAMPLES:
 				llm.build_system(text)
 				llm.select_doctypes(text)
 
 	def test_history_stays_bounded(self):
 		for i in range(12):
-			self.send(f"explain ERPNext concept number {i} " + "x" * 400, FakeProvider({"mode": "chat", "reply": "y" * 900}))
+			self.send(
+				f"explain ERPNext concept number {i} " + "x" * 400,
+				FakeProvider({"mode": "chat", "reply": "y" * 900}),
+			)
 		p = FakeProvider(CHAT_PLAN)
 		self.send("and the last one?", p)
 		history = p.calls[0]["messages"][:-1]
 		self.assertLessEqual(len(history), llm.HISTORY_MESSAGES)
 		for m in history:
-			self.assertLessEqual(len(m["content"]), llm.HISTORY_CHARS + len(json.dumps({"mode": "chat", "reply": ""})))
+			self.assertLessEqual(
+				len(m["content"]), llm.HISTORY_CHARS + len(json.dumps({"mode": "chat", "reply": ""}))
+			)
 		total = sum(len(m["content"]) for m in p.calls[0]["messages"]) + len(p.calls[0]["system"])
 		self.assertLessEqual(total // 4, TARGET_EST_TOKENS + 800)  # whole request, history included
 
 	def test_page_summary_and_previous_query_add_little(self):
-		page = {"page": "list", "doctype": "Sales Invoice", "selected": 3, "unsaved_changes": None, "list_filters": 2}
-		context = json.dumps(llm.router_context({"plan": {"doctype": "Sales Invoice", "operation": "list", "limit": 10}, "names": ["a"]}, page))
+		page = {
+			"page": "list",
+			"doctype": "Sales Invoice",
+			"selected": 3,
+			"unsaved_changes": None,
+			"list_filters": 2,
+		}
+		context = json.dumps(
+			llm.router_context(
+				{"plan": {"doctype": "Sales Invoice", "operation": "list", "limit": 10}, "names": ["a"]}, page
+			)
+		)
 		self.assertLess(len(context), 400)
 
 
@@ -201,52 +270,121 @@ def status_error(cls, status, message, body=None, headers=None):
 class TestProviderErrors(IntegrationTestCase):
 	def test_429_kinds_are_classified_from_the_provider_text(self):
 		cases = [
-			("Rate limit reached for model `qwen/qwen3.8-27b` on tokens per minute (TPM): Limit 6000, Used 5800, Requested 5500.", {}, "rate_limited", "tpm"),
-			("Rate limit reached for model `qwen` on requests per minute (RPM): Limit 30, Used 30, Requested 1.", {}, "rate_limited", "rpm"),
-			("Rate limit reached for model `qwen` on tokens per day (TPD): Limit 500000, Used 499000, Requested 5500.", {}, "quota_exhausted", "tpd"),
-			("Rate limit reached for model `qwen` on requests per day (RPD): Limit 1000.", {}, "quota_exhausted", "rpd"),
-			("You exceeded your current quota, please check your plan and billing details.", {"error": {"code": "insufficient_quota"}}, "billing", "credits"),
+			(
+				"Rate limit reached for model `qwen/qwen3.8-27b` on tokens per minute (TPM): Limit 6000, Used 5800, Requested 5500.",
+				{},
+				"rate_limited",
+				"tpm",
+			),
+			(
+				"Rate limit reached for model `qwen` on requests per minute (RPM): Limit 30, Used 30, Requested 1.",
+				{},
+				"rate_limited",
+				"rpm",
+			),
+			(
+				"Rate limit reached for model `qwen` on tokens per day (TPD): Limit 500000, Used 499000, Requested 5500.",
+				{},
+				"quota_exhausted",
+				"tpd",
+			),
+			(
+				"Rate limit reached for model `qwen` on requests per day (RPD): Limit 1000.",
+				{},
+				"quota_exhausted",
+				"rpd",
+			),
+			(
+				"You exceeded your current quota, please check your plan and billing details.",
+				{"error": {"code": "insufficient_quota"}},
+				"billing",
+				"credits",
+			),
 			("Too many requests", {}, "rate_limited", "unknown"),
 		]
 		for message, body, category, limit in cases:
 			error = classify(status_error(openai.RateLimitError, 429, message, body=body or None))
-			self.assertEqual((error.category, error.limit, error.status_code), (category, limit, 429), message)
+			self.assertEqual(
+				(error.category, error.limit, error.status_code), (category, limit, 429), message
+			)
 
 	def test_retry_after_header_is_read(self):
-		error = classify(status_error(openai.RateLimitError, 429, "tokens per minute (TPM)", headers={"retry-after": "7"}))
+		error = classify(
+			status_error(openai.RateLimitError, 429, "tokens per minute (TPM)", headers={"retry-after": "7"})
+		)
 		self.assertEqual(error.retry_after, 7.0)
 
 	def test_oversized_requests_are_their_own_category_and_images_are_not_affected(self):
-		too_large = classify(status_error(openai.APIStatusError, 413, "Request too large for model `qwen` on tokens per minute (TPM): Limit 6000, Requested 6620, please reduce your message size"))
+		too_large = classify(
+			status_error(
+				openai.APIStatusError,
+				413,
+				"Request too large for model `qwen` on tokens per minute (TPM): Limit 6000, Requested 6620, please reduce your message size",
+			)
+		)
 		self.assertEqual(too_large.category, "request_too_large")
-		context = classify(status_error(openai.BadRequestError, 400, "This model's maximum context length is 32768 tokens", body={"error": {"code": "context_length_exceeded"}}))
+		context = classify(
+			status_error(
+				openai.BadRequestError,
+				400,
+				"This model's maximum context length is 32768 tokens",
+				body={"error": {"code": "context_length_exceeded"}},
+			)
+		)
 		self.assertEqual(context.category, "request_too_large")
 		image = classify(status_error(openai.APIStatusError, 413, "Request Entity Too Large"))
 		self.assertEqual(image.category, "bad_request")  # an oversized image keeps the extraction message
 		self.assertIn("request_too_large", errors.USER_MESSAGES)
 
 	def test_other_failures_keep_their_categories(self):
-		self.assertEqual(classify(status_error(openai.AuthenticationError, 401, "Invalid API Key")).category, "auth")
-		self.assertEqual(classify(status_error(openai.InternalServerError, 503, "Service unavailable")).category, "unavailable")
-		self.assertEqual(classify(openai.APIConnectionError(request=httpx.Request("POST", "https://x.invalid"))).category, "network")
-		self.assertEqual(classify(status_error(openai.APIStatusError, 404, "model not found")).category, "config")
+		self.assertEqual(
+			classify(status_error(openai.AuthenticationError, 401, "Invalid API Key")).category, "auth"
+		)
+		self.assertEqual(
+			classify(status_error(openai.InternalServerError, 503, "Service unavailable")).category,
+			"unavailable",
+		)
+		self.assertEqual(
+			classify(openai.APIConnectionError(request=httpx.Request("POST", "https://x.invalid"))).category,
+			"network",
+		)
+		self.assertEqual(
+			classify(status_error(openai.APIStatusError, 404, "model not found")).category, "config"
+		)
 
 	def test_daily_quota_billing_and_oversized_requests_are_never_retried(self):
-		for error in (AIProviderError("quota_exhausted", status_code=429, retry_after=5, limit="tpd"), AIProviderError("billing", status_code=429, limit="credits"),
-			AIProviderError("request_too_large", status_code=413), AIProviderError("rate_limited", status_code=429, retry_after=None, limit="unknown")):
+		for error in (
+			AIProviderError("quota_exhausted", status_code=429, retry_after=5, limit="tpd"),
+			AIProviderError("billing", status_code=429, limit="credits"),
+			AIProviderError("request_too_large", status_code=413),
+			AIProviderError("rate_limited", status_code=429, retry_after=None, limit="unknown"),
+		):
 			p = FakeProvider(error, CHAT_PLAN)
 			with self.assertRaises(AIProviderError):
-				llm.complete_with_policy(p, "s", [{"role": "user", "content": "q"}], sleep=lambda s: None, jitter=lambda: 0.0)
+				llm.complete_with_policy(
+					p, "s", [{"role": "user", "content": "q"}], sleep=lambda s: None, jitter=lambda: 0.0
+				)
 			self.assertEqual(len(p.calls), 1, error.category)
 
 	def test_a_short_per_minute_limit_is_retried_once_within_the_budget(self):
 		waits = []
-		p = FakeProvider(AIProviderError("rate_limited", status_code=429, retry_after=2.0, limit="tpm"), CHAT_PLAN)
-		self.assertEqual(llm.complete_with_policy(p, "s", [{"role": "user", "content": "q"}], sleep=waits.append, jitter=lambda: 0.0)["mode"], "chat")
+		p = FakeProvider(
+			AIProviderError("rate_limited", status_code=429, retry_after=2.0, limit="tpm"), CHAT_PLAN
+		)
+		self.assertEqual(
+			llm.complete_with_policy(
+				p, "s", [{"role": "user", "content": "q"}], sleep=waits.append, jitter=lambda: 0.0
+			)["mode"],
+			"chat",
+		)
 		self.assertEqual((len(p.calls), waits), (2, [2.0]))
-		p = FakeProvider(AIProviderError("rate_limited", status_code=429, retry_after=60.0, limit="tpm"), CHAT_PLAN)
+		p = FakeProvider(
+			AIProviderError("rate_limited", status_code=429, retry_after=60.0, limit="tpm"), CHAT_PLAN
+		)
 		with self.assertRaises(AIProviderError):
-			llm.complete_with_policy(p, "s", [{"role": "user", "content": "q"}], sleep=waits.append, jitter=lambda: 0.0)
+			llm.complete_with_policy(
+				p, "s", [{"role": "user", "content": "q"}], sleep=waits.append, jitter=lambda: 0.0
+			)
 		self.assertEqual(len(p.calls), 1)  # longer than the budget: the user is told to wait instead
 
 	def test_user_messages_per_category(self):
@@ -254,11 +392,33 @@ class TestProviderErrors(IntegrationTestCase):
 
 		frappe.set_user("Administrator")
 		s = chat.new_conversation()["session"]
-		for category, needle in (("rate_limited", "wait"), ("quota_exhausted", "Today's AI usage limit"), ("request_too_large", "too large")):
-			with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=FakeProvider(AIProviderError(category, status_code=429))), mock.patch("time.sleep"):
+		for category, needle in (
+			("rate_limited", "wait"),
+			("quota_exhausted", "Today's AI usage limit"),
+			("request_too_large", "too large"),
+		):
+			with (
+				mock.patch(
+					"ai_erpnext.chat.llm.get_text_provider",
+					return_value=FakeProvider(AIProviderError(category, status_code=429)),
+				),
+				mock.patch("time.sleep"),
+			):
 				r = chat.send_message(session=s, text=f"tell me something about {category} please")
 			self.assertIn(needle, r["messages"][-1]["text"], category)
-		self.assertEqual(set(CHAT_ERRORS) >= {"rate_limited", "quota_exhausted", "billing", "auth", "network", "timeout", "request_too_large"}, True)
+		self.assertEqual(
+			set(CHAT_ERRORS)
+			>= {
+				"rate_limited",
+				"quota_exhausted",
+				"billing",
+				"auth",
+				"network",
+				"timeout",
+				"request_too_large",
+			},
+			True,
+		)
 
 
 class TestDiagnostics(IntegrationTestCase):
@@ -269,8 +429,11 @@ class TestDiagnostics(IntegrationTestCase):
 		self.s = chat.new_conversation()["session"]
 
 	def route_lines(self, provider, text):
-		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=provider), mock.patch("time.sleep"), \
-			self.assertLogs("ai_erpnext", level="INFO") as logs:
+		with (
+			mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=provider),
+			mock.patch("time.sleep"),
+			self.assertLogs("ai_erpnext", level="INFO") as logs,
+		):
 			chat.send_message(session=self.s, text=text)
 		return [line for line in logs.output if "AI-CHAT route " in line], logs.output
 
@@ -280,18 +443,39 @@ class TestDiagnostics(IntegrationTestCase):
 		lines, everything = self.route_lines(provider, f"explain {self.SECRET} for sales invoices")
 		self.assertEqual(len(lines), 1)
 		line = lines[0]
-		for key in ("corr=", "stage=router", "provider=Groq", "model=qwen/qwen3.8-27b", "provider_calls=1", "attempts=1", "history=", "schema_doctypes=",
-			"latency_ms=", "system_chars=", "prompt_chars=", "est_tokens=", "outcome=ok"):
+		for key in (
+			"corr=",
+			"stage=router",
+			"provider=Groq",
+			"model=qwen/qwen3.8-27b",
+			"provider_calls=1",
+			"attempts=1",
+			"history=",
+			"schema_doctypes=",
+			"latency_ms=",
+			"system_chars=",
+			"prompt_chars=",
+			"est_tokens=",
+			"outcome=ok",
+		):
 			self.assertIn(key, line)
 		self.assertNotIn("http_status", line)
 		self.assertNotIn(self.SECRET, "\n".join(everything))
 		self.assertLess(int(line.split("est_tokens=")[1].split()[0]), TARGET_EST_TOKENS)
 
 	def test_route_log_on_a_429_names_status_category_and_limit(self):
-		provider = FakeProvider(AIProviderError("rate_limited", status_code=429, retry_after=None, limit="tpm"))
+		provider = FakeProvider(
+			AIProviderError("rate_limited", status_code=429, retry_after=None, limit="tpm")
+		)
 		lines, everything = self.route_lines(provider, f"show {self.SECRET} invoices")
 		line = lines[0]
-		for key in ("outcome=error:rate_limited", "http_status=429", "category=rate_limited", "limit=tpm", "provider_calls=1"):
+		for key in (
+			"outcome=error:rate_limited",
+			"http_status=429",
+			"category=rate_limited",
+			"limit=tpm",
+			"provider_calls=1",
+		):
 			self.assertIn(key, line)
 		self.assertNotIn(self.SECRET, "\n".join(everything))
 
@@ -299,7 +483,15 @@ class TestDiagnostics(IntegrationTestCase):
 		with self.assertLogs("ai_erpnext", level="INFO") as logs:
 			frappe.local.ai_log_context = {"corr": "abc123", "stage": "router"}
 			try:
-				errors.log_ai_event(provider="Groq", model="m", status="error", category="rate_limited", limit="tpm", http_status=429, prompt="SECRET PROMPT")
+				errors.log_ai_event(
+					provider="Groq",
+					model="m",
+					status="error",
+					category="rate_limited",
+					limit="tpm",
+					http_status=429,
+					prompt="SECRET PROMPT",
+				)
 			finally:
 				frappe.local.ai_log_context = None
 			errors.log_ai_event(provider="Groq", model="m", status="ok")

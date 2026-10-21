@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import frappe
 
 from ai_erpnext.mapping.base import BaseMatcher, MatchResult
@@ -26,7 +28,7 @@ class WarehouseMatcher(BaseMatcher):
 
 	doctype = "Warehouse"
 	title_field = "warehouse_name"
-	base_filters = {"is_group": 0, "disabled": 0}
+	base_filters: ClassVar[dict] = {"is_group": 0, "disabled": 0}
 
 	def __init__(self, company=None):
 		super().__init__({"company": company} if company else None)

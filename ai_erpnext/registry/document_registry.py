@@ -33,13 +33,17 @@ class DocumentDefinition:
 	required_item_fields: tuple = ()
 	masters: dict = field(default_factory=dict)
 	# --- per-type semantics used by the shared transaction mapper / validator / builder ---
-	party_field: str | None = None  # field on the target holding the counterparty (customer, supplier, party_name)
+	party_field: str | None = (
+		None  # field on the target holding the counterparty (customer, supplier, party_name)
+	)
 	party_doctype: str | None = None  # Customer or Supplier
 	date_field: str | None = None  # posting_date or transaction_date
 	second_date_field: str | None = None  # due_date, delivery_date, schedule_date, valid_till
 	second_date_required: bool = False
 	row_date_field: str | None = None  # the item-row copy of second_date_field (delivery_date, schedule_date)
-	item_filters: dict = field(default_factory=dict)  # flags an item must have on this document (is_sales_item ...)
+	item_filters: dict = field(
+		default_factory=dict
+	)  # flags an item must have on this document (is_sales_item ...)
 	tax_template_doctype: str | None = None
 	supports_discount: bool = False
 	is_return: bool = False
@@ -47,8 +51,12 @@ class DocumentDefinition:
 	currency: bool = True  # the target has a transaction currency
 	rate_required: bool = True  # item rows must carry a price
 	party_currency_check: bool = False  # mirror ERPNext's party-account currency rule (invoices)
-	reference_field: str | None = None  # field for the source document number (bill_no, po_no, supplier_delivery_note)
-	remarks_tag: bool = False  # tag remarks with the source number (duplicate detection without a dedicated field)
+	reference_field: str | None = (
+		None  # field for the source document number (bill_no, po_no, supplier_delivery_note)
+	)
+	remarks_tag: bool = (
+		False  # tag remarks with the source number (duplicate detection without a dedicated field)
+	)
 	duplicate_check: str | None = None  # "sales_invoice", "reference", "party_date_total", "bom"
 
 	def get_component(self, kind):
@@ -111,7 +119,7 @@ def _ensure_loaded():
 	if _loaded:
 		return
 	_loaded = True
-	from ai_erpnext.registry import definitions  # noqa: F401  (registers built-ins)
+	from ai_erpnext.registry import definitions
 
 	# Other apps can register definitions via the `ai_document_definitions` hook,
 	# a list of dotted paths to modules that call register() on import.

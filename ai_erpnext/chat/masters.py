@@ -85,13 +85,23 @@ def item_draft(for_key, name, description=None, uom=None, flags=None):
 
 def _draft(doctype, for_key, values):
 	meta = frappe.get_meta(doctype)
-	required = [f.fieldname for f in meta.fields if f.reqd and not f.read_only and f.fieldtype not in ("Table", "Table MultiSelect")]
+	required = [
+		f.fieldname
+		for f in meta.fields
+		if f.reqd and not f.read_only and f.fieldtype not in ("Table", "Table MultiSelect")
+	]
 	if doctype == "Item" and frappe.db.get_single_value("Stock Settings", "item_naming_by") != "Item Code":
 		required = [f for f in required if f != "item_code"]  # naming series will name the item
 	unsupported = [f for f in required if f not in FIELDS[doctype]]
 	ask = [f for f in required if f in FIELDS[doctype] and not values.get(f)]
 	ask += [f for f in ALWAYS_ASK.get(doctype, []) if f not in ask and f not in values]
-	return {"doctype": doctype, "for_key": for_key, "values": values, "ask": ask, "unsupported_required": unsupported}
+	return {
+		"doctype": doctype,
+		"for_key": for_key,
+		"values": values,
+		"ask": ask,
+		"unsupported_required": unsupported,
+	}
 
 
 def next_field(draft):
@@ -104,7 +114,10 @@ def field_options(doctype, fieldname):
 		opts = [o for o in (frappe.get_meta(doctype).get_field(fieldname).options or "").split("\n") if o]
 		return [{"label": o, "value": o} for o in opts]
 	if spec["type"] == "Check":
-		return [{"label": "Stock item (tracked in inventory)", "value": "1"}, {"label": "Non-stock item / service", "value": "0"}]
+		return [
+			{"label": "Stock item (tracked in inventory)", "value": "1"},
+			{"label": "Non-stock item / service", "value": "0"},
+		]
 	if spec["type"] == "Link":
 		filters = {"is_group": 0} if spec["options"] in TREE_DOCTYPES else {}
 		if spec["options"] == "UOM":
@@ -129,7 +142,9 @@ def set_field(draft, fieldname, raw):
 
 	if spec["type"] == "Data":
 		if fieldname == "item_code" and readable_exists("Item", value):
-			return _("An item with code “{0}” already exists. Choose another code, or say “use existing”.").format(value)
+			return _(
+				"An item with code “{0}” already exists. Choose another code, or say “use existing”."
+			).format(value)
 	elif spec["type"] == "Select":
 		opts = [o["value"] for o in field_options(doctype, fieldname)]
 		match = next((o for o in opts if o.lower() == value.lower()), None)
@@ -140,7 +155,15 @@ def set_field(draft, fieldname, raw):
 		v = value.lower()
 		if v in ("1", "yes", "stock", "stock item", "stock item (tracked in inventory)", "inventory"):
 			value = 1
-		elif v in ("0", "no", "service", "non-stock", "non stock", "non-stock item / service", "non-stock item"):
+		elif v in (
+			"0",
+			"no",
+			"service",
+			"non-stock",
+			"non stock",
+			"non-stock item / service",
+			"non-stock item",
+		):
 			value = 0
 		else:
 			return _("Is it a stock item or a non-stock item / service?")
@@ -160,7 +183,9 @@ def _resolve_link(doctype, value):
 	exact = frappe.get_list(doctype, filters={**filters, "name": value}, pluck="name", limit=2)
 	if exact:
 		return exact[0]
-	like = frappe.get_list(doctype, filters={**filters, "name": ["like", f"%{value}%"]}, pluck="name", limit=2)
+	like = frappe.get_list(
+		doctype, filters={**filters, "name": ["like", f"%{value}%"]}, pluck="name", limit=2
+	)
 	return like[0] if len(like) == 1 else None
 
 
@@ -170,7 +195,12 @@ def summary(draft):
 		v = draft["values"].get(f)
 		if f == "is_stock_item" and v is not None:
 			v = "Stock item" if int(v) else "Non-stock / service"
-		rows.append({"label": FIELDS[draft["doctype"]][f]["label"].capitalize(), "value": v if v not in (None, "") else "Not set"})
+		rows.append(
+			{
+				"label": FIELDS[draft["doctype"]][f]["label"].capitalize(),
+				"value": v if v not in (None, "") else "Not set",
+			}
+		)
 	return rows
 
 

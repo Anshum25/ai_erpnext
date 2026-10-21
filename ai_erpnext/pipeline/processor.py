@@ -20,8 +20,8 @@ PROMPT_VERSION = "B3"
 
 
 class DocumentProcessor:
-    def __init__(self, provider):
-        self.provider = provider
+	def __init__(self, provider):
+		self.provider = provider
 
-    def process_file(self, file_content: bytes, file_type: str) -> dict:
-        return self.provider.extract_document_data(file_content, file_type, EXTRACTION_PROMPT)
+	def process_file(self, file_content: bytes, file_type: str) -> dict:
+		return self.provider.extract_document_data(file_content, file_type, EXTRACTION_PROMPT)
