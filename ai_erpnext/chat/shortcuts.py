@@ -11,10 +11,14 @@ by chat.queries in the same way.
 
 "this <document>" / "it" become {"ref": {"doctypes": [...]}}: the engine replaces it with the
 record the user is looking at (the open form) or the single record shown last.
+
+HR questions ("my leave balance", "attendance of Anshum for October", "find employee Anshum")
+are matched by chat/hr.py.
 """
 
 import re
 
+from ai_erpnext.chat import hr
 from ai_erpnext.chat.queries import DOCUMENT_DOCTYPES, ENTITY_DOCTYPES, REGISTRY, looks_like_id
 
 GREETING_REPLY = (
@@ -264,6 +268,9 @@ def match(text, last_query=None):
 		else:
 			index = ORDINALS.get(n) or int(n)
 		return {"mode": "open", "index": index}
+	plan = hr.match(text)  # leave balance, attendance, "my employee details", "find employee X"
+	if plan:
+		return plan
 	m = RETURNS_RE.match(text)
 	if m:
 		return _returns(m)

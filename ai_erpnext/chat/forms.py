@@ -24,11 +24,11 @@ import re
 import uuid
 
 import frappe
-from frappe.utils import flt, nowdate, strip_html
+from frappe.utils import add_days, flt, getdate, nowdate, strip_html
 
 from ai_erpnext.capability import service as capability
 from ai_erpnext.capability.access import readable_exists, readable_names
-from ai_erpnext.chat import requirements
+from ai_erpnext.chat import hr, requirements
 from ai_erpnext.mapping.customer import CustomerMatcher
 from ai_erpnext.mapping.item import ItemMatcher
 from ai_erpnext.mapping.normalize import clean_text, normalize_name, parse_date, parse_number
@@ -327,6 +327,38 @@ SPECS = {
 			),
 		],
 	},
+	# HRMS. Created as a Draft with status Open (never set here): the leave approver approves and submits it in ERPNext.
+	# Before the preview HRMS's own validate() runs on an unsaved copy (hr.precheck); the leave approver is the one HRMS's form
+	# would fill from the employee ("derived"), never a value from the chat.
+	"Leave Application": {
+		"party": None,
+		"items": None,
+		"derived": ("leave_approver",),
+		"example": "to date",
+		"header": [
+			F(
+				"employee",
+				"Employee",
+				"link",
+				doctype="Employee",
+				filters={"status": "Active"},
+				default="employee",
+				prompt="Which employee is the leave for?",
+			),
+			F("leave_type", "Leave type", "link", doctype="Leave Type", prompt="Which type of leave is it?"),
+			F("from_date", "From date", "date", prompt="From which date?"),
+			F("to_date", "To date", "date", prompt="Until which date (the last day of leave)?"),
+			F(
+				"description",
+				"Reason",
+				"data",
+				required=False,
+				ask=True,
+				prompt="What is the reason for the leave?",
+				skip_label="Skip",
+			),
+		],
+	},
 	"Item": {
 		"party": None,
 		"items": None,
@@ -364,6 +396,12 @@ SPECS = {
 # on the way from inside another form ("Create new ..."): that offer is driven by the `master` of a link field, not by this list.
 MASTERS = ("Customer", "Supplier", "Item", "Lead", "Issue")
 CREATABLE = tuple(SPECS)
+
+
+def creatable():
+	"""The creatable DocTypes installed on this site (Leave Application needs HRMS), for messages and the router prompt."""
+	return tuple(dt for dt in CREATABLE if dt not in hr.DOCTYPES or hr.installed())
+
 
 ITEM_FILTERS = {
 	"selling": {"is_sales_item": 1},
@@ -408,6 +446,8 @@ DOCTYPE_ALIASES = {
 	"stock transfer": "Stock Entry",
 	"material receipt": "Stock Entry",
 	"material issue": "Stock Entry",
+	"leave": "Leave Application",
+	"leave request": "Leave Application",
 }
 
 _DT_ALT = "|".join(
@@ -481,7 +521,10 @@ def match_doctype(text):
 
 def start(ctx, doctype, values=None, items=None, return_to=None, rows=None, intro=None):
 	if doctype not in SPECS:
-		ctx.say(f"I can't create {doctype} records from the chat. I can create: {', '.join(CREATABLE)}.")
+		ctx.say(f"I can't create {doctype} records from the chat. I can create: {', '.join(creatable())}.")
+		return
+	if doctype not in creatable():
+		ctx.say(f"I can't create a {doctype}: {hr.NOT_INSTALLED}")
 		return
 	if not frappe.has_permission(doctype, "create"):
 		ctx.say(f"You don't have permission to create {doctype} records.")
@@ -502,7 +545,9 @@ def start(ctx, doctype, values=None, items=None, return_to=None, rows=None, intr
 		default = _default(f, form)
 		if default not in (None, ""):
 			form["values"][f["fieldname"]] = default
-			form["labels"][f["fieldname"]] = default
+			form["labels"][f["fieldname"]] = _link_label(f, default, default)
+	if doctype == "Leave Application":
+		values = hr.form_hints(form, values)
 	notes = []
 	for key, raw in (values or {}).items():
 		field = _field(doctype, spec["party"] if key == "party" else key)
@@ -513,8 +558,12 @@ def start(ctx, doctype, values=None, items=None, return_to=None, rows=None, intr
 			# question offers the matches (or a separate "Create new") instead of guessing.
 			status, found, display = _resolve_link(field, form, clean_text(raw, 140), from_text=True)
 			if status == "ok":
-				form["values"][field["fieldname"]], form["labels"][field["fieldname"]] = found, display
+				form["values"][field["fieldname"]] = found
+				form["labels"][field["fieldname"]] = _link_label(field, found, display)
 			else:
+				# the name the user gave wins over a default: ask about it instead of keeping the default
+				form["values"].pop(field["fieldname"], None)
+				form["labels"].pop(field["fieldname"], None)
 				form.setdefault("prefill", {})[field["fieldname"]] = {
 					"search": clean_text(raw, 140),
 					"candidates": found if status == "ambiguous" else None,
@@ -934,6 +983,8 @@ def _default(f, form):
 		return permitted[0] if len(permitted) == 1 else None
 	if d == "stock_uom":
 		return frappe.db.get_single_value("Stock Settings", "stock_uom") or None
+	if d == "employee":
+		return hr.default_employee()  # the user's own active employee, when exactly one is linked to the user
 	if d == "item_code":
 		return None  # filled from item_code at creation
 	if f["type"] == "select" and d:
@@ -978,7 +1029,7 @@ def _ask_field(ctx, form, f, search=None, candidates=None, text=None, offset=0):
 		)
 		more = candidates is None and len(names) > PAGE
 		names = names[:PAGE] if candidates is None else names
-		options = [{"label": n, "value": n} for n in names]
+		options = [{"label": _link_label(f, n, n), "value": n} for n in names]
 		if more:
 			options.append(
 				{"label": f"Show more {f['label'].lower()}s", "value": "__more__", "style": "secondary"}
@@ -1000,6 +1051,8 @@ def _ask_field(ctx, form, f, search=None, candidates=None, text=None, offset=0):
 					"value": form["values"]["posting_date"],
 				}
 			]
+		elif form["doctype"] == "Leave Application" and f["fieldname"] == "to_date":
+			options = hr.to_date_options(form)
 	elif f["type"] == "select":
 		input_type = None
 		opts = [
@@ -1077,9 +1130,12 @@ def _set(ctx, form, f, raw, from_text):
 		form["values"][name] = form["labels"][name] = value
 		return None
 	if f["type"] == "date":
-		if value.lower() in ("today", "now"):
-			value = nowdate()
+		relative = {"today": 0, "now": 0, "tomorrow": 1, "yesterday": -1}.get(value.lower().strip(" .!"))
+		if relative is not None:
+			value = str(add_days(nowdate(), relative))
 		parsed = parse_date(value)
+		if not parsed.ok and not parsed.ambiguous and not re.search(r"\d{4}", value):
+			parsed = parse_date(f"{value} {getdate().year}")  # "25 October" is this year's
 		if not parsed.ok:
 			return (
 				"That date could be read two ways. Please use YYYY-MM-DD."
@@ -1121,7 +1177,7 @@ def _set(ctx, form, f, raw, from_text):
 	# link
 	status, found, display = _resolve_link(f, form, value, from_text)
 	if status == "ok":
-		form["values"][name], form["labels"][name] = found, display
+		form["values"][name], form["labels"][name] = found, _link_label(f, found, display)
 		if name in ("company", "set_warehouse"):
 			if name == "company":
 				form["values"].pop("set_warehouse", None)  # warehouses belong to a company
@@ -1143,6 +1199,11 @@ def _set(ctx, form, f, raw, from_text):
 		_ask_not_found(ctx, form, f, value)
 		return "__asked__"
 	return f"I couldn't find a {f['label'].lower()} called “{value}”."
+
+
+def _link_label(f, value, display):
+	"""What a chosen record is called in questions and the preview: employees by name and ID, others as found."""
+	return hr.employee_label(value) if f.get("doctype") == "Employee" else display
 
 
 def _with(filters, fieldname, value):
@@ -1517,6 +1578,14 @@ def _requirements(ctx, form):
 			form.setdefault("force_ask", []).append(fieldname)
 			next_step(ctx)
 			return True
+
+	# 4. HRMS's own rules (balance, overlapping leave, dates, holidays, approver...) on an unsaved copy.
+	if doctype == "Leave Application":
+		check = hr.precheck(_doc_dict(form))
+		form["check"] = check if check["ok"] else None
+		if not check["ok"]:
+			_failed(ctx, form, check["message"], who="HRMS")
+			return True
 	return False
 
 
@@ -1651,6 +1720,10 @@ def _ask_confirm(ctx, form):
 		"title": f"New {doctype}" + ("" if doctype in MASTERS else " (Draft)"),
 		"rows": rows,
 	}
+	if form.get("check"):  # figures HRMS calculated for this application (hr.precheck)
+		card["rows"] += hr.preview_rows(form["check"])
+		if form["check"].get("notes"):
+			card["note"] = "HRMS notes: " + " ".join(form["check"]["notes"])
 	if spec["items"]:
 		if not form["items"]:
 			form["items_done"] = False
@@ -1694,7 +1767,12 @@ def _ask_confirm(ctx, form):
 		+ (
 			"? It is saved immediately: this record has no Draft state."
 			if doctype in MASTERS
-			else " as a Draft? It will not be submitted."
+			else " as a Draft? It will not be submitted"
+			+ (
+				" or approved: the leave approver decides in ERPNext."
+				if doctype == "Leave Application"
+				else "."
+			)
 		)
 		+ " You can still change anything, e.g. “change "
 		+ (spec["party"] or spec["header"][0]["fieldname"]).replace("_", " ")
@@ -1728,6 +1806,8 @@ def _doc_dict(form, check=False):
 	if form["doctype"] == "Item" and not values.get("item_name"):
 		values["item_name"] = values.get("item_code")
 	doc = {"doctype": form["doctype"], **values, **spec.get("fixed", {})}
+	if form["doctype"] == "Leave Application":
+		doc.update(hr.derived_values(values))
 	if (
 		form["doctype"] in ("Sales Invoice", "Purchase Invoice", "Stock Entry")
 		and values.get("posting_date")
@@ -1774,6 +1854,8 @@ def _create(ctx, form):
 		doc.insert()  # standard permissions + ERPNext validation; never submit()
 		if doc.meta.is_submittable and doc.docstatus != 0:
 			raise frappe.ValidationError("Created documents must stay Draft")
+		if doctype == "Leave Application" and doc.status != "Open":
+			raise frappe.ValidationError("A leave application created from the chat must stay Open")
 	except Exception as e:
 		# nothing of the failed attempt remains; the form (everything the user entered) is kept
 		frappe.db.rollback(save_point="ai_chat_form")
@@ -1810,6 +1892,21 @@ def _create(ctx, form):
 				parent["labels"][ret["field"]] = doc.get(SPECS[doctype]["title"]) or doc.name
 			ctx.say(f"Back to the {parent['doctype']}.")
 			return next_step(ctx)
+		return
+	if doctype == "Leave Application":
+		ctx.say(
+			"Your Leave Application has been created as a Draft with status Open. It hasn't been submitted or approved: "
+			"open it to review it; your leave approver approves it in ERPNext."
+			+ (("\nERPNext notes: " + " ".join(notes)) if notes else ""),
+			card={
+				"type": "created",
+				"title": f"{doctype} {doc.name}",
+				"doctype": doctype,
+				"name": doc.name,
+				"action_label": f"Open {doctype}",
+				"rows": hr.created_rows(doc),
+			},
+		)
 		return
 	party = (
 		doc.get("customer_name")
@@ -1908,11 +2005,12 @@ def erpnext_notes():
 	return notes[:3]
 
 
-def _failed(ctx, form, reason):
-	ctx.say(f"ERPNext didn't accept the {form['doctype']}: {reason}")
+def _failed(ctx, form, reason, who="ERPNext"):
+	example = SPECS[form["doctype"]].get("example", "customer")
+	ctx.say(f"{who} didn't accept the {form['doctype']}: {reason}")
 	ctx.ask(
 		"form_confirm",
-		"Nothing was created. You can change a value (for example “change customer to …”), retry, or cancel.",
+		f"Nothing was created. You can change a value (for example “change {example} to …”), retry, or cancel.",
 		options=[
 			{"label": "Retry", "value": "__retry__"},
 			{"label": "Cancel", "value": "__cancel__", "style": "secondary"},

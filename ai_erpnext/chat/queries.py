@@ -36,6 +36,7 @@ from ai_erpnext.capability.policy import (  # re-exported: existing callers impo
 	Spec,
 )
 from ai_erpnext.capability.service import CapabilityError
+from ai_erpnext.chat import hr
 from ai_erpnext.mapping.normalize import clean_text, normalize_name, parse_date
 
 PAGE_SIZE = 10
@@ -165,7 +166,8 @@ def validate(plan):
 	op = clean_text(plan.get("operation"), 40) or "list"
 	filters = plan.get("filters") if isinstance(plan.get("filters"), dict) else {}
 	raw_doctype = clean_text(plan.get("doctype"), 60)
-	doctype = _match_doctype(raw_doctype)
+	op = _hr_operation(op, raw_doctype, plan)
+	doctype = "Employee" if op in hr.OPERATIONS else _match_doctype(raw_doctype)
 	auto = (
 		not doctype
 		and op == "details"
@@ -199,6 +201,8 @@ def validate(plan):
 		"offset": max(0, min(MAX_OFFSET, int(flt(plan.get("offset"))))),
 		"fields": None,
 		"want": None,
+		# "my employee details": the logged-in user's own Employee, resolved when the query runs (never stored as a name)
+		"self": doctype == "Employee" and filters.get("self") is True,
 	}
 	if not q["search"]:
 		# A name given as "party" (or as a title field) of a record that has no party field is the
@@ -208,6 +212,8 @@ def validate(plan):
 			for k in ("party", *(spec.search_fields if spec else ()), spec.title if spec else "")
 		]
 		q["search"] = next((v for v in named if v), None) if not q["party"] else None
+	if op in hr.OPERATIONS:
+		return hr.validate(plan, q, filters)
 	ds = clean_text(filters.get("docstatus"), 20)
 	if ds and ds.lower() in DOCSTATUS:
 		q["docstatus"] = ds.lower()
@@ -250,10 +256,28 @@ def validate(plan):
 				{"label": "This year", "value": "this_year"},
 			],
 		)
-	if op in ("details", "summary") and not (q["name"] or q["search"] or q["party"]):
+	if op in ("details", "summary") and not (q["name"] or q["search"] or q["party"] or q["self"]):
 		what = doctype or "record"
 		raise QueryClarify(f"Which {what} do you mean? Type its name or ID.", kind="target", plan=q)
 	return q
+
+
+# Words in a details plan that ask for HRMS data rather than an Employee field ("leave balance of Anshum").
+_HR_FIELD_WORDS = {
+	"leave_balance": re.compile(r"\bleaves?\b|\bbalance\b", re.I),
+	"attendance": re.compile(r"\battendance\b", re.I),
+}
+
+
+def _hr_operation(op, raw_doctype, plan):
+	"""The HR operation a plan really asks for: leave_balance/attendance as named, or an Employee details plan whose
+	requested "fields" are leave or attendance (the router model sometimes plans "leave balance" as a field)."""
+	if op in hr.OPERATIONS:
+		return op
+	if op != "details" or (raw_doctype or "").lower().rstrip("s") != "employee":
+		return op
+	words = " ".join(str(f) for f in (plan.get("fields") if isinstance(plan.get("fields"), list) else []))
+	return next((name for name, regex in _HR_FIELD_WORDS.items() if words and regex.search(words)), op)
 
 
 def _generic_parts(q, plan):
@@ -610,6 +634,10 @@ def execute(q):
 		return _outstanding_by_party(q, "Sales Invoice", "Customer")
 	if op == "outstanding_by_supplier":
 		return _outstanding_by_party(q, "Purchase Invoice", "Supplier")
+	if op in hr.OPERATIONS:
+		if not hr.installed():
+			raise QueryError(hr.NOT_INSTALLED)
+		return hr.execute(q)
 	return _list(q)
 
 
@@ -1235,7 +1263,8 @@ def _resolve(q, term):
 		hits = [h for h in hits if h[0] != "Contact"]  # a customer's/supplier's own contact is the same party
 	if not hits:
 		return {
-			"text": f"I couldn't find a {_kind_label(doctypes)} matching “{term}” that you can access.",
+			"text": f"I couldn't find {'an' if _kind_label(doctypes)[0] in 'aeiou' else 'a'} {_kind_label(doctypes)} "
+			f"matching “{term}” that you can access.",
 			"names": [],
 			"titles": [],
 			"not_found": True,
@@ -1281,6 +1310,8 @@ def _resolve_target(q, term):
 
 
 def _details(q):
+	if q.get("self") and not (q["name"] or q["search"] or q["party"] or q.get("pick")):
+		q = dict(q, pick=["Employee", hr.self_employee(q)])
 	term = q["name"] or q["search"] or q["party"]
 	resolved = _resolve_target(q, term)
 	if isinstance(resolved, dict):

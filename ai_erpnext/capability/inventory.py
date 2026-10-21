@@ -49,7 +49,9 @@ VERIFIED = {
 	"Employee": {
 		"read",
 		"filter",
-	},  # test_coverage_phase_d.test_employee_organisational_fields_only reads a real Employee
+		"details",
+		"company",
+	},  # test_coverage_phase_d.test_employee_organisational_fields_only; test_chat_hr (own record, ambiguity, company)
 	"Quotation": {"read", "details", "child", "company"},
 	"Sales Order": {"read", "filter", "summary"},
 	"Payment Entry": {"read", "filter", "aggregate"},
@@ -87,6 +89,7 @@ CREATE_TESTED = {
 	"Issue",
 	"Material Request",
 	"Stock Entry",
+	"Leave Application",  # test_chat_hr (HRMS sites only)
 }
 # Target DocTypes an image becomes, each with an end-to-end test of the persisted Draft (tests/test_document_direction.py).
 IMAGE_TESTED = {

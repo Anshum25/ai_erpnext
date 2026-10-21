@@ -17,7 +17,7 @@ from frappe import _
 from frappe.utils import flt, nowdate, strip_html
 
 from ai_erpnext.capability.access import readable_exists
-from ai_erpnext.chat import forms, history, masters, page_context
+from ai_erpnext.chat import forms, history, hr, masters, page_context
 from ai_erpnext.chat import session as S
 from ai_erpnext.constants import FieldStatus
 from ai_erpnext.mapping.adapters import DocumentAdapter
@@ -46,6 +46,10 @@ HELP = (
 	"who issued it and who it is addressed to.\n\n"
 	"While we work on a document you can say “change customer to …”, “set posting date to 2026-10-15”, "
 	"“row 2 item SKU001”, “why?”, “retry” or “cancel”. I never submit, cancel, delete or pay documents."
+)
+HR_HELP = (
+	"\n\nHR (HRMS): “show my leave balance”, “leave balance for <employee>”, “my attendance this month”, “find employee "
+	"<name>”, and “apply for leave” to create a Leave Application as a Draft (never submitted or approved by me)."
 )
 GREETING = "Hi! Ask me about ERPNext, look up your data, create records step by step (e.g. “create purchase invoice”), or attach a document image."
 
@@ -95,6 +99,7 @@ _CREATE_NAMES = "|".join(
 			"item",
 			"lead",
 			"issue",
+			"leave application",
 			*forms.DOCTYPE_ALIASES,
 		],
 		key=len,
@@ -418,7 +423,7 @@ def _on_text(ctx, text):
 	if RESTART_RE.match(text):
 		return _restart(ctx)
 	if HELP_RE.match(text):
-		ctx.say(HELP)
+		ctx.say(HELP + (HR_HELP if hr.installed() else ""))
 		return _reask_if_pending(ctx)
 	if RETRY_RE.match(text) and ctx.st.get("entry"):
 		return _retry(ctx)
@@ -477,6 +482,7 @@ def _on_text(ctx, text):
 		is_general = (
 			GENERAL_CUE_RE.match(text)
 			or CREATE_DOC_RE.match(text)
+			or hr.APPLY_RE.match(text)
 			or shortcuts.field_question(text)
 			or (ctx.page and page_context.classify(text, ctx.page))
 		) and not (pending["kind"] in search_kinds and re.match(r"^\s*(find|search)\b", text, re.I))
@@ -497,6 +503,7 @@ def _is_new_request(text):
 		or len(text.split()) > 8
 		or GENERAL_CUE_RE.match(text)
 		or CREATE_DOC_RE.match(text)
+		or hr.APPLY_RE.match(text)
 		or ACTION_RE.match(text)
 	):
 		return True
@@ -532,7 +539,8 @@ def _general(ctx, text):
 		return
 	# Unambiguous messages are handled without an AI call (see chat/shortcuts.py).
 	plan = shortcuts.match(text, ctx.st.get("last_query"))
-	m = CREATE_DOC_RE.match(text)
+	# "apply for leave" is "create leave application"
+	m = CREATE_DOC_RE.match(text) or hr.APPLY_RE.match(text)
 	if plan is None and m and not text[m.end() :].strip(" .!?"):
 		plan = {"mode": "create", "doctype": m.group(1)}  # "create purchase invoice" and nothing else
 	elif plan is None and m and CONTEXT_CREATE_RE.match(text[m.end() :]):
@@ -558,6 +566,9 @@ def _general(ctx, text):
 				return
 			if m:  # creation works without the AI service: start the guided form with no prefill
 				return forms.start(ctx, forms.match_doctype(m.group(1)))
+			if hr.LEAVE_REQUEST_RE.search(text) and "?" not in text and not capabilities.match(text):
+				# "apply for two days of casual leave" (a request, not a question): the form asks for the details
+				return forms.start(ctx, "Leave Application")
 			reason = CHAT_ERRORS.get(e.category, CHAT_ERRORS["unknown"])
 			guidance = capabilities.answer(text)
 			if (
@@ -604,7 +615,7 @@ def _general(ctx, text):
 	elif mode == "create":
 		doctype = forms.match_doctype(plan.get("doctype") or "")
 		if not doctype:
-			ctx.say(f"I can't create that from the chat. I can create: {', '.join(forms.CREATABLE)}.")
+			ctx.say(f"I can't create that from the chat. I can create: {', '.join(forms.creatable())}.")
 			return
 		values, items = _page_prefill(
 			ctx,
@@ -625,7 +636,7 @@ def _general(ctx, text):
 			)
 		ctx.say(
 			(plan.get("reply") or "I can't do that yet.") + " From the chat I can only create new records of "
-			f"{', '.join(forms.CREATABLE)} after you confirm (transactions only as Drafts); I never submit, cancel, delete or pay."
+			f"{', '.join(forms.creatable())} after you confirm (transactions only as Drafts); I never submit, cancel, delete or pay."
 		)
 	elif mode == "open":
 		_open_result(ctx, plan.get("index"))
@@ -846,7 +857,11 @@ def _run_query(ctx, raw_plan, page_of=None, prepared=None, attempts=0):
 		get_ai_logger().error(f"AI-CHAT query_failed error_type={type(e).__name__}")
 		ctx.say("I couldn't run that query. Please try rephrasing it.")
 		return
-	if result.get("not_found") and q["operation"] == "details" and not _operation_in_progress(ctx):
+	if (
+		result.get("not_found")
+		and q["operation"] in ("details", *hr.OPERATIONS)
+		and not _operation_in_progress(ctx)
+	):
 		if attempts < MAX_QUERY_ATTEMPTS:
 			# Ask for the name again (bounded); the reply is applied to this same lookup.
 			question = ctx.ask(
@@ -997,6 +1012,7 @@ def _more(ctx):
 		"summary",
 		"outstanding_by_customer",
 		"outstanding_by_supplier",
+		*hr.OPERATIONS,
 	):
 		ctx.say("There's no list to continue. Ask me for some records first.")
 		return

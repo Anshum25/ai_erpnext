@@ -162,6 +162,28 @@ GUIDE = {
 			"Enter the name, company, date of joining and other required details, then save it.",
 		],
 	},
+	"Leave Application": {
+		"module": "HR",
+		"what": "A Leave Application is an employee's request for leave of one leave type between two dates. It is approved "
+		"or rejected by the leave approver; only approved, submitted applications are deducted from the leave balance.",
+		"create": [
+			"Open HR > Leave Application > New.",
+			"Choose the employee and the leave type, and enter the from and to dates (ERPNext shows the leave balance).",
+			"Add the reason and save it; the status stays Open until the leave approver decides.",
+			"The leave approver sets the status to Approved or Rejected and submits it.",
+		],
+		"after_submit": "Submitting an approved application deducts the days from the employee's leave balance (through the Leave "
+		"Ledger) and marks attendance as On Leave; a rejected one is recorded without being deducted.",
+	},
+	"Attendance": {
+		"module": "HR",
+		"what": "An Attendance record marks an employee as Present, Absent, On Leave, Half Day or Work From Home on one date. "
+		"Only submitted records count in reports and payroll.",
+		"create": [
+			"Open HR > Attendance > New (or use Attendance Tool / Employee Checkin for many at once).",
+			"Choose the employee, the date and the status, then save and submit it.",
+		],
+	},
 	"Contact": {
 		"module": "CRM",
 		"what": "A Contact is a person (name, email, phone) linked to customers, suppliers or other records.",
@@ -173,8 +195,13 @@ MODULES = {
 	"Buying": ("Purchase Order", "Purchase Receipt", "Purchase Invoice", "Supplier"),
 	"Stock": ("Item", "Warehouse", "Stock Entry", "Delivery Note", "Purchase Receipt"),
 	"Accounts": ("Sales Invoice", "Purchase Invoice", "Payment Entry"),
-	"HR": ("Employee",),
+	"HR": ("Employee", "Leave Application", "Attendance"),
 	"CRM": ("Customer", "Contact", "Quotation"),
+}
+# HR look-ups that are operations on one employee (chat/hr.py), not lists of these DocTypes; they need HRMS.
+HR_LOOKUPS = {
+	"Leave Application": "show leave balances (“show my leave balance”, “leave balance for <employee>”)",
+	"Attendance": "show one employee's attendance for a period (“my attendance this month”)",
 }
 MODULE_WHAT = {
 	"Selling": "The Selling module covers the sales cycle: quotations, sales orders, deliveries and customer billing.",
@@ -182,7 +209,7 @@ MODULE_WHAT = {
 	"Stock": "The Stock module tracks items and their quantities and value per warehouse: goods received, delivered, transferred "
 	"and adjusted, with stock ledgers and reports.",
 	"Accounts": "The Accounts module is the general ledger: invoices, payments, journal entries, taxes and financial reports.",
-	"HR": "The HR module manages employees and their organisational details.",
+	"HR": "The HR module manages employees and their organisational details; with the HRMS app also leave and attendance.",
 	"CRM": "The CRM module manages leads, opportunities, customers and their contacts.",
 }
 MODULE_ALIASES = {
@@ -294,11 +321,17 @@ MODULE_RE = re.compile(
 
 
 def abilities(doctype):
-	"""What the chat can do with `doctype`: {"query": bool, "create": bool, "masters": bool}."""
-	from ai_erpnext.chat.forms import CREATABLE, MASTERS
+	"""What the chat can do with `doctype`: {"query": bool, "create": bool, "masters": bool, "hr": bool}."""
+	from ai_erpnext.chat import hr
+	from ai_erpnext.chat.forms import MASTERS, creatable
 	from ai_erpnext.chat.queries import REGISTRY
 
-	return {"query": doctype in REGISTRY, "create": doctype in CREATABLE, "master": doctype in MASTERS}
+	return {
+		"query": doctype in REGISTRY,
+		"create": doctype in creatable(),
+		"master": doctype in MASTERS,
+		"hr": doctype in HR_LOOKUPS and hr.installed(),
+	}
 
 
 def footer(doctype):
@@ -308,6 +341,8 @@ def footer(doctype):
 	parts = []
 	if can["query"]:
 		parts.append(f"look up {plural} (e.g. “show the last 10 {plural}”)")
+	if can["hr"]:
+		parts.append(HR_LOOKUPS[doctype])
 	if can["create"]:
 		parts.append(
 			f"create a {'new ' if can['master'] else 'Draft '}{doctype} step by step (say “create {doctype.lower()}”)"
@@ -365,7 +400,7 @@ def answer(text):
 
 
 def _module_abilities(doctypes):
-	can_query = [dt for dt in doctypes if abilities(dt)["query"]]
+	can_query = [dt for dt in doctypes if abilities(dt)["query"] or abilities(dt)["hr"]]
 	can_create = [dt for dt in doctypes if abilities(dt)["create"]]
 	text = ""
 	if can_query:
@@ -377,12 +412,15 @@ def _module_abilities(doctypes):
 
 def capability_summary():
 	"""For the router prompt: what the assistant itself can and cannot do."""
-	from ai_erpnext.chat.forms import CREATABLE
+	from ai_erpnext.chat import hr
+	from ai_erpnext.chat.forms import creatable
 	from ai_erpnext.chat.queries import REGISTRY
 
 	return (
-		f"The assistant can look up (read-only): {', '.join(REGISTRY)}. It can create, after the user confirms a preview: "
-		f"{', '.join(CREATABLE)} (transactions only as Drafts). It cannot submit, cancel, amend, delete, pay or create anything else "
+		f"The assistant can look up (read-only): {', '.join(REGISTRY)}"
+		+ ("; for one employee at a time also leave balances and attendance (HRMS)" if hr.installed() else "")
+		+ ". It can create, after the user confirms a preview: "
+		f"{', '.join(creatable())} (transactions only as Drafts). It cannot submit, cancel, amend, delete, pay or create anything else "
 		"(no new Stock Entries, Payment Entries or Journal Entries); say so instead of offering it. For the looked-up types it can also filter by "
 		"field values, count, total/average/min/max (never mixing currencies), group results, look into item/tax rows and show one related record per row."
 	)

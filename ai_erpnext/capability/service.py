@@ -482,14 +482,19 @@ def is_creatable(doctype):
 
 
 def creation_fields(doctype, extra=()):
-	"""Top-level fields a chat-created `doctype` may set: the guided header fields, fixed values, and
-	(per form) fields ERPNext made mandatory and the chat asked for."""
+	"""Top-level fields a chat-created `doctype` may set: the guided header fields, fixed values, values the server
+	derives itself (a Leave Application's approver), and (per form) fields ERPNext made mandatory and the chat asked for."""
 	from ai_erpnext.chat import forms
 
 	if not is_creatable(doctype):
 		raise CapabilityError(f"I can't create {doctype if isinstance(doctype, str) else 'that'}.")
 	spec = forms.SPECS[doctype]
-	names = {f["fieldname"] for f in spec["header"]} | set(spec.get("fixed", {})) | set(extra)
+	names = (
+		{f["fieldname"] for f in spec["header"]}
+		| set(spec.get("fixed", {}))
+		| set(spec.get("derived", ()))
+		| set(extra)
+	)
 	return sorted(f for f in names if not _protected(doctype, f))
 
 

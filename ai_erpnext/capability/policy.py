@@ -391,12 +391,14 @@ REGISTRY = {
 		search_fields=("name", "warehouse_name"),
 	),
 	# HR: only non-sensitive organisational fields; salary, bank and personal data are never exposed.
+	# leave_balance / attendance (HRMS) answer for one resolved employee through chat/hr.py, never as raw rows of many.
 	"Employee": Spec(
 		"employee_name",
 		("name", "employee_name", "department", "designation", "status"),
 		("name", "employee_name", "department", "designation", "company", "branch", "status"),
 		status_field="status",
 		search_fields=("name", "employee_name"),
+		operations=("list", "count", "details", "aggregate", "child_rows", "leave_balance", "attendance"),
 	),
 	# --- query-only DocTypes (no creation or edit capability); each verified against the installed metadata ---
 	"Quotation": Spec(
