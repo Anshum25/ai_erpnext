@@ -45,15 +45,16 @@ TXN_ITEMS = ("items", ("item_code", "item_name", "qty", "uom", "rate", "amount")
 TAX_FIELDS = ("charge_type", "account_head", "description", "rate", "tax_amount", "total")
 
 REGISTRY = {
+	# is_return / return_against: credit notes (returns) are filterable; their amounts are negative (see queries._RETURN_NOTE).
 	"Sales Invoice": Spec("customer_name", ("name", "customer_name", "posting_date", "grand_total", "currency", "status"),
 		("name", "customer", "customer_name", "company", "posting_date", "due_date", "currency", "net_total", "total_taxes_and_charges",
-			"grand_total", "outstanding_amount", "status"), "posting_date", "customer", "customer_name", "grand_total", search_fields=("name", "customer", "customer_name"),
+			"grand_total", "outstanding_amount", "is_return", "return_against", "status"), "posting_date", "customer", "customer_name", "grand_total", search_fields=("name", "customer", "customer_name"),
 		child=TXN_ITEMS, operations=("list", "count", "details", "aggregate", "child_rows", "sales_summary", "overdue", "unpaid", "outstanding_by_customer"), taxes=True,
 		currency_field="currency"),
 	"Purchase Invoice": Spec("supplier_name", ("name", "supplier_name", "posting_date", "grand_total", "currency", "status"),
 		("name", "supplier", "supplier_name", "company", "posting_date", "due_date", "bill_no", "currency", "net_total", "total_taxes_and_charges",
-			"grand_total", "outstanding_amount", "status"), "posting_date", "supplier", "supplier_name", "grand_total", search_fields=("name", "supplier", "supplier_name", "bill_no"),
-		child=TXN_ITEMS, operations=("list", "count", "details", "aggregate", "child_rows", "overdue", "unpaid"), taxes=True, currency_field="currency"),
+			"grand_total", "outstanding_amount", "is_return", "return_against", "status"), "posting_date", "supplier", "supplier_name", "grand_total", search_fields=("name", "supplier", "supplier_name", "bill_no"),
+		child=TXN_ITEMS, operations=("list", "count", "details", "aggregate", "child_rows", "overdue", "unpaid", "outstanding_by_supplier"), taxes=True, currency_field="currency"),
 	"Sales Order": Spec("customer_name", ("name", "customer_name", "transaction_date", "grand_total", "currency", "status"),
 		("name", "customer", "customer_name", "company", "transaction_date", "delivery_date", "set_warehouse", "currency", "net_total",
 			"total_taxes_and_charges", "grand_total", "per_delivered", "per_billed", "status"),

@@ -107,11 +107,13 @@ class TestCapabilityPolicy(IntegrationTestCase):
 	def test_query_capability_is_separate_from_creation(self):
 		for dt in NEW_QUERY_ONLY:
 			self.assertTrue(C.is_queryable(dt), dt)
-			if dt not in ("Quotation", "Lead", "Issue"):  # Lead and Issue became creatable in this batch
+			# Lead and Issue became creatable in batch 2; Material Request (a Draft) in the 2026-10-21 phase
+			if dt not in ("Quotation", "Lead", "Issue", "Material Request"):
 				self.assertFalse(C.is_creatable(dt), f"{dt} must stay query-only")
 		self.assertTrue(C.is_creatable("Quotation") and C.is_creatable("Sales Invoice") and C.is_creatable("Item"))
+		self.assertTrue(C.is_creatable("Material Request") and C.is_creatable("Stock Entry"))  # Draft-only stock documents
 		self.assertEqual(set(C.creatable_doctypes()), set(forms.CREATABLE))
-		for dt in ("Stock Entry", "Payment Entry", "Journal Entry", "Contact", "Warehouse", "Employee"):
+		for dt in ("Payment Entry", "Journal Entry", "Contact", "Warehouse", "Employee"):  # payments excluded, journals deferred
 			self.assertTrue(C.is_queryable(dt) and not C.is_creatable(dt), dt)
 		with self.assertRaises(C.CapabilityError):
 			C.creation_fields("Bin")

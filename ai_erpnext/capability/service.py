@@ -367,7 +367,7 @@ def normalize_link(doctype, link):
 # --------------------------------------------------------------------------------------------
 # Creation capability (separate from query capability; Draft documents only)
 # --------------------------------------------------------------------------------------------
-ROW_FIELDS = frozenset({"item_code", "qty", "rate", "warehouse", "schedule_date", "delivery_date"})
+ROW_FIELDS = frozenset({"item_code", "qty", "rate", "warehouse", "schedule_date", "delivery_date", "s_warehouse", "t_warehouse"})
 DOC_KEYS = frozenset({"doctype", "items", "set_posting_time"})
 
 

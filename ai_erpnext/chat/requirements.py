@@ -36,6 +36,7 @@ WAREHOUSE_RULES = {
 	"Purchase Receipt": "Which warehouse should {items} be received into?",
 	"Sales Order": "Which warehouse will {items} be delivered from?",
 	"Delivery Note": "Which warehouse will {items} be delivered from?",
+	"Material Request": "Which warehouse are {items} needed in?",
 }
 BUNDLE_DOCTYPES = ("Sales Order", "Delivery Note")
 

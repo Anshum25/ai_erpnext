@@ -34,9 +34,10 @@ from ai_erpnext.mapping.item import ItemMatcher
 from ai_erpnext.mapping.normalize import clean_text, normalize_name, parse_date, parse_number
 
 
-def F(fieldname, label, type, required=True, doctype=None, filters=None, default=None, ask=None, master=None, prompt=None, skip_label=None):
+def F(fieldname, label, type, required=True, doctype=None, filters=None, default=None, ask=None, master=None, prompt=None, skip_label=None, when=None):
+	"""when: {fieldname: (values...)}: the field exists on this form only while those fields have one of those values."""
 	return {"fieldname": fieldname, "label": label, "type": type, "required": required, "doctype": doctype, "filters": filters or {},
-		"default": default, "ask": required if ask is None else ask, "master": master, "prompt": prompt, "skip_label": skip_label}
+		"default": default, "ask": required if ask is None else ask, "master": master, "prompt": prompt, "skip_label": skip_label, "when": when}
 
 
 COMPANY = F("company", "Company", "link", doctype="Company", default="company")
@@ -46,6 +47,9 @@ WAREHOUSE = {"doctype": "Warehouse", "filters": {"is_group": 0, "disabled": 0, "
 # One warehouse for all stock rows. Not asked up front: only when a stock row has no valid
 # default (see _requirements), and it can be changed with "change warehouse to ...".
 SET_WAREHOUSE = F("set_warehouse", "Warehouse", "link", required=False, ask=False, **WAREHOUSE)
+# Stock Entry types the chat may draft: plain receipts, issues and transfers (manufacturing, repacking and subcontracting
+# entries need BOMs and work orders the chat doesn't collect).
+STOCK_ENTRY_TYPES = ("Material Receipt", "Material Issue", "Material Transfer")
 
 SPECS = {
 	"Sales Invoice": {"party": "customer", "items": "selling", "header": [CUSTOMER, COMPANY,
@@ -67,6 +71,17 @@ SPECS = {
 		F("posting_date", "Posting date", "date", default="today"), SET_WAREHOUSE]},
 	"Purchase Receipt": {"party": "supplier", "items": "buying", "header": [SUPPLIER, COMPANY,
 		F("posting_date", "Posting date", "date", default="today"), SET_WAREHOUSE]},
+	# Draft-only internal stock documents: no prices are asked (rates: False); ERPNext values the stock itself.
+	"Material Request": {"party": None, "items": "any", "rates": False, "header": [
+		F("material_request_type", "Purpose", "select", prompt="What is the request for?"), COMPANY,
+		F("transaction_date", "Request date", "date", default="today"),
+		F("schedule_date", "Required by", "date", prompt="By when are the items needed?"), SET_WAREHOUSE]},
+	"Stock Entry": {"party": None, "items": "stock", "rates": False, "header": [
+		F("stock_entry_type", "Type", "link", doctype="Stock Entry Type", filters={"name": ["in", list(STOCK_ENTRY_TYPES)]},
+			prompt="Is this a material receipt, a material issue or a transfer between warehouses?"), COMPANY,
+		F("posting_date", "Posting date", "date", default="today"),
+		F("from_warehouse", "Source warehouse", "link", prompt="Which warehouse do the items leave?", when={"stock_entry_type": ("Material Issue", "Material Transfer")}, **WAREHOUSE),
+		F("to_warehouse", "Target warehouse", "link", prompt="Which warehouse do the items go into?", when={"stock_entry_type": ("Material Receipt", "Material Transfer")}, **WAREHOUSE)]},
 	"Customer": {"party": None, "items": None, "title": "customer_name", "header": [
 		F("customer_name", "Customer name", "data", prompt="What is the customer's name?"),
 		F("customer_type", "Customer type", "select", default="Company", ask=False),
@@ -97,7 +112,7 @@ SPECS = {
 MASTERS = ("Customer", "Supplier", "Item", "Lead", "Issue")
 CREATABLE = tuple(SPECS)
 
-ITEM_FILTERS = {"selling": {"is_sales_item": 1}, "buying": {"is_purchase_item": 1}}
+ITEM_FILTERS = {"selling": {"is_sales_item": 1}, "buying": {"is_purchase_item": 1}, "stock": {"is_stock_item": 1}, "any": {}}
 LABEL_ALIASES = {"date": "posting_date", "invoice date": "posting_date", "order date": "transaction_date", "party": None,
 	"supplier invoice number": "bill_no", "bill number": "bill_no", "bill no": "bill_no", "required by": "schedule_date",
 	"required by date": "schedule_date", "delivery date": "delivery_date", "warehouse": "set_warehouse", "uom": "stock_uom", "unit": "stock_uom"}
@@ -105,7 +120,8 @@ PAGE = 10  # existing records offered per question (then "Show more")
 # Short names people type for a document type ("create po").
 DOCTYPE_ALIASES = {"ticket": "Issue", "po": "Purchase Order", "so": "Sales Order", "pi": "Purchase Invoice", "si": "Sales Invoice",
 	"dn": "Delivery Note", "pr": "Purchase Receipt", "grn": "Purchase Receipt", "quote": "Quotation", "purchase bill": "Purchase Invoice",
-	"vendor": "Supplier", "client": "Customer", "product": "Item"}
+	"vendor": "Supplier", "client": "Customer", "product": "Item", "mr": "Material Request", "indent": "Material Request",
+	"material requisition": "Material Request", "stock transfer": "Stock Entry", "material receipt": "Stock Entry", "material issue": "Stock Entry"}
 
 _DT_ALT = "|".join(sorted((re.escape(n) for n in [*(dt.lower() for dt in SPECS), *DOCTYPE_ALIASES]), key=len, reverse=True))
 SWITCH_RE = re.compile(r"^\s*(?:no,?\s*|sorry,?\s*|oops,?\s*)?(?:i\s+meant|i\s+mean|switch\s+to|change\s+(?:it|this)\s+(?:to|into)|make\s+(?:it|this)|"
@@ -459,8 +475,11 @@ def _correct_qty_rate(ctx, form, what, value):
 # Header fields
 # ------------------------------------------------------------------------------------------------
 def _fields(form):
-	"""The spec's header fields plus fields this site made mandatory (added when found missing)."""
-	return SPECS[form["doctype"]]["header"] + form.get("extra", [])
+	"""The spec's header fields that apply now (see F(when=...)) plus fields this site made mandatory (added when found missing)."""
+	values = form.get("values") or {}
+	header = [f for f in SPECS[form["doctype"]]["header"]
+		if not f.get("when") or all(values.get(k) in allowed for k, allowed in f["when"].items())]
+	return header + form.get("extra", [])
 
 
 def _field(doctype, fieldname, form=None):
@@ -639,6 +658,15 @@ def _set(ctx, form, f, raw, from_text):
 	return f"I couldn't find a {f['label'].lower()} called “{value}”."
 
 
+def _with(filters, fieldname, value):
+	"""The field's own restrictions AND fieldname = value, as a filter list.
+
+	Merging into the dict ({**filters, "name": value}) would replace a restriction on the same field (an allow-list such as
+	{"name": ["in", [...]]}) with the user's value; a list keeps both conditions."""
+	conditions = [[k, v[0], v[1]] if isinstance(v, (list, tuple)) and len(v) == 2 else [k, "=", v] for k, v in (filters or {}).items()]
+	return [*conditions, [fieldname, "=", value]]
+
+
 class _GenericMatcher:
 	"""Name/title matcher for Link fields without a dedicated matcher.
 	Only an exact name or exact (case-insensitive) title is a match; partial matches are suggestions."""
@@ -654,9 +682,9 @@ class _GenericMatcher:
 
 	def match(self, value):
 		fields = ["name"] + ([self.title] if self.title else [])
-		exact = frappe.get_list(self.doctype, filters={**self.filters, "name": value}, fields=fields, limit=2)
+		exact = frappe.get_list(self.doctype, filters=_with(self.filters, "name", value), fields=fields, limit=2)
 		if not exact and self.title:
-			exact = frappe.get_list(self.doctype, filters={**self.filters, self.title: value}, fields=fields, limit=3)
+			exact = frappe.get_list(self.doctype, filters=_with(self.filters, self.title, value), fields=fields, limit=3)
 		if len(exact) == 1:
 			return _Result(exact, self.title, matched=True)
 		rows = exact or frappe.get_list(self.doctype, filters=self.filters, or_filters=[[f, "like", f"%{value}%"] for f in fields],
@@ -681,7 +709,7 @@ def _resolve_link(f, form, value, from_text):
 	if doctype == "Company":
 		return _resolve_company(form, value)
 	if not from_text:  # button values are exact record names; re-check existence and permission
-		rows = frappe.get_list(doctype, filters={**filters, "name": value}, pluck="name", limit=1)
+		rows = frappe.get_list(doctype, filters=_with(filters, "name", value), pluck="name", limit=1)
 		return ("ok", rows[0], value) if rows else ("none", None, None)
 	if doctype == "Customer":
 		res = CustomerMatcher().match(value)
@@ -733,21 +761,28 @@ def _items_step(ctx, form):
 	d = form["draft_item"]
 	if not d.get("item_code"):
 		return _ask_item(ctx, form, search=d.get("text"))
+	rates = spec_rates(form)
 	if d.get("qty") is None or d["qty"] <= 0:
-		return ctx.ask("form_item", f"How many of {d['item_name'] or d['item_code']}? You can give the rate too, e.g. “5 at 20”.", key="qty", input="text")
-	if d.get("rate") is None or d["rate"] < 0:
+		hint = " You can give the rate too, e.g. “5 at 20”." if rates else ""
+		return ctx.ask("form_item", f"How many of {d['item_name'] or d['item_code']}?{hint}", key="qty", input="text")
+	if rates and (d.get("rate") is None or d["rate"] < 0):
 		options = []
 		price = _price(form, d["item_code"])
 		if price:
 			options.append({"label": f"Use price list rate {flt(price[0], 2)} ({price[1]})", "value": str(flt(price[0], 2))})
 		return ctx.ask("form_item", f"What is the rate (price per unit) for {d['item_name'] or d['item_code']}?", key="rate", options=options, input="text")
 	uom = frappe.db.get_value("Item", d["item_code"], "stock_uom")
-	form["items"].append({"item_code": d["item_code"], "item_name": d.get("item_name"), "qty": d["qty"], "rate": d["rate"], "uom": uom})
+	form["items"].append({"item_code": d["item_code"], "item_name": d.get("item_name"), "qty": d["qty"], "rate": d.get("rate") if rates else None, "uom": uom})
 	form["draft_item"] = None
-	ctx.say(f"Added {flt(d['qty'])} × {d.get('item_name') or d['item_code']} at {flt(d['rate'], 2)}.")
+	ctx.say(f"Added {flt(d['qty'])} × {d.get('item_name') or d['item_code']}" + (f" at {flt(d['rate'], 2)}." if rates else "."))
 	if form["queued_items"]:
 		return _items_step(ctx, form)
 	return _ask_more(ctx, form)
+
+
+def spec_rates(form):
+	"""Whether item rows of this document carry a price the user gives (not for material requests and stock entries)."""
+	return SPECS[form["doctype"]].get("rates", True)
 
 
 def _ask_more(ctx, form):
@@ -938,7 +973,7 @@ def _link_ok(f, form, value):
 
 		return value in usable_companies(form["doctype"])
 	try:
-		return bool(frappe.get_list(f["doctype"], filters={**_filters(f, form), "name": value}, pluck="name", limit=1))
+		return bool(frappe.get_list(f["doctype"], filters=_with(_filters(f, form), "name", value), pluck="name", limit=1))
 	except frappe.PermissionError:
 		frappe.local.message_log = []
 		return False
@@ -997,15 +1032,17 @@ def _ask_confirm(ctx, form):
 			return next_step(ctx)
 		card["items"] = []
 		for i in form["items"]:
-			item = {"name": i.get("item_name") or i["item_code"], "code": i["item_code"], "qty": i["qty"], "uom": i.get("uom"),
-				"rate": flt(i["rate"], 2), "amount": flt(i["qty"] * i["rate"], 2)}
+			item = {"name": i.get("item_name") or i["item_code"], "code": i["item_code"], "qty": i["qty"], "uom": i.get("uom")}
+			if spec_rates(form):
+				item.update(rate=flt(i["rate"], 2), amount=flt(i["qty"] * i["rate"], 2))
 			warehouse = _row_warehouse(form, i)
 			if warehouse:
 				item["warehouse"] = warehouse
 				item["warehouse_note"] = "ERPNext default" if warehouse == i.get("default_warehouse") and not (i.get("warehouse") or form["values"].get("set_warehouse")) else None
 			card["items"].append(item)
 		card["note"] = (f"Items total {flt(sum(i['qty'] * i['rate'] for i in form['items']), 2)} before taxes. ERPNext fills accounts, currency, "
-			"price list and taxes from your settings and calculates the final totals.")
+			"price list and taxes from your settings and calculates the final totals.") if spec_rates(form) else (
+			"No prices are entered here: ERPNext values the stock from your valuation settings.")
 		if any(it.get("warehouse_note") for it in card["items"]):
 			card["note"] += " Warehouses marked “ERPNext default” come from your item or stock settings; say “row 1 warehouse …” to change one."
 	label = f"Create {doctype}" if doctype in MASTERS else f"Create draft {doctype}"
@@ -1018,21 +1055,31 @@ def _ask_confirm(ctx, form):
 def _doc_dict(form, check=False):
 	"""The document to insert. check=True: the copy for requirements.inspect, where ERPNext's
 	own defaulting must fill row warehouses, so defaults found earlier are not passed in."""
-	spec, values = SPECS[form["doctype"]], dict(form["values"])
+	spec = SPECS[form["doctype"]]
+	# A value of a field that no longer applies (a source warehouse after a transfer became a receipt) is never sent.
+	applicable, conditional = {f["fieldname"] for f in _fields(form)}, {f["fieldname"] for f in spec["header"] if f.get("when")}
+	values = {k: v for k, v in form["values"].items() if k in applicable or k not in conditional}
 	# Applied to stock rows below. Passing it as the header value would make ERPNext copy it
 	# onto rows that don't need a warehouse (services, non-stock items).
 	values.pop("set_warehouse", None)
 	if form["doctype"] == "Item" and not values.get("item_name"):
 		values["item_name"] = values.get("item_code")
 	doc = {"doctype": form["doctype"], **values, **spec.get("fixed", {})}
-	if form["doctype"] in ("Sales Invoice", "Purchase Invoice") and values.get("posting_date") and values["posting_date"] != nowdate():
+	if form["doctype"] in ("Sales Invoice", "Purchase Invoice", "Stock Entry") and values.get("posting_date") and values["posting_date"] != nowdate():
 		doc["set_posting_time"] = 1
 	if spec["items"]:
 		rows = []
 		for i in form["items"]:
-			row = {"item_code": i["item_code"], "qty": i["qty"], "rate": i["rate"]}
-			if form["doctype"] == "Purchase Order":
+			row = {"item_code": i["item_code"], "qty": i["qty"]}
+			if spec_rates(form):
+				row["rate"] = i["rate"]
+			if form["doctype"] in ("Purchase Order", "Material Request"):
 				row["schedule_date"] = values.get("schedule_date")
+			if form["doctype"] == "Stock Entry":  # the header warehouses, per row (ERPNext checks them against the type)
+				if values.get("from_warehouse"):
+					row["s_warehouse"] = values["from_warehouse"]
+				if values.get("to_warehouse"):
+					row["t_warehouse"] = values["to_warehouse"]
 			if form["doctype"] == "Sales Order":
 				row["delivery_date"] = values.get("delivery_date")
 			warehouse = _row_warehouse(form, i, include_default=not check)
@@ -1086,7 +1133,7 @@ def _create(ctx, form):
 		+ (("\nERPNext notes: " + " ".join(notes)) if notes else ""),
 		card={"type": "created", "title": f"{doctype} {doc.name}", "doctype": doctype, "name": doc.name, "action_label": f"Open {doctype}",
 			"rows": [{"label": "ID", "value": doc.name}, {"label": "Party", "value": party}, {"label": "Date", "value": str(date)},
-				{"label": "Grand total", "value": f"{flt(doc.get('grand_total'), 2)} {doc.get('currency') or ''}".strip()},
+				*([{"label": "Grand total", "value": f"{flt(doc.get('grand_total'), 2)} {doc.get('currency') or ''}".strip()}] if doc.meta.has_field("grand_total") else []),
 				{"label": "Status", "value": status}]})
 
 

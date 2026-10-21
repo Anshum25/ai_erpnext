@@ -1,10 +1,11 @@
-"""Deterministic conversation engine for the AI assistant.
+"""Conversation engine for the AI assistant.
 
-The engine never asks a language model what to do. Invoice images go through the existing
-extraction pipeline (Groq + Prompt B2); the extracted values are treated as untrusted data
-and are mapped/validated by the existing server-side code. The next question is always
-derived from those server-side results plus the user's recorded answers, so a refresh,
-retry or interrupted request resumes from the same point.
+Free-text messages that no deterministic rule recognises go to the router model (chat/llm.py), which only proposes a
+plan; every plan is validated on the server, and the model's own text is checked before it is shown (chat/claims.py).
+Document images go through the extraction pipeline; the extracted values are untrusted data, and what the document
+becomes is decided by detection/direction.py and validated by the registry's mapper/validator. The next question is
+always derived from those server-side results plus the user's recorded answers, so a refresh, retry or interrupted
+request resumes from the same point.
 """
 
 import json
@@ -19,10 +20,9 @@ from ai_erpnext.capability.access import readable_exists
 from ai_erpnext.chat import forms, history, masters, page_context
 from ai_erpnext.chat import session as S
 from ai_erpnext.constants import FieldStatus
-from ai_erpnext.mapping.adapters import SalesInvoiceAdapter
+from ai_erpnext.mapping.adapters import DocumentAdapter
 from ai_erpnext.mapping.company import CompanyMatcher
 from ai_erpnext.mapping.currency import CurrencyMatcher
-from ai_erpnext.mapping.customer import CustomerMatcher
 from ai_erpnext.mapping.item import ItemMatcher
 from ai_erpnext.mapping.normalize import clean_text, parse_date
 from ai_erpnext.mapping.uom import UOMMatcher
@@ -40,20 +40,17 @@ HELP = (
 	"“How much sales did we make this month?”, “Find customer ABC”.\n"
 	"• Create records by answering a few questions: e.g. “Create a purchase invoice”, “New sales order”, “Create customer”. "
 	"I can create Sales/Purchase Invoices, Sales/Purchase Orders, Quotations, Delivery Notes, Purchase Receipts (as Drafts), "
-	"Customers, Suppliers and Items.\n"
-	"• Create a draft Sales Invoice from an invoice image: attach it with the paperclip.\n\n"
-	"While we work on an invoice you can say “change customer to …”, “set posting date to 2026-10-15”, "
-	"“row 2 item SKU001”, “why?”, “retry” or “cancel”. I never submit, cancel or delete documents."
+	"Customers, Suppliers, Items, Leads and Issues.\n"
+	"• Create a draft from a document image (attach it with the paperclip): invoices, credit and debit notes, orders, quotations, "
+	"delivery documents, goods receipts, material requests and bills of materials. I work out what it is for your company from "
+	"who issued it and who it is addressed to.\n\n"
+	"While we work on a document you can say “change customer to …”, “set posting date to 2026-10-15”, "
+	"“row 2 item SKU001”, “why?”, “retry” or “cancel”. I never submit, cancel, delete or pay documents."
 )
-GREETING = "Hi! Ask me about ERPNext, look up your data, create records step by step (e.g. “create purchase invoice”), or attach an invoice image."
+GREETING = "Hi! Ask me about ERPNext, look up your data, create records step by step (e.g. “create purchase invoice”), or attach a document image."
 
-UNSUPPORTED = [
-	(r"\bpurchase\s+(invoice|order|receipt)s?\b", "Purchase documents"),
-	(r"\bsales\s+orders?\b", "Sales Orders"),
-	(r"\bquotations?\b", "Quotations"),
-	(r"\bdelivery\s+notes?\b", "Delivery Notes"),
-	(r"\bpayments?\b", "Payments"),
-]
+# A caption asking for a payment: the image is still read, but nothing is ever paid (only Drafts are created).
+PAYMENT_CAPTION_RE = re.compile(r"\b(?:pay|record|make|post|process)\s+(?:a\s+|the\s+)?payments?\b|\bpayment\s+entry\b|\bpay\s+(?:this|it|the)\b", re.I)
 CANCEL_RE = re.compile(r"^\s*(cancel|stop|abort|discard|never\s*mind|forget it)\b", re.I)
 RESTART_RE = re.compile(r"^\s*(?:please\s+)?(?:start\s+(?:over|again|from\s+scratch)|restart|begin\s+again|reset)\b", re.I)
 HELP_RE = re.compile(r"^\s*(help|\?)\s*$", re.I)
@@ -66,7 +63,7 @@ YES_RE = re.compile(r"^\s*(yes|y|yeah|yep|ok|okay|sure|confirm|go ahead|proceed|
 NO_RE = re.compile(r"^\s*(no|n|nope)\b", re.I)
 CREATE_INVOICE_RE = re.compile(r"\b(create|make|raise|generate|prepare|draft)\b.*\binvoice\b", re.I)
 _CREATE_NAMES = "|".join(sorted(["sales invoice", "purchase invoice", "sales order", "purchase order", "quotation", "delivery note",
-	"purchase receipt", "customer", "supplier", "item", *forms.DOCTYPE_ALIASES], key=len, reverse=True))
+	"purchase receipt", "material request", "stock entry", "customer", "supplier", "item", "lead", "issue", *forms.DOCTYPE_ALIASES], key=len, reverse=True))
 CREATE_DOC_RE = re.compile(r"^\s*(?:please\s+)?(?:create|make|raise|add|new|prepare|draft|generate|start)\s+(?:a\s+|an\s+|new\s+|draft\s+)*"
 	r"(" + _CREATE_NAMES + r")s?\b", re.I)
 # A creation request anywhere in a longer message ("can you make a new po for Acme").
@@ -75,13 +72,18 @@ CREATE_NEW_RE = re.compile(r"\b(create|add|make|new)\b", re.I)
 USE_EXISTING_RE = re.compile(r"\buse (the )?existing\b", re.I)
 FIELD_CORRECTION_RE = re.compile(
 	r"^\s*(?:please\s+)?(?:change|set|update|use|make|correct)\s+(?:the\s+)?"
-	r"(customer name|customer type|customer group|customer|company|posting date|invoice date|due date|date|currency|warehouse|territory|item code|item name|item group|stock uom|uom|unit)"
+	r"(customer name|customer type|customer group|customer|supplier name|supplier type|supplier group|supplier|company|posting date|invoice date|"
+	r"order date|transaction date|due date|delivery date|required by date|required by|valid till|date|currency|warehouse|territory|item code|item name|"
+	r"item group|stock uom|uom|unit)"
 	r"\s*(?:to|as|=|:|is)?\s+(.+?)\s*$", re.I)
 ROW_CORRECTION_RE = re.compile(r"^\s*(?:please\s+)?(?:change|set|update|use)?\s*(?:row|line|item)\s*#?(\d+)\s+(item|uom|unit)\s*(?:to|as|=|:|is)?\s+(.+?)\s*$", re.I)
 
-KEY_ALIASES = {"posting date": "posting_date", "invoice date": "posting_date", "date": "posting_date", "due date": "due_date",
-	"customer": "customer", "company": "company", "currency": "currency", "warehouse": "warehouse"}
+# Field words -> a logical key, translated to the open document's own fieldnames by _correction_key.
+KEY_ALIASES = {"posting date": "@date", "invoice date": "@date", "order date": "@date", "transaction date": "@date", "date": "@date",
+	"due date": "@second", "delivery date": "@second", "required by date": "@second", "required by": "@second", "valid till": "@second",
+	"customer": "@party:Customer", "supplier": "@party:Supplier", "company": "company", "currency": "currency", "warehouse": "warehouse"}
 MASTER_ALIASES = {"customer name": "customer_name", "customer type": "customer_type", "customer group": "customer_group",
+	"supplier name": "supplier_name", "supplier type": "supplier_type", "supplier group": "supplier_group",
 	"territory": "territory", "item code": "item_code", "item name": "item_name", "item group": "item_group",
 	"stock uom": "stock_uom", "uom": "stock_uom", "unit": "stock_uom"}
 
@@ -285,14 +287,12 @@ def _resume_if_lost(ctx, entry):
 # Input routing
 # --------------------------------------------------------------------------------------------
 def _on_image(ctx, attachment, text):
-	unsupported = _unsupported(text)
-	if unsupported:
-		ctx.say(f"{unsupported} aren't supported yet, so I haven't processed this file. I can only create draft Sales Invoices from invoice images.")
-		return
+	if text and PAYMENT_CAPTION_RE.search(text):
+		ctx.say("I never record or make payments. I'll read the document and suggest the draft it becomes; nothing is paid or submitted.")
 	if forms.active(ctx) or (ctx.st.get("phase") in ("extracting", "collecting", "failed") and ctx.st.get("entry")):
 		ctx.st["queued_file"] = attachment["file_url"]
-		ctx.ask("replace_operation", "You're still working on another invoice. Do you want to set it aside and start on this new one?",
-			options=[{"label": "Start the new invoice", "value": "__new__"}, {"label": "Keep working on the current one", "value": "__keep__"}])
+		ctx.ask("replace_operation", "You're still working on another document. Do you want to set it aside and start on this new one?",
+			options=[{"label": "Start the new document", "value": "__new__"}, {"label": "Keep working on the current one", "value": "__keep__"}])
 		return
 	_start_extraction(ctx, attachment["file_url"])
 
@@ -332,8 +332,11 @@ def _on_text(ctx, text):
 			return _answer(ctx, {"kind": "item" if what == "item" else "uom", "key": key}, value, from_text=True, correction=True)
 		m = FIELD_CORRECTION_RE.match(text)
 		if m and m.group(1).lower() in KEY_ALIASES:
-			key = KEY_ALIASES[m.group(1).lower()]
-			kind = {"posting_date": "posting_date", "due_date": "due_date"}.get(key, key)
+			key = _correction_key(ctx, KEY_ALIASES[m.group(1).lower()])
+			if not key:
+				ctx.say(f"This document has no {m.group(1).lower()} I can change.")
+				return _reask_if_pending(ctx)
+			kind = key if key in DATE_LABELS else key
 			return _answer(ctx, {"kind": kind, "key": key}, m.group(2), from_text=True, correction=True)
 
 	if forms.active(ctx) and (forms.switch(ctx, text) or forms.correction(ctx, text)):
@@ -391,7 +394,7 @@ def _reask_if_pending(ctx):
 # --------------------------------------------------------------------------------------------
 def _general(ctx, text):
 	from ai_erpnext.ai.errors import AIProviderError
-	from ai_erpnext.chat import capabilities, llm, shortcuts
+	from ai_erpnext.chat import capabilities, claims, llm, shortcuts
 
 	# Questions about the page the user has open (“explain this invoice”, “compare the selected orders”) are answered from server data.
 	if page_context.answer(ctx, text):
@@ -402,6 +405,11 @@ def _general(ctx, text):
 	m = CREATE_DOC_RE.match(text)
 	if plan is None and m and not text[m.end():].strip(" .!?"):
 		plan = {"mode": "create", "doctype": m.group(1)}  # "create purchase invoice" and nothing else
+	elif plan is None and m and CONTEXT_CREATE_RE.match(text[m.end():]):
+		# "create a purchase order for this supplier" / "... for these items": the page supplies the party or the items
+		rest = CONTEXT_CREATE_RE.match(text[m.end():])
+		plan = {"mode": "create", "doctype": m.group(1), "values": {"party": OPEN_RECORD} if rest.group("party") else {},
+			"items": [{"item": SELECTED_RECORDS}] if rest.group("items") else []}
 	via = "shortcut" if plan else "model"
 	if plan is None:
 		try:
@@ -423,6 +431,8 @@ def _general(ctx, text):
 	_count_route(ctx, via, mode)
 	if mode == "chat":
 		reply = plan.get("reply") or "How can I help?"
+		if via == "model":
+			reply = claims.guard(reply, text, "chat")  # model text never states data or completed actions
 		about = capabilities.match(text)
 		if about and about[0] in ("how", "what", "after"):
 			reply += "\n\n" + capabilities.footer(about[1])  # what the chat itself can do, from the registry
@@ -433,6 +443,8 @@ def _general(ctx, text):
 		return _start_form(ctx, forms.match_doctype(CREATE_ANY_RE.search(text).group(1)))
 	elif mode == "clarify":
 		question = plan.get("question") or "Could you give me a bit more detail?"
+		if via == "model":
+			question = claims.guard(question, text, "clarify")
 		previous = next((x for x in reversed(ctx.msgs[:-1]) if x["role"] == "assistant"), None)
 		if previous and previous.get("source") == "clarify" and _same_text(previous.get("text"), question):
 			# The model asked the same thing again although the user answered: don't repeat it.
@@ -446,9 +458,12 @@ def _general(ctx, text):
 		if not doctype:
 			ctx.say(f"I can't create that from the chat. I can create: {', '.join(forms.CREATABLE)}.")
 			return
-		return _start_form(ctx, doctype, values=plan.get("values") if isinstance(plan.get("values"), dict) else None,
-			items=plan.get("items") if isinstance(plan.get("items"), list) else None)
+		values, items = _page_prefill(ctx, doctype, plan.get("values") if isinstance(plan.get("values"), dict) else None,
+			plan.get("items") if isinstance(plan.get("items"), list) else None)
+		return _start_form(ctx, doctype, values=values, items=items)
 	elif mode == "unsupported":
+		if via == "model" and plan.get("reply"):
+			plan = dict(plan, reply=claims.guard(plan["reply"], text, "unsupported"))
 		if ctx.page and ctx.page.dirty:
 			plan = dict(plan, reply=(plan.get("reply") or "I can't do that yet.") + " This form also has unsaved changes. Editing from the chat isn't available; "
 				"when it is, the form will first have to be saved or discarded and reloaded. Nothing you typed in the form was saved by me.")
@@ -460,9 +475,14 @@ def _general(ctx, text):
 		_more(ctx)
 	elif mode == "query":
 		query = plan.get("query")
-		if isinstance(query, dict) and isinstance(query.get("ref"), dict):
+		if isinstance(query, dict) and query.get("ref") == OPEN_RECORD:
+			query = _open_record_query(ctx, query)
+			if query is None:
+				return
+		elif isinstance(query, dict) and isinstance(query.get("ref"), dict):
 			query = _resolve_ref(ctx, query)
 		_run_query(ctx, query)
+		_unapplied_page_filters(ctx, query)
 
 
 def _start_form(ctx, doctype, values=None, items=None):
@@ -499,6 +519,84 @@ def _resolve_ref(ctx, query):
 		if doctype in doctypes and name:
 			return dict(query, doctype=doctype, filters={**(query.get("filters") or {}), "name": name})
 	return dict(query, doctype=doctypes[0] if len(doctypes) == 1 else "auto", filters={})
+
+
+OPEN_RECORD, SELECTED_RECORDS = "open_record", "selected_records"
+CONTEXT_CREATE_RE = re.compile(r"^\s*(?:for|from|to)\s+(?:(?P<party>(?:this|the\s+current|the\s+open|current)\s+(?:customer|supplier|client|vendor))"
+	r"|(?P<items>(?:these|the\s+selected|selected)\s+(?:items|products|records|rows)))\s*[.!?]*\s*$", re.I)
+
+
+def _open_record_query(ctx, query):
+	"""A model plan that names "the open record" (an opaque reference, never a name): resolved here from the validated form.
+
+	The open record is the target itself (same DocType: a name filter) or is linked from it (Bin.item_code -> the open
+	Item, Sales Order.customer -> the open Customer: a filter on that Link field). Anything else is refused, never widened."""
+	from ai_erpnext.capability import service as capability
+	from ai_erpnext.chat.queries import REGISTRY, _match_doctype
+
+	query = {k: v for k, v in query.items() if k != "ref"}
+	if not ctx.view:
+		ctx.say("I can't see a record open on your screen that I can use. Open the record's form, or tell me its name.")
+		return None
+	open_doctype, open_name = ctx.view
+	target = _match_doctype(query.get("doctype")) or open_doctype
+	if target == open_doctype:
+		return dict(query, doctype=target, filters={**(query.get("filters") or {}), "name": open_name, "search": None, "party": None})
+	if query.get("operation") in ("details", "summary"):
+		ctx.say(f"The open record is a {open_doctype}, not a {target}. Tell me which {target.lower()} you mean.")
+		return None
+	spec = REGISTRY.get(target)
+	try:
+		links = capability.link_fields(target) if target in REGISTRY else {}
+		filterable = set(capability.filterable_fields(target)) if target in REGISTRY else set()
+	except capability.CapabilityError:
+		links, filterable = {}, set()
+	candidates = [f for f, dt in links.items() if dt == open_doctype and f in filterable]
+	if spec and spec.party_field in candidates:
+		candidates = [spec.party_field]
+	if not candidates:
+		ctx.say(f"{target} records aren't linked to the open {open_doctype}, so I can't use it here.")
+		return None
+	where = [w for w in (query.get("where") or []) if not (isinstance(w, dict) and w.get("field") == candidates[0])]
+	filters = {k: v for k, v in (query.get("filters") or {}).items() if k not in ("party", "search", "name")}
+	return dict(query, doctype=target, filters=filters, where=[*where, {"field": candidates[0], "op": "=", "value": open_name}])
+
+
+def _unapplied_page_filters(ctx, query):
+	"""A model-planned list/count on the DocType of the open list: say that the list's own filters were not used."""
+	page = ctx.page
+	if not (page and page.kind == "list" and isinstance(query, dict) and page.filters_known and (page.where or page.docstatus)):
+		return
+	from ai_erpnext.chat.queries import _match_doctype
+
+	if _match_doctype(query.get("doctype")) == page.doctype and query.get("operation", "list") in ("list", "count", "aggregate"):
+		ctx.say("Note: this answer doesn't use the filters of the list you have open. Ask “show my current list” for exactly what the list shows.")
+
+
+def _page_prefill(ctx, doctype, values, items):
+	"""Values for a new document taken from the page: the open Customer/Supplier as the party, the selected Items as rows.
+	Only validated page context is used, and only when the open record is the kind of party the document needs."""
+	values = dict(values or {})
+	items = list(items or [])
+	spec = forms.SPECS.get(doctype) or {}
+	if values.get("party") == OPEN_RECORD or any(v == OPEN_RECORD for v in values.values()):
+		values = {k: v for k, v in values.items() if v != OPEN_RECORD}
+		party_field = forms._field(doctype, spec["party"]) if spec.get("party") else None
+		needed = party_field["doctype"] if party_field else None
+		if not ctx.view:
+			ctx.say("I can't see a record open on your screen, so I'll ask for the party.")
+		elif ctx.view[0] != needed:
+			ctx.say(f"The open record is a {ctx.view[0]}, which isn't a {(needed or 'party').lower()} for a {doctype}, so I didn't use it.")
+		else:
+			values["party"] = ctx.view[1]
+	if any(isinstance(i, dict) and i.get("item") == SELECTED_RECORDS for i in items):
+		items = [i for i in items if not (isinstance(i, dict) and i.get("item") == SELECTED_RECORDS)]
+		page = ctx.page
+		if page and page.kind == "list" and page.doctype == "Item" and page.selected:
+			items += [{"item": name} for name in page.selected]
+		else:
+			ctx.say("I can't see selected items on your screen, so I'll ask for the items.")
+	return values, items
 
 
 def _count_route(ctx, via, mode):
@@ -652,7 +750,7 @@ def _answer_query(ctx, pending, value, from_text):
 
 def _more(ctx):
 	last = ctx.st.get("last_query")
-	if not last or last["plan"]["operation"] in ("count", "details", "sales_summary", "aggregate", "summary"):
+	if not last or last["plan"]["operation"] in ("count", "details", "sales_summary", "aggregate", "summary", "outstanding_by_customer", "outstanding_by_supplier"):
 		ctx.say("There's no list to continue. Ask me for some records first.")
 		return
 	q = dict(last["plan"], offset=last["plan"]["offset"] + last["plan"]["limit"])
@@ -682,13 +780,20 @@ def _open_result(ctx, index):
 		"rows": [{"label": "ID", "value": name}], "action_label": f"Open {doctype}"}, source="erpnext")
 
 
-def _unsupported(text):
-	if not text:
+def _correction_key(ctx, logical):
+	"""The open document's fieldname for a field word ("date" -> transaction_date on an order), or None."""
+	if not logical.startswith("@"):
+		return logical
+	entry = _entry(ctx)
+	d = _definition(entry) if entry else None
+	if not d:
 		return None
-	for pattern, label in UNSUPPORTED:
-		if re.search(pattern, text, re.I):
-			return label
-	return None
+	if logical == "@date":
+		return d.date_field
+	if logical == "@second":
+		return d.second_date_field
+	party = logical.split(":", 1)[1]
+	return party.lower() if d.party_doctype == party else None
 
 
 # --------------------------------------------------------------------------------------------
@@ -708,6 +813,16 @@ def _attachment(file_url):
 		return {**f, "ok": False, "error": "Please upload a JPG, PNG or WEBP image of the invoice."}
 	if (f.file_size or 0) > MAX_IMAGE_BYTES:
 		return {**f, "ok": False, "error": "That image is larger than 10 MB. Please upload a smaller image."}
+	from ai_erpnext.pipeline.controller import image_problem
+
+	try:
+		content = frappe.get_doc("File", f.name).get_content(encodings=())
+	except Exception:
+		frappe.local.message_log = []
+		content = None
+	problem = image_problem(content, ext)  # the bytes must really be an image of that format, whatever the name says
+	if problem:
+		return {**f, "ok": False, "error": problem}
 	return {**f, "ok": True}
 
 
@@ -819,71 +934,125 @@ def _entry(ctx):
 
 
 # --------------------------------------------------------------------------------------------
-# Planning: decide the next question from server-side mapping + validation
+# Planning: decide the next question from server-side classification + mapping + validation
 # --------------------------------------------------------------------------------------------
+def _definition(entry):
+	"""The registry definition the entry's current classification chose, or None."""
+	from ai_erpnext.registry.document_registry import get_definition
+
+	cls = _classification(entry)
+	return get_definition(cls.get("target_key")) if cls.get("status") == "ok" else None
+
+
+def _classification(entry):
+	results = load_json(entry.mapping_results, {}) or {}
+	return ((results.get("document_type") or {}).get("classification")) or {}
+
+
+def _label(entry_or_definition):
+	d = entry_or_definition if hasattr(entry_or_definition, "target_doctype") and hasattr(entry_or_definition, "key") else _definition(entry_or_definition)
+	return d.display if d else "document"
+
+
 def advance(ctx):
 	entry = _entry(ctx)
 	if not entry or ctx.st.get("phase") != "collecting":
 		return
 	if entry.created_document:
 		ctx.st.update({"phase": "done", "pending": None})
-		ctx.say(f"This invoice was already created as {entry.created_document}.", card=_created_card(entry.target_doctype, entry.created_document))
+		ctx.say(f"This document was already created as {entry.target_doctype} {entry.created_document}.",
+			card=_created_card(entry.target_doctype, entry.created_document))
 		return
 	if ctx.st.get("master"):
 		return _master_next(ctx)
 
 	apply_mapping(entry)
 	entry.save()
-	if entry.target_doctype != "Sales Invoice":
-		results = load_json(entry.mapping_results, {}) or {}
-		detected = (results.get("document_type") or {}).get("input") or "an unknown document type"
-		ctx.ask("doctype", f"This document looks like “{detected}”. I can only create Sales Invoices. Is this a sales invoice issued by your company?",
-			options=[{"label": "Yes, it's a Sales Invoice", "value": "__yes__"}, {"label": "Cancel", "value": "__cancel__"}])
-		return
+	definition = _definition(entry)
+	if not definition:
+		return _q_classification(ctx, entry, _classification(entry))
 
 	results = load_json(entry.mapping_results, {}) or {}
 	validation = load_json(entry.validation_results, {}) or {}
 	mapped = load_json(entry.mapped_data, {}) or {}
-	question = _plan(ctx, entry, results, validation, mapped)
+	question = _plan(ctx, entry, results, validation, mapped, definition)
 	if not question:
-		_ask_confirm(ctx, entry, mapped, validation)
+		_ask_confirm(ctx, entry, mapped, validation, definition)
 
 
-def _plan(ctx, entry, results, validation, mapped):
+def _q_classification(ctx, entry, cls):
+	"""The document's type or direction isn't proven: ask the one question that can prove it, or stop."""
+	from ai_erpnext.mapping.mapper import company_context
+
+	message = cls.get("message") or "I can't tell what this document is."
+	usable, _default = company_context()
+	cancel = {"label": "Cancel", "value": "__cancel__", "style": "secondary"}
+	if cls.get("ask") == "company" or (cls.get("ask") == "role" and not cls.get("company")):
+		first = [c for c in cls.get("company_candidates") or [] if c in usable]
+		options = [{"label": c, "value": c} for c in dict.fromkeys(first + list(usable))][:20]
+		text = message if cls.get("ask") == "company" else f"{message} Which of your companies is this document for?"
+		return ctx.ask("company", text, key="company", options=options + [cancel])
+	if cls.get("ask") == "role":
+		company, kind = cls["company"], (cls.get("kind") or "document").replace("_", " ")
+		options = [{"label": f"{company} is the seller (we supplied the goods or services)", "value": "seller"},
+			{"label": f"{company} is the buyer (we received the goods or services)", "value": "buyer"}]
+		if len(usable) > 1:
+			options.append({"label": "It's for another of my companies", "value": "__company__", "style": "secondary"})
+		return ctx.ask("role", f"{message} Before I create anything I need to know which side of this {kind} {company} is on.",
+			key="document_role", options=options + [cancel])
+	supported = "invoices, credit and debit notes, purchase and sales orders, quotations, delivery documents, goods receipts, material requests and bills of materials"
+	return ctx.ask("blocked", f"{message} Nothing was created. I can read {supported}; I decide what each becomes from who issued it "
+		"and who it is for.", options=[cancel])
+
+
+def _plan(ctx, entry, results, validation, mapped, d):
 	errors = validation.get("errors", [])
 	blocking = {}
 	for e in errors:
 		if e.get("category") == "mapping":
 			blocking.setdefault(e.get("field"), []).append(e)
 
-	company = results.get("company") or {}
-	issuer = (company.get("extra") or {}).get("unmatched_issuer")
-	if (company.get("status") in ("AMBIGUOUS", "NOT_FOUND", "INVALID") or (company.get("status") == "DEFAULTED" and issuer)) \
-		and ctx.st.get("company_confirmed") != mapped.get("company"):
-		return _q_company(ctx, company, issuer)
-	if "customer" in blocking:
-		return _q_master_choice(ctx, "customer", results.get("customer") or {})
-	# Possible duplicate: ask as soon as the customer is known, before any other effort.
+	party_key = d.party_doctype.lower() if d.party_doctype else None
+	if party_key and party_key in blocking:
+		return _q_master_choice(ctx, party_key, results.get(party_key) or {}, doctype=d.party_doctype)
+	# Possible duplicate: ask as soon as the party is known, before any other effort.
 	acks = ctx.st.setdefault("acks", {})
-	dups = sorted(d["name"] for d in validation.get("duplicates") or [])
+	dups = sorted(dup["name"] for dup in validation.get("duplicates") or [])
 	if dups and not set(dups) <= set(acks.get("duplicate") or []):
-		reasons = "\n".join(f"• {d['name']}: {d['reason']}" for d in validation["duplicates"])
-		return ctx.ask("duplicate", f"This invoice may already exist in ERPNext:\n{reasons}",
+		reasons = "\n".join(f"• {dup['name']}: {dup['reason']}" for dup in validation["duplicates"])
+		return ctx.ask("duplicate", f"This document may already exist in ERPNext:\n{reasons}",
 			options=[{"label": "It's not a duplicate; continue", "value": "__ack__"}, {"label": "Cancel", "value": "__cancel__"}],
-			links=[{"label": f"Open {d}", "doctype": "Sales Invoice", "name": d} for d in dups])
+			links=[{"label": f"Open {name}", "doctype": d.target_doctype, "name": name} for name in dups])
+	if "bom_item" in blocking:
+		return _q_master_choice(ctx, "bom_item", results.get("bom_item") or {}, doctype="Item")
 	for i in range(1, len(mapped.get("items") or []) + 1):
 		if f"item_{i}" in blocking:
-			return _q_master_choice(ctx, f"item_{i}", results.get(f"item_{i}") or {}, row=i)
+			return _q_master_choice(ctx, f"item_{i}", results.get(f"item_{i}") or {}, row=i, doctype="Item")
 		if f"item_{i}_uom" in blocking:
 			return _q_uom(ctx, i, results, mapped, blocking[f"item_{i}_uom"])
-	if "posting_date" in blocking:
-		return _q_date(ctx, "posting_date", results.get("posting_date") or {}, blocking["posting_date"])
-	if "due_date" in blocking:
-		return _q_date(ctx, "due_date", results.get("due_date") or {}, blocking["due_date"], posting=mapped.get("posting_date"))
+	for key in (d.date_field, d.second_date_field):
+		if key and key in blocking:
+			return _q_date(ctx, key, results.get(key) or {}, blocking[key], posting=mapped.get(d.date_field), definition=d)
 	if "currency" in blocking:
-		return _q_currency(ctx, mapped, blocking["currency"])
+		return _q_currency(ctx, mapped, blocking["currency"], d)
 	if "warehouse" in blocking:
-		return _q_simple(ctx, "warehouse", "warehouse", f"{blocking['warehouse'][0]['message']} Which warehouse should I use?", _warehouse_options(mapped))
+		return _q_simple(ctx, "warehouse", "warehouse", f"{blocking['warehouse'][0]['message']}. Which warehouse should I use?", _warehouse_options(mapped))
+	if "apply_discount_on" in blocking:
+		return ctx.ask("discount_base", f"{blocking['apply_discount_on'][0]['message']} Is the discount taken off before tax (on the net total) "
+			"or after tax (on the grand total)?", key="apply_discount_on", options=[
+				{"label": "Before tax (net total)", "value": "Net Total"}, {"label": "After tax (grand total)", "value": "Grand Total"},
+				{"label": "Cancel", "value": "__cancel__", "style": "secondary"}])
+	if "return_against" in blocking:
+		res = results.get("return_against") or {}
+		options = [{"label": c["display_name"], "value": c["name"]} for c in res.get("candidates") or []][:5]
+		options += [{"label": "Create it without linking the original invoice", "value": "__none__", "style": "secondary"},
+			{"label": "Cancel", "value": "__cancel__", "style": "secondary"}]
+		return ctx.ask("return_against", f"{blocking['return_against'][0]['message']}. Which original {d.target_doctype} does this note return? "
+			"You can type its ID.", key="return_against", options=options, input="text")
+	if "material_request_type" in blocking:
+		res = results.get("material_request_type") or {}
+		return ctx.ask("material_request_type", f"{res.get('message') or 'The purpose is missing'}. What is this material request for?",
+			key="material_request_type", options=[{"label": c["display_name"], "value": c["name"]} for c in res.get("candidates") or []])
 	other = [e for field, errs in blocking.items() for e in errs]
 	if other:
 		return ctx.ask("blocked", "I can't continue because:\n" + "\n".join(f"• {e['message']}" for e in other)
@@ -891,31 +1060,18 @@ def _plan(ctx, entry, results, validation, mapped):
 
 	warnings = {w["code"] for w in validation.get("warnings", [])}
 	if "taxes_not_mapped" in warnings and not acks.get("taxes"):
-		return _q_taxes(ctx, entry, mapped)
+		return _q_taxes(ctx, entry, mapped, d)
 	data_codes = sorted({e["code"] for e in errors if e.get("category") == "data"})
 	if data_codes and not set(data_codes) <= set(acks.get("data_errors") or []):
 		msgs = [e["message"] for e in errors if e.get("category") == "data"]
-		return ctx.ask("data_errors", "Some values on the invoice don't add up:\n" + "\n".join(f"• {m}" for m in msgs)
+		return ctx.ask("data_errors", "Some values on the document don't add up:\n" + "\n".join(f"• {m}" for m in msgs)
 			+ "\nI won't change the numbers. You can correct them now (for example “row 1 item …”), or create the draft and fix it in ERPNext before submitting.",
 			options=[{"label": "Create the draft anyway; I'll fix it in ERPNext", "value": "__ack__"}, {"label": "Cancel", "value": "__cancel__"}])
 	return None
 
 
-def _q_company(ctx, company, issuer):
-	from ai_erpnext.chat.queries import usable_companies
-
-	options = [{"label": c, "value": c} for c in usable_companies("Sales Invoice")[:20]]
-	if issuer:
-		text = (f"The invoice is issued by “{issuer}”, which doesn't match any of your ERPNext companies. "
-			"Which of your companies is this sales invoice for?")
-	else:
-		text = company.get("message") or "Which company is this invoice for?"
-	return ctx.ask("company", text, key="company", options=options)
-
-
-def _q_master_choice(ctx, key, res, row=None):
-	is_item = key.startswith("item_")
-	label = "item" if is_item else "customer"
+def _q_master_choice(ctx, key, res, row=None, doctype="Customer"):
+	label = doctype.lower() if key != "bom_item" else "finished item"
 	shown = res.get("input") or ""
 	where = f"Row {row}: " if row else ""
 	if res.get("status") == "AMBIGUOUS" and res.get("match_type") != "fuzzy_suggestion":
@@ -924,13 +1080,15 @@ def _q_master_choice(ctx, key, res, row=None):
 		text = f"{where}I couldn't find the {label} “{shown}” in ERPNext. Is it one of these?"
 	elif res.get("status") == "INVALID":
 		text = f"{where}{res.get('message')}. Which {label} should I use?"
+	elif not shown:
+		text = f"{where}{res.get('message') or f'The {label} is not on the document'}. Which {label} is it?"
 	else:
 		text = f"{where}I couldn't find the {label} “{shown}” in ERPNext."
-	text += f" Pick one, type a name to search, or create a new {label}."
+	text += f" Pick one, type a name to search, or create a new {doctype.lower()}."
 	options = [{"label": c["display_name"] + (f" ({c['name']})" if c["name"] != c["display_name"] else ""), "value": c["name"]}
 		for c in (res.get("candidates") or [])[:5]]
-	options.append({"label": f"Create new {label}" + (f" “{shown}”" if shown else ""), "value": "__create__", "style": "secondary"})
-	return ctx.ask("item" if is_item else "customer", text, key=key, options=options, input="text")
+	options.append({"label": f"Create new {doctype.lower()}" + (f" “{shown}”" if shown else ""), "value": "__create__", "style": "secondary"})
+	return ctx.ask("item" if doctype == "Item" else doctype.lower(), text, key=key, options=options, input="text")
 
 
 def _q_uom(ctx, row, results, mapped, errors):
@@ -938,7 +1096,7 @@ def _q_uom(ctx, row, results, mapped, errors):
 	res = results.get(f"item_{row}_uom") or {}
 	stock_uom = item.get("stock_uom")
 	if any(e["code"] == "uom_no_conversion" for e in errors):
-		text = (f"Row {row}: the invoice unit “{item.get('uom')}” has no conversion to the item's stock unit "
+		text = (f"Row {row}: the document's unit “{item.get('uom')}” has no conversion to the item's stock unit "
 			f"“{stock_uom}” in ERPNext. Which unit should I use?")
 	else:
 		text = f"Row {row}: I couldn't match the unit “{res.get('input') or ''}”. Which unit should I use?"
@@ -949,16 +1107,24 @@ def _q_uom(ctx, row, results, mapped, errors):
 	return ctx.ask("uom", text, key=f"item_{row}_uom", options=options, input="text")
 
 
-def _q_date(ctx, key, res, errors, posting=None):
+DATE_LABELS = {"posting_date": "posting date", "transaction_date": "document date", "due_date": "due date", "delivery_date": "delivery date",
+	"schedule_date": "required-by date", "valid_till": "valid-till date"}
+
+
+def _q_date(ctx, key, res, errors, posting=None, definition=None):
+	label = DATE_LABELS.get(key, "date")
 	if any(e["code"] == "no_fiscal_year" for e in errors):
-		text = (f"{errors[0]['message']} Which posting date should I use instead? If the invoice date is right, "
+		text = (f"{errors[0]['message']} Which {label} should I use instead? If the document date is right, "
 			"ask your administrator to add that Fiscal Year and then say “retry”.")
-	elif key == "due_date" and any(e["code"] == "due_before_posting" for e in errors):
-		text = f"{errors[0]['message']}. Which due date should I use?"
+	elif any(e["code"].endswith("_before_date") or e["code"] == "due_before_posting" for e in errors):
+		text = f"{errors[0]['message']}. Which {label} should I use?"
+	elif res.get("status") == "NOT_PROVIDED" or not res.get("input"):
+		text = f"ERPNext needs a {label} for this {definition.display if definition else 'document'}, and none is printed. Which {label} should I use?"
 	else:
-		text = f"{res.get('message') or errors[0]['message']}. Which date should I use?"
-	options = [{"label": f"Today ({nowdate()})", "value": nowdate()}] if key == "posting_date" else (
-		[{"label": f"Same as posting date ({posting})", "value": posting}] if posting else [])
+		text = f"{res.get('message') or errors[0]['message']}. Which {label} should I use?"
+	first = definition.date_field if definition else "posting_date"
+	options = [{"label": f"Today ({nowdate()})", "value": nowdate()}] if key == first else (
+		[{"label": f"Same as the document date ({posting})", "value": posting}] if posting else [])
 	return ctx.ask(key, text, key=key, options=options, input="date")
 
 
@@ -966,31 +1132,32 @@ def _q_simple(ctx, kind, key, text, options):
 	return ctx.ask(kind, text, key=key, options=options, input="text")
 
 
-def _q_currency(ctx, mapped, errors):
+def _q_currency(ctx, mapped, errors, d):
 	mismatch = next((e for e in errors if e["code"] == "party_currency_mismatch"), None)
 	if mismatch:
-		allowed = [c for c in [_required_party_currency(mapped)] if c and c != mapped.get("currency")]
-		text = (f"{mismatch['message']} Options: use {allowed[0] if allowed else 'the account currency'} only if the invoice "
-			"amounts really are in that currency (I won't convert them), or ask an accountant to add a receivable account "
-			f"in {mapped.get('currency')} for this customer (or enable multi-currency invoices in Accounts Settings) and then say “retry”.")
+		allowed = [c for c in [_required_party_currency(mapped, d)] if c and c != mapped.get("currency")]
+		account = "receivable" if d.party_doctype == "Customer" else "payable"
+		text = (f"{mismatch['message']} Options: use {allowed[0] if allowed else 'the account currency'} only if the document's "
+			f"amounts really are in that currency (I won't convert them), or ask an accountant to add a {account} account "
+			f"in {mapped.get('currency')} for this {d.party_doctype.lower()} (or enable multi-currency invoices in Accounts Settings) and then say “retry”.")
 		options = [{"label": f"Use {c} (amounts unchanged)", "value": c} for c in allowed]
 		options += [{"label": "Retry", "value": "__retry_check__", "style": "secondary"}, {"label": "Cancel", "value": "__cancel__", "style": "secondary"}]
 		return ctx.ask("currency", text, key="currency", options=options)
-	return _q_simple(ctx, "currency", "currency", f"I need the invoice currency. {errors[0]['message']}", _currency_options(mapped))
+	return _q_simple(ctx, "currency", "currency", f"I need the document's currency. {errors[0]['message']}", _currency_options(mapped))
 
 
-def _required_party_currency(mapped):
-	"""The currency ERPNext will accept for this customer (same sources as its own check)."""
+def _required_party_currency(mapped, d):
+	"""The currency ERPNext will accept for this party (same sources as its own check)."""
 	from erpnext.accounts.party import get_party_account, get_party_gle_currency
 	from erpnext.accounts.utils import get_account_currency
 
-	customer, company = mapped.get("customer"), mapped.get("company")
-	if not (customer and company):
+	party, company = mapped.get(d.party_field), mapped.get("company")
+	if not (party and company):
 		return None
-	gle = get_party_gle_currency("Customer", customer, company)
+	gle = get_party_gle_currency(d.party_doctype, party, company)
 	if gle:
 		return gle
-	account = get_party_account("Customer", customer, company)
+	account = get_party_account(d.party_doctype, party, company)
 	return get_account_currency(account) if account else None
 
 
@@ -1006,45 +1173,83 @@ def _warehouse_options(mapped):
 	return [{"label": w, "value": w} for w in frappe.get_list("Warehouse", filters=filters, pluck="name", limit=8)]
 
 
-def _q_taxes(ctx, entry, mapped):
+def _q_taxes(ctx, entry, mapped, d):
 	extracted = load_json(entry.extracted_data, {}) or {}
-	canonical = SalesInvoiceAdapter(None).adapt(extracted)
+	canonical = DocumentAdapter(None).adapt(extracted)
 	parts = [f"{t.get('name') or 'Tax'}{(' ' + str(t.get('rate')) + '%') if t.get('rate') not in (None, '') else ''}: {t.get('amount')}"
 		for t in (extracted.get("taxes") or []) if isinstance(t, dict)]
 	tax_text = f"tax of {flt(canonical.get('tax_amount'), 2)}" if canonical.get("tax_amount") is not None else "tax"
 	if parts:
 		tax_text += " (" + ", ".join(parts) + ")"
-	templates = frappe.get_list("Sales Taxes and Charges Template", filters={"company": mapped.get("company"), "disabled": 0},
-		pluck="name", limit=10) if mapped.get("company") else []
+	template = d.tax_template_doctype
+	templates = frappe.get_list(template, filters={"company": mapped.get("company"), "disabled": 0}, pluck="name", limit=10) if mapped.get("company") else []
 	if templates:
-		text = f"The invoice shows {tax_text}. Which Sales Taxes and Charges Template should I apply? ERPNext will calculate the tax rows."
+		text = f"The document shows {tax_text}. Which {template} should I apply? ERPNext will calculate the tax rows."
 		options = [{"label": t, "value": t} for t in templates]
 	else:
-		text = (f"The invoice shows {tax_text}, but there is no Sales Taxes and Charges Template for {mapped.get('company')}, "
-			"so I can't add tax rows. The draft would be created without tax and its total would be lower than the invoice; "
+		text = (f"The document shows {tax_text}, but there is no {template} for {mapped.get('company')}, "
+			"so I can't add tax rows. The draft would be created without tax and its total would be lower than the document; "
 			"add the taxes in ERPNext before submitting.")
 		options = []
 	options += [{"label": "Create the draft without taxes", "value": "__none__", "style": "secondary"}, {"label": "Cancel", "value": "__cancel__"}]
 	return ctx.ask("taxes", text, key="taxes_and_charges", options=options)
 
 
-def _ask_confirm(ctx, entry, mapped, validation):
+def _role_text(cls):
+	role = cls.get("our_role")
+	if role == "internal":
+		return f"{cls.get('company')} (internal document)"
+	return f"{cls.get('company')} is the {role}" + (" (your choice)" if cls.get("role_source") == "selected" else "")
+
+
+def _ask_confirm(ctx, entry, mapped, validation, d):
 	extracted = load_json(entry.extracted_data, {}) or {}
-	canonical = SalesInvoiceAdapter(None).adapt(extracted)
-	net = sum(flt(i.get("qty")) * flt(i.get("rate")) for i in mapped.get("items") or [])
-	card = {"type": "draft_preview", "title": "Draft Sales Invoice", "rows": [
-		{"label": "Customer", "value": mapped.get("customer")},
-		{"label": "Company", "value": mapped.get("company")},
-		{"label": "Posting date", "value": mapped.get("posting_date")},
-		{"label": "Due date", "value": mapped.get("due_date") or "ERPNext default"},
-		{"label": "Currency", "value": mapped.get("currency")},
-		{"label": "Taxes", "value": mapped.get("taxes_and_charges") or "None (add in ERPNext)" if canonical.get("tax_amount") else (mapped.get("taxes_and_charges") or "None")},
-		{"label": "Net total (qty × rate)", "value": f"{flt(net, 2)} {mapped.get('currency') or ''}".strip()},
-		{"label": "Total on the invoice", "value": f"{canonical.get('total_amount')} " if canonical.get("total_amount") is not None else "Not printed"},
-	], "items": [{"name": i.get("item_name") or i.get("item_code"), "code": i.get("item_code"), "qty": i.get("qty"), "uom": i.get("uom"),
-		"rate": i.get("rate"), "amount": i.get("amount")} for i in mapped.get("items") or []]}
-	ctx.ask("confirm", "Everything required is resolved. Shall I create this Sales Invoice as a Draft? It will not be submitted.",
-		options=[{"label": "Create draft Sales Invoice", "value": "__create__"}, {"label": "Cancel", "value": "__cancel__", "style": "secondary"}], card=card)
+	canonical = DocumentAdapter(None).adapt(extracted)
+	cls = _classification(entry)
+	rows = [{"label": "Source document", "value": _describe(cls)}, {"label": "Your company", "value": _role_text(cls)},
+		{"label": "Will create", "value": f"Draft {d.display}"}]
+	if d.party_field:
+		rows.append({"label": d.party_doctype, "value": mapped.get(d.party_field)})
+	if d.target_doctype == "BOM":
+		rows += [{"label": "Finished item", "value": mapped.get("item")}, {"label": "Quantity", "value": mapped.get("quantity")}]
+	if d.target_doctype == "Material Request":
+		rows.append({"label": "Purpose", "value": mapped.get("material_request_type")})
+	for key in (d.date_field, d.second_date_field):
+		if key:
+			rows.append({"label": DATE_LABELS[key].capitalize(), "value": mapped.get(key) or "ERPNext default"})
+	if d.currency and d.target_doctype != "BOM":
+		rows.append({"label": "Currency", "value": mapped.get("currency")})
+	if mapped.get("set_warehouse"):
+		rows.append({"label": "Warehouse", "value": mapped["set_warehouse"]})
+	if d.is_return:
+		rows.append({"label": "Original invoice", "value": mapped.get("return_against") or "Not linked"})
+	if mapped.get("discount_amount"):
+		rows.append({"label": "Discount", "value": f"{flt(mapped['discount_amount'], 2)} on the {(mapped.get('apply_discount_on') or '').lower()}"})
+	if d.tax_template_doctype:
+		rows.append({"label": "Taxes", "value": mapped.get("taxes_and_charges") or ("None (add in ERPNext)" if canonical.get("tax_amount") else "None")})
+	if d.rate_required:
+		net = sum(abs(flt(i.get("qty"))) * flt(i.get("rate")) for i in mapped.get("items") or [])
+		rows.append({"label": "Net total (qty × rate)", "value": f"{flt(net, 2)} {mapped.get('currency') or ''}".strip()})
+		rows.append({"label": "Total on the document", "value": f"{canonical.get('total_amount')}" if canonical.get("total_amount") is not None else "Not printed"})
+	card = {"type": "draft_preview", "title": f"Draft {d.display}", "rows": rows, "items": [{"name": i.get("item_name") or i.get("item_code"),
+		"code": i.get("item_code"), "qty": i.get("qty"), "uom": i.get("uom"), "rate": i.get("rate"), "amount": i.get("amount")} for i in mapped.get("items") or []]}
+	ctx.ask("confirm", f"Everything required is resolved. Shall I create this {d.display} as a Draft? It will not be submitted.",
+		options=[{"label": f"Create draft {d.target_doctype}", "value": "__create__"}, {"label": "Cancel", "value": "__cancel__", "style": "secondary"}], card=card)
+
+
+def _describe(cls):
+	from ai_erpnext.detection.direction import KIND_LABELS
+
+	text = KIND_LABELS.get(cls.get("kind")) or cls.get("source_type") or "Document"
+	if cls.get("issuer"):
+		text += f" issued by {cls['issuer']}"
+	if cls.get("recipient"):
+		text += f" to {cls['recipient']}"
+	if not (cls.get("issuer") or cls.get("recipient")) and (cls.get("seller") or cls.get("buyer")):
+		text += f" from {cls.get('seller') or 'an unnamed seller'} to {cls.get('buyer') or 'an unnamed buyer'}"
+	if cls.get("source_type") and cls.get("source_type") != KIND_LABELS.get(cls.get("kind")):
+		text += f" (titled “{cls['source_type']}”)"
+	return text
 
 
 # --------------------------------------------------------------------------------------------
@@ -1063,6 +1268,11 @@ def _option_value(pending, text):
 	return ordinal_option(pending, text)
 
 
+ROLE_RE = re.compile(r"\b(?P<role>seller|selling|sold|supplier|vendor|buyer|buying|bought|customer|purchaser)\b", re.I)
+_ROLE_WORDS = {"seller": "seller", "selling": "seller", "sold": "seller", "supplier": "seller", "vendor": "seller",
+	"buyer": "buyer", "buying": "buyer", "bought": "buyer", "customer": "buyer", "purchaser": "buyer"}
+
+
 def _answer(ctx, pending, value, from_text, correction=False):
 	kind = pending["kind"]
 	if kind.startswith("query_"):
@@ -1075,10 +1285,13 @@ def _answer(ctx, pending, value, from_text, correction=False):
 		return forms.answer(ctx, pending, value, from_text)
 	if from_text and not correction:
 		value = _option_value(pending, value) or value
-		if NO_RE.match(value) and kind in ("confirm", "data_errors", "duplicate", "doctype", "replace_operation", "master_confirm"):
+		if NO_RE.match(value) and kind in ("confirm", "data_errors", "duplicate", "replace_operation", "master_confirm"):
 			value = "__cancel__" if kind != "replace_operation" else "__keep__"
-		elif YES_RE.match(value) and kind in ("confirm", "data_errors", "duplicate", "doctype", "master_confirm", "use_existing"):
-			value = {"confirm": "__create__", "doctype": "__yes__", "master_confirm": "__create__", "use_existing": "__use__"}.get(kind, "__ack__")
+		elif YES_RE.match(value) and kind in ("confirm", "data_errors", "duplicate", "master_confirm", "use_existing"):
+			value = {"confirm": "__create__", "master_confirm": "__create__", "use_existing": "__use__"}.get(kind, "__ack__")
+		elif kind == "role" and value not in ("seller", "buyer", "__company__", "__cancel__"):
+			m = ROLE_RE.search(value or "")
+			value = _ROLE_WORDS[m.group("role").lower()] if m else value
 	if value == "__cancel__" and kind not in ("master_confirm", "master_field", "use_existing"):
 		return _cancel(ctx)
 
@@ -1088,20 +1301,24 @@ def _answer(ctx, pending, value, from_text, correction=False):
 			ctx.st["forms"] = []
 			return _start_extraction(ctx, ctx.st["queued_file"])
 		ctx.st["queued_file"] = None
-		ctx.say("OK, let's continue with the current invoice.")
+		ctx.say("OK, let's continue with the current document.")
 		return _resume(ctx)
 	if kind == "extraction_failed" or kind == "blocked":
 		return _retry(ctx)
-	if kind == "doctype":
-		if value == "__yes__":
-			entry = _entry(ctx)
-			entry.target_doctype = "Sales Invoice"
-			entry.save()
-			ctx.st["doctype_confirmed"] = True
-		return advance(ctx)
+	if kind == "role":
+		if value == "__company__":
+			from ai_erpnext.mapping.mapper import company_context
+
+			return ctx.ask("company", "Which of your companies is this document for?", key="company",
+				options=[{"label": c, "value": c} for c in company_context()[0][:20]])
+		if value not in ("seller", "buyer"):
+			ctx.say("Please choose whether your company is the seller or the buyer, or cancel.")
+			return advance(ctx)
+		ctx.say(f"Recording your company as the {value}.")
+		return _set_overrides(ctx, {"document_role": value}, "role")
 	if kind == "company":
-		return _set_master(ctx, "company", value, CompanyMatcher(), "company", confirm_key="company_confirmed", from_text=from_text)
-	if kind in ("customer", "item"):
+		return _set_master(ctx, "company", value, CompanyMatcher(), "company", from_text=from_text)
+	if kind in ("customer", "supplier", "item"):
 		return _answer_master_choice(ctx, pending["key"], value, from_text)
 	if kind == "uom":
 		return _set_master(ctx, pending["key"], value, UOMMatcher(), "unit", from_text=from_text)
@@ -1112,8 +1329,18 @@ def _answer(ctx, pending, value, from_text, correction=False):
 	if kind == "warehouse":
 		mapped = load_json(_entry(ctx).mapped_data, {}) or {}
 		return _set_master(ctx, "warehouse", value, WarehouseMatcher(mapped.get("company")), "warehouse", from_text=from_text)
-	if kind in ("posting_date", "due_date"):
+	if kind in DATE_LABELS:
 		return _set_date(ctx, kind, value)
+	if kind == "discount_base":
+		if value not in ("Net Total", "Grand Total"):
+			ctx.say("Please choose before tax (net total) or after tax (grand total).")
+			return advance(ctx)
+		return _set_overrides(ctx, {"apply_discount_on": value}, "discount")
+	if kind == "return_against":
+		term = answer_term(value) if from_text else value
+		return _set_overrides(ctx, {"return_against": term or ""}, "original invoice")
+	if kind == "material_request_type":
+		return _set_overrides(ctx, {"material_request_type": value}, "purpose")
 	if kind == "taxes":
 		if value == "__none__":
 			ctx.st.setdefault("acks", {})["taxes"] = True
@@ -1131,8 +1358,8 @@ def _answer(ctx, pending, value, from_text, correction=False):
 		return advance(ctx)
 	if kind == "confirm":
 		if value == "__create__":
-			return _create_invoice(ctx)
-		ctx.say("Please choose “Create draft Sales Invoice” or “Cancel”.")
+			return _create_document(ctx)
+		ctx.say("Please choose “Create draft” or “Cancel”.")
 		ctx.st["pending"] = pending
 		return
 	if kind in ("master_field", "master_confirm", "use_existing"):
@@ -1151,7 +1378,7 @@ def _set_overrides(ctx, corrections, label):
 	entry = _entry(ctx)
 	try:
 		set_overrides(entry, corrections)
-	except frappe.ValidationError:
+	except (frappe.ValidationError, frappe.PermissionError):
 		frappe.local.message_log = []
 		ctx.say(f"That {label} isn't valid. Please try again.")
 		return advance(ctx)
@@ -1196,21 +1423,29 @@ def _set_date(ctx, key, value):
 	if not parsed.ok:
 		ctx.say("Please give the date as YYYY-MM-DD." if not parsed.ambiguous else "That date could be read two ways. Please use YYYY-MM-DD.")
 		return advance(ctx)
-	ctx.say(f"Using {'posting' if key == 'posting_date' else 'due'} date {parsed.value}.")
+	ctx.say(f"Using {DATE_LABELS.get(key, 'date')} {parsed.value}.")
 	return _set_overrides(ctx, {key: parsed.value}, "date")
 
 
+def _matcher_for(key, entry):
+	if key.startswith("item_") or key == "bom_item":
+		return ItemMatcher(), "item"
+	from ai_erpnext.mapping.transaction import PARTY_MATCHERS
+
+	doctype = key.capitalize()
+	return PARTY_MATCHERS[doctype](), doctype.lower()
+
+
 def _answer_master_choice(ctx, key, value, from_text):
-	is_item = key.startswith("item_")
 	entry = _entry(ctx)
+	is_item = key.startswith("item_") or key == "bom_item"
 	results = load_json(entry.mapping_results, {}) or {}
 	res = results.get(key) or {}
 	if value == "__create__" or (from_text and CREATE_NEW_RE.search(value) and len(value.split()) <= 6 and ("new" in value.lower() or "create" in value.lower())):
 		return _start_master(ctx, key, entry, res)
 	if value.startswith("__create__:"):
 		return _start_master(ctx, key, entry, res, name=value.split(":", 1)[1])
-	matcher = ItemMatcher() if is_item else CustomerMatcher()
-	label = "item" if is_item else "customer"
+	matcher, label = _matcher_for(key, entry)
 	row = None if from_text else matcher.resolve_name(value)  # buttons carry exact record names
 	if row:
 		ctx.say(f"Using {label} {row['name']}.")
@@ -1227,25 +1462,35 @@ def _answer_master_choice(ctx, key, value, from_text):
 	options = [{"label": c["display_name"] + (f" ({c['name']})" if c["name"] != c["display_name"] else ""), "value": c["name"]} for c in found.candidates[:5]]
 	options.append({"label": f"Create new {label} “{value}”", "value": f"__create__:{value}", "style": "secondary"})
 	text = (f"Several {label}s match “{value}”. Which one?" if found.candidates else f"I couldn't find a {label} matching “{value}”.")
-	ctx.ask("item" if is_item else "customer", text + " Pick one, search again, or create it.", key=key, options=options, input="text")
+	ctx.ask("item" if is_item else label, text + " Pick one, search again, or create it.", key=key, options=options, input="text")
 
 
 # --------------------------------------------------------------------------------------------
 # Master creation sub-flow
 # --------------------------------------------------------------------------------------------
 def _start_master(ctx, key, entry, res, name=None):
-	if key.startswith("item_"):
-		row = int(key.split("_")[1])
-		mapped = load_json(entry.mapped_data, {}) or {}
-		extracted_rows = SalesInvoiceAdapter(None).adapt(load_json(entry.extracted_data, {}) or {})["items"]
-		src = extracted_rows[row - 1] if len(extracted_rows) >= row else {}
-		item = (mapped.get("items") or [{}] * row)[row - 1]
-		draft = masters.item_draft(key, name or src.get("item_name"), src.get("description"), item.get("uom"))
+	d = _definition(entry)
+	if key.startswith("item_") or key == "bom_item":
+		extracted_rows = DocumentAdapter(None).adapt(load_json(entry.extracted_data, {}) or {})
+		if key == "bom_item":
+			src, uom = extracted_rows.get("bom_item") or {}, (extracted_rows.get("bom_item") or {}).get("uom")
+		else:
+			row = int(key.split("_")[1])
+			mapped = load_json(entry.mapped_data, {}) or {}
+			src = extracted_rows["items"][row - 1] if len(extracted_rows["items"]) >= row else {}
+			uom = ((mapped.get("items") or [{}] * row)[row - 1]).get("uom")
+		flags = dict(d.item_filters) if d and d.item_filters else ({} if d else {"is_sales_item": 1})
+		draft = masters.item_draft(key, name or src.get("item_name"), src.get("description"), uom, flags=flags or {"is_stock_item": 1})
+	elif key == "supplier":
+		draft = masters.supplier_draft(key, name or res.get("input"))
 	else:
 		draft = masters.customer_draft(key, name or res.get("input"))
 	if draft["unsupported_required"]:
 		ctx.say(f"ERPNext requires fields I can't collect here ({', '.join(draft['unsupported_required'])}). "
 			f"Please create the {draft['doctype']} in ERPNext, then pick it here.")
+		return advance(ctx)
+	if not frappe.has_permission(draft["doctype"], "create"):
+		ctx.say(f"You don't have permission to create {draft['doctype']} records. Please pick an existing one.")
 		return advance(ctx)
 	existing = masters.find_existing(draft)
 	ctx.st["master"] = draft
@@ -1259,24 +1504,29 @@ def _start_master(ctx, key, entry, res, name=None):
 	return _master_next(ctx)
 
 
+MASTER_PROMPTS = {
+	"customer_name": "What is the customer's name?",
+	"supplier_name": "What is the supplier's name?",
+	"item_code": "What item code should the new item have?",
+	"item_group": "Which item group does it belong to?",
+	"is_stock_item": "Is it a stock item (tracked in inventory) or a non-stock item / service?",
+}
+MASTER_GROUP_FIELD = {"Customer": "customer group", "Supplier": "supplier group", "Item": "item group"}
+
+
 def _master_next(ctx):
 	draft = ctx.st["master"]
 	field = masters.next_field(draft)
 	if field:
 		spec = masters.FIELDS[draft["doctype"]][field]
 		options = masters.field_options(draft["doctype"], field)
-		prompt = {
-			"customer_name": "What is the customer's name?",
-			"item_code": "What item code should the new item have?",
-			"item_group": "Which item group does it belong to?",
-			"is_stock_item": "Is it a stock item (tracked in inventory) or a non-stock item / service?",
-		}.get(field, f"Which {spec['label']} should I use?")
+		prompt = MASTER_PROMPTS.get(field, f"Which {spec['label']} should I use?")
 		if field == "item_code" and draft["values"].get("item_name") and not readable_exists("Item", draft["values"]["item_name"]):
 			options = [{"label": f"Use the item name: {draft['values']['item_name']}", "value": draft["values"]["item_name"]}] + options
 		ctx.ask("master_field", prompt, key=field, options=options, input=None if spec["type"] in ("Select", "Check") else "text")
 		return
 	ctx.ask("master_confirm", f"Create this {draft['doctype']} in ERPNext? You can still change a value, for example "
-		f"“set {'customer group' if draft['doctype'] == 'Customer' else 'item group'} to …”.",
+		f"“set {MASTER_GROUP_FIELD[draft['doctype']]} to …”.",
 		options=[{"label": f"Create {draft['doctype']}", "value": "__create__"}, {"label": "Back", "value": "__cancel__", "style": "secondary"}],
 		card={"type": "master_preview", "title": f"New {draft['doctype']}", "rows": masters.summary(draft)})
 
@@ -1335,7 +1585,7 @@ def _answer_master(ctx, pending, value):
 # --------------------------------------------------------------------------------------------
 # Draft creation and announcements
 # --------------------------------------------------------------------------------------------
-def _create_invoice(ctx):
+def _create_document(ctx):
 	from ai_erpnext.api.creation import create_document
 
 	entry = _entry(ctx)
@@ -1357,8 +1607,14 @@ def _create_invoice(ctx):
 		ctx.say("ERPNext notes: " + " ".join(notes))
 	ctx.st.update({"phase": "done", "pending": None, "created": {"doctype": doc.doctype, "name": doc.name}})
 	status = "Draft" if doc.docstatus == 0 else ("Submitted" if doc.docstatus == 1 else "Cancelled")
-	ctx.say("Your Sales Invoice draft has been created successfully. Open it to review and submit it yourself in ERPNext.",
-		card=_created_card(doc.doctype, doc.name, doc=doc, status=status))
+	label = result.get("label") or doc.doctype
+	text = f"Your {label} draft has been created successfully. Open it to review and submit it yourself in ERPNext."
+	if result.get("totals_note"):
+		text += "\n" + result["totals_note"]
+	ctx.say(text, card=_created_card(doc.doctype, doc.name, doc=doc, status=status))
+
+
+_create_invoice = _create_document  # older name
 
 
 def _creation_failed(ctx, reason):
@@ -1376,21 +1632,34 @@ def _creation_failed(ctx, reason):
 	return before
 
 
+PARTY_FIELDS = (("customer_name", "Customer"), ("customer", "Customer"), ("supplier_name", "Supplier"), ("supplier", "Supplier"), ("party_name", "Customer"))
+
+
 def _created_card(doctype, name, doc=None, status=None):
 	doc = doc or frappe.get_doc(doctype, name)
 	status = status or ("Draft" if doc.docstatus == 0 else "Submitted" if doc.docstatus == 1 else "Cancelled")
-	return {"type": "created", "title": f"{doctype} {name}", "doctype": doctype, "name": name, "action_label": f"Open {doctype}",
-		"rows": [{"label": "ID", "value": name}, {"label": "Customer", "value": doc.get("customer_name") or doc.get("customer")},
-			{"label": "Posting date", "value": str(doc.get("posting_date"))},
-			{"label": "Grand total", "value": f"{flt(doc.get('grand_total'), 2)} {doc.get('currency') or ''}".strip()},
-			{"label": "Status", "value": status}]}
+	rows = [{"label": "ID", "value": name}]
+	party = next(((label, doc.get(f)) for f, label in PARTY_FIELDS if doc.meta.has_field(f) and doc.get(f)), None)
+	if party:
+		rows.append({"label": party[0], "value": party[1]})
+	if doctype == "BOM":
+		rows.append({"label": "Item", "value": doc.get("item")})
+	date = doc.get("posting_date") or doc.get("transaction_date")
+	if date:
+		rows.append({"label": "Posting date" if doc.get("posting_date") else "Date", "value": str(date)})
+	if doc.meta.has_field("grand_total"):
+		rows.append({"label": "Grand total", "value": f"{flt(doc.get('grand_total'), 2)} {doc.get('currency') or ''}".strip()})
+	rows.append({"label": "Status", "value": status})
+	return {"type": "created", "title": f"{doctype} {name}", "doctype": doctype, "name": name, "action_label": f"Open {doctype}", "rows": rows}
 
 
 def _announce(ctx, entry):
 	results = load_json(entry.mapping_results, {}) or {}
 	validation = load_json(entry.validation_results, {}) or {}
 	mapped = load_json(entry.mapped_data, {}) or {}
-	canonical = SalesInvoiceAdapter(None).adapt(load_json(entry.extracted_data, {}) or {})
+	canonical = DocumentAdapter(None).adapt(load_json(entry.extracted_data, {}) or {})
+	cls = _classification(entry)
+	d = _definition(entry)
 
 	def row(label, key, value=None):
 		r = results.get(key) or {}
@@ -1398,7 +1667,20 @@ def _announce(ctx, entry):
 		status = "ok" if ok and r.get("status") == "MATCHED" else ("warn" if ok else "error")
 		shown = value if value is not None else (r.get("display_name") or r.get("name") or r.get("input"))
 		note = None if status == "ok" else (r.get("message") or ("Not found" if status == "error" else None))
-		return {"label": label, "value": shown or "Not on invoice", "status": status, "note": note}
+		return {"label": label, "value": shown or "Not on document", "status": status, "note": note}
+
+	rows = [{"label": "Document", "value": _describe(cls), "status": "ok" if cls.get("status") == "ok" else "warn"}]
+	if d:
+		rows.append({"label": "For your company", "value": f"{_role_text(cls)}: a Draft {d.display}", "status": "ok"})
+		if d.party_doctype:
+			rows.append(row(d.party_doctype, d.party_doctype.lower()))
+		for key in (d.date_field, d.second_date_field):
+			if key:
+				rows.append(row(DATE_LABELS[key].capitalize(), key))
+		if d.currency and d.target_doctype != "BOM":
+			rows.append(row("Currency", "currency"))
+	else:
+		rows.append({"label": "For your company", "value": cls.get("message") or "Not determined yet", "status": "warn"})
 
 	items = []
 	for i, it in enumerate(mapped.get("items") or [], start=1):
@@ -1407,15 +1689,13 @@ def _announce(ctx, entry):
 			"status": "ok" if it.get("item_code") else "error", "qty": it.get("qty"),
 			"uom": (f"{ur.get('input')} → {it.get('uom')}" if ur.get("input") and it.get("uom") and ur.get("input") != it.get("uom") else (it.get("uom") or ur.get("input"))),
 			"rate": it.get("rate"), "amount": it.get("amount")})
-	notes = [w["message"] for w in validation.get("warnings", []) if w["code"].startswith(("uom_", "currency_defaulted", "foreign_currency", "item_"))]
-	card = {"type": "summary", "title": f"Invoice {canonical.get('invoice_number') or ''}".strip(),
-		"rows": [row("Customer", "customer"), {"label": "Company", "value": mapped.get("company") or "Not resolved",
-			"status": "ok" if (results.get("company") or {}).get("status") == "MATCHED" else "warn"},
-			row("Invoice date", "posting_date"), row("Due date", "due_date"), row("Currency", "currency")],
-		"items": items, "totals": {"subtotal": canonical.get("subtotal"), "tax": canonical.get("tax_amount"), "total": canonical.get("total_amount")},
-		"notes": notes[:5]}
+	notes = [w["message"] for w in validation.get("warnings", []) if w["code"].startswith(("uom_", "currency_defaulted", "foreign_currency", "item_", "apply_discount_on"))]
+	card = {"type": "summary", "title": f"{(d.display if d else 'Document')} {canonical.get('invoice_number') or ''}".strip(),
+		"rows": rows, "items": items, "totals": {"subtotal": canonical.get("subtotal"), "discount": canonical.get("discount_amount"),
+			"tax": canonical.get("tax_amount"), "total": canonical.get("total_amount")}, "notes": notes[:5]}
 	matched_items = sum(1 for i in items if i["matched"])
-	ctx.say(f"I've read the invoice: {len(items)} line item{'s' if len(items) != 1 else ''}, {matched_items} matched to ERPNext items. "
+	what = f"a {d.display} for your company" if d else "a document I can't classify yet"
+	ctx.say(f"I've read the document: it is {what}. {len(items)} line item{'s' if len(items) != 1 else ''}, {matched_items} matched to ERPNext items. "
 		"I'll ask only about what still needs your input.", card=card)
 
 

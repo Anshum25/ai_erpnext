@@ -357,6 +357,13 @@ LIST_RE = re.compile(r"^\s*(?:please\s+)?(?:(?:summari[sz]e|describe|explain|giv
 	r"what\s+(?:filters?|am\s+i\s+looking\s+at)\b.*)" + _END, re.I)
 REPORT_RE = re.compile(r"^\s*(?:please\s+)?(?:(?:explain|describe|summari[sz]e|what\s+is|what(?:'s)|what\s+does)\s+" + _THIS + r"\s+report(?:\s+show)?|what\s+am\s+i\s+looking\s+at|"
 	r"what\s+filters?(?:\s+are\s+(?:applied|set|active))?|what\s+(?:company|period|date)\s+is\s+(?:this|the)\s+report\s+for)" + _END, re.I)
+# "show my current list", "what is in this filtered list?", "count the items in my current list", "summarize the records currently visible"
+CURRENT_LIST_RE = re.compile(r"\b(?:(?:my|this|the)\s+(?:current\s+|filtered\s+|open\s+)*(?:list|view|results)|(?:records?|rows|items|entries)\s+"
+	r"(?:currently\s+)?(?:visible|shown|listed|on\s+(?:this|the|my)\s+(?:list|page|screen))|(?:currently\s+)?visible\s+(?:records?|rows|items))\b", re.I)
+CURRENT_LIST_VERB_RE = re.compile(r"^\s*(?:please\s+)?(?:show|list|display|open|give\s+me|what(?:'s|\s+is|\s+are)|which|summari[sz]e|describe|explain|"
+	r"count|how\s+many|total|tell\s+me)\b", re.I)
+REPORT_ASK_RE = re.compile(r"^\s*(?:please\s+)?(?:summari[sz]e|explain|describe|show|give|tell|what|which|how|interpret|analy[sz]e|read|run|list)\b", re.I)
+REPORT_RESULTS_RE = re.compile(r"\b(results?|numbers?|figures?|totals?|values?|rows?|data|shows?|says?|outcome|profit|balances?|amounts?|run|read|analy[sz]e|interpret)\b", re.I)
 PENDING_WORDS = re.compile(r"\b(pending|overdue|unpaid|open|late|delayed|stuck|outstanding|not\s+(?:delivered|billed|paid|received))\b", re.I)
 # “what is this page about”, “what page is this”, “explain this page”, “where am I”: any page, whatever its kind.
 ABOUT_RE = re.compile(r"^\s*(?:please\s+)?(?:(?:what(?:'s|\s+is)?|whats|which|explain|describe|tell\s+me\s+about|summari[sz]e)\s+(?:is\s+)?(?:this|the\s+current|current)?\s*(?:page|screen)"
@@ -384,12 +391,25 @@ def classify(text, page):
 		card = _card_question(page, text)
 		return ("card", card) if card else None
 	if page.kind == "report":
-		return ("report", None) if REPORT_RE.match(text) or (EXPLAIN_RE.match(text) and "report" in text.lower()) else None
+		wants_results = bool(REPORT_RESULTS_RE.search(text) or re.search(r"\bsummari[sz]e\b", text, re.I))
+		if REPORT_RE.match(text) or (EXPLAIN_RE.match(text) and "report" in text.lower()):
+			return ("report", "results" if wants_results else None)
+		# "summarize this report using the filters currently applied", "what are the results of this report?": answered from
+		# the page (name and filters), with a plain statement that the report itself was not run.
+		if REPORT_ASK_RE.search(text) and re.search(r"\b(?:this|the|current|open)\s+report\b", text, re.I):
+			return ("report", "results" if wants_results else None)
+		return None
 	if page.kind == "list":
 		verb = SELECTED_VERB_RE.match(text)
 		if verb and SELECTED_RE.search(text) and not LIST_RE.match(text):
 			sub = "why" if verb.group("why") else "compare" if verb.group("compare") else "summary"
 			return ("selected", sub)
+		if CURRENT_LIST_RE.search(text) and CURRENT_LIST_VERB_RE.match(text):
+			if re.search(r"\b(count|how\s+many|number\s+of)\b", text, re.I):
+				return ("list_count", None)
+			if re.search(r"\b(summari[sz]e|describe|explain|overview|total)\b", text, re.I):
+				return ("list", None)
+			return ("show_list", "filters" if re.search(r"\bfilters?\b", text, re.I) else None)
 		if LIST_RE.match(text):
 			return ("filters", None) if re.search(r"\bfilters?\b", text, re.I) and not re.search(r"\b(summari|how many|count|total)", text, re.I) else ("list", None)
 		return None
@@ -428,7 +448,7 @@ def answer(ctx, text, loose=False):
 		return False
 	intent, detail = found
 	handler = {"about": _about, "card": _card_answer, "explain": _explain, "rows": _rows, "fields": _fields, "unsaved": _unsaved, "selected": _selected, "list": _list_summary,
-		"filters": _list_filters, "report": _report_explain}[intent]
+		"filters": _list_filters, "report": _report_explain, "show_list": _show_list, "list_count": _list_count}[intent]
 	try:
 		handler(ctx, page, detail)
 	except frappe.PermissionError:
@@ -706,10 +726,52 @@ def _list_summary(ctx, page, _detail):
 		ctx.say(totals + " (all records matching the list's filters, not just the page shown)", source="erpnext", ref={"doctype": page.doctype, "names": [], "requires": []})
 
 
-def _report_explain(ctx, page, _detail):
+def _exact_list(ctx, page, what):
+	"""True if the open list's filters can be reproduced exactly; otherwise says why and returns False (never an unfiltered answer)."""
+	if not page.filters_known:
+		ctx.say(page.limitations[0] + f" So I can't {what} exactly; ask me about the records directly instead.")
+		return False
+	if not page.filters_ok:
+		ctx.say(f"I can't {what} exactly, because " + " ".join(page.limitations) + " Remove or change that filter, or ask me about the records directly.")
+		return False
+	return True
+
+
+def _show_list(ctx, page, detail):
+	"""The records the open list shows (its validated filters and sort; at most 20), optionally with the filters spelled out."""
+	from ai_erpnext.chat import engine, queries
+
+	if not _exact_list(ctx, page, "show this list"):
+		return
+	if page.limitations:
+		ctx.say("Note: " + " ".join(page.limitations))
+	plan = {"doctype": page.doctype, "operation": "list", "where": _as_plan(page.where), "filters": {"docstatus": page.docstatus} if page.docstatus else {},
+		"sort": page.sort or "newest", "limit": 20}
+	q = queries.validate(plan)
+	q["all_states"] = not page.docstatus
+	engine._run_query(ctx, None, prepared=q)
+	if detail == "filters":
+		_list_filters(ctx, page, None)
+
+
+def _list_count(ctx, page, _detail):
+	from ai_erpnext.chat import engine, queries
+
+	if not _exact_list(ctx, page, "count this list"):
+		return
+	q = queries.validate({"doctype": page.doctype, "operation": "count", "where": _as_plan(page.where),
+		"filters": {"docstatus": page.docstatus} if page.docstatus else {}})
+	q["all_states"] = not page.docstatus
+	engine._run_query(ctx, None, prepared=q)
+
+
+def _report_explain(ctx, page, detail):
 	if not page.supported:
 		ctx.say(f"You have the report “{page.report}” open. I don't have a description for it, and I can't read report results yet.")
 		return
+	if detail == "results":
+		ctx.say(f"I haven't run “{page.report}” and can't read its results: report results aren't available to the chat. "
+			"Here is what it shows and how it is filtered; for figures, ask me for the records instead (for example “unpaid sales invoices by customer”).")
 	filters = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in page.report_filters.items())
 	text = (f"“{page.report}” {page.report_about} "
 		+ (f"It is currently filtered by: {filters}. " if filters else "I can't see its filters. " if page.route_only else "It has no filters I can describe. ")

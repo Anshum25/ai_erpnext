@@ -35,6 +35,8 @@ def create_document(entry, corrections=None, acknowledge_errors=0, acknowledge_d
 		doc.save()
 		return {"created": False, "message": blocked, "review": review_payload(doc)}
 
+	from ai_erpnext.creation.transaction import totals_note
+
 	builder = outcome.definition.get_component("builder")
 	new_doc = builder.create_draft(outcome.mapped, {"entry": doc.name, "canonical": outcome.canonical})
 
@@ -42,4 +44,5 @@ def create_document(entry, corrections=None, acknowledge_errors=0, acknowledge_d
 	doc.status = DocumentStatus.CREATED
 	doc.requires_review = 0
 	doc.save()
-	return {"created": True, "doctype": new_doc.doctype, "name": new_doc.name, "docstatus": new_doc.docstatus, "review": review_payload(doc)}
+	return {"created": True, "doctype": new_doc.doctype, "name": new_doc.name, "docstatus": new_doc.docstatus, "label": outcome.definition.display,
+		"totals_note": totals_note(new_doc, outcome.canonical, outcome.definition), "review": review_payload(doc)}

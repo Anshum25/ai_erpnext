@@ -228,7 +228,8 @@ class TestChatCreationRequirements(IntegrationTestCase):
 			self.assertEqual(doc.doctype, doctype)
 			if wording:
 				self.assertEqual(doc.items[0].warehouse, self.stores, doctype)
-		self.assertEqual(set(requirements.WAREHOUSE_RULES), {d for d, w in expected.items() if w})
+		# Material Request (a rate-less internal document) has its own rule, tested in test_coverage_phase_d
+		self.assertEqual(set(requirements.WAREHOUSE_RULES), {d for d, w in expected.items() if w} | {"Material Request"})
 
 	def test_sales_order_bundle_with_stock_items_needs_a_warehouse(self):
 		ig = frappe.db.get_value("Item Group", {"is_group": 0}, "name")

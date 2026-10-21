@@ -33,11 +33,15 @@ GROQ_URL = "https://api.groq.com/openai/v1"
 REQ = httpx.Request("POST", GROQ_URL + "/chat/completions")
 
 
+def our_company():
+	return frappe.defaults.get_user_default("Company") or frappe.db.get_single_value("Global Defaults", "default_company")
+
+
 def b2_output(**overrides):
-	"""Shape of a Prompt B2 response for a split-GST invoice (synthetic test values)."""
+	"""Shape of a Prompt B2 response for a split-GST invoice our company issued (synthetic test values)."""
 	data = {
 		"document_type": "Sales Invoice",
-		"supplier_name": "AISAFE Seller",
+		"supplier_name": our_company(),
 		"customer_name": "AISAFE Customer",
 		"invoice_number": "AISAFE-0001",
 		"date": nowdate(),
@@ -85,9 +89,18 @@ class TestExtractionSafety(IntegrationTestCase):
 		cls.image_url = test_file("png")
 
 	# --- Prompt B2 contract ----------------------------------------------------------
-	def test_prompt_b2_is_the_benchmarked_version(self):
+	def test_prompt_b3_is_pinned_and_b2_is_kept(self):
 		self.assertEqual(hashlib.sha256(processor.EXTRACTION_PROMPT.encode()).hexdigest(), processor.EXTRACTION_PROMPT_SHA256)
-		self.assertEqual(processor.EXTRACTION_PROMPT_SHA256, "2d7e2cbc95efe288be15a41aa63b96caa37fbf009e1a263e8437cf43cbab9a1f")
+		self.assertEqual(processor.EXTRACTION_PROMPT_SHA256, "425fb2c08ae86f5cf8213a615b0ac7f382a79894ac291ac11c858686a7842253")
+		self.assertEqual(processor.PROMPT_VERSION, "B3")
+		# the benchmarked B2 text is kept unchanged for reference and rollback
+		self.assertEqual(hashlib.sha256(processor.PROMPT_B2.encode()).hexdigest(), processor.PROMPT_B2_SHA256)
+		self.assertEqual(processor.PROMPT_B2_SHA256, "2d7e2cbc95efe288be15a41aa63b96caa37fbf009e1a263e8437cf43cbab9a1f")
+		# every B2 key is still requested, plus the parties the direction classifier needs
+		for key in ("document_type", "supplier_name", "customer_name", "invoice_number", '"date"', "due_date", "currency", "items",
+			"subtotal", "discount_amount", "taxes", "tax_rate", "tax_amount", "total_amount", "issuer_name", "recipient_name",
+			"original_invoice_number", "delivery_date", "bom_item_name", "material_request_type"):
+			self.assertIn(key, processor.EXTRACTION_PROMPT, key)
 		captured = {}
 
 		class Capture:

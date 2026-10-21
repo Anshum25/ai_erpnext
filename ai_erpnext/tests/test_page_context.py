@@ -723,6 +723,21 @@ class TestReports(PageCase):
 		self.assertIn("not recognised", text)
 		self.assertFalse(P.REPORT_RESULTS_ENABLED)
 
+	def test_questions_about_report_results_say_the_report_was_not_run(self):
+		if not frappe.db.exists("Report", "Accounts Receivable"):
+			self.skipTest("Accounts Receivable report is not installed")
+		self.chat_as(self.u_a)
+		ctx = self.report_ctx(company=COMPANIES["A"], report_date="2026-10-01")
+		for question in ("Summarize this report using the filters currently applied", "What are the results of this report?",
+			"Show me the totals in this report"):
+			with mock.patch("frappe.desk.query_report.run") as run, mock.patch("frappe.desk.query_report.generate_report_result") as gen:
+				text = self.texts(self.say(question, ctx))
+			run.assert_not_called()
+			gen.assert_not_called()
+			self.assertIn("haven't run", text, question)
+			self.assertIn(COMPANIES["A"], text, question)  # the validated filters are still described
+		self.route.assert_not_called()  # answered from the page, never by the model
+
 	def test_report_filter_on_a_company_the_user_cannot_access_is_not_described(self):
 		self.chat_as(self.u_a)
 		page = page_context.parse(self.report_ctx(company=COMPANIES["B"]))
@@ -865,6 +880,26 @@ class TestReplay(PageCase):
 
 
 class TestFrontend(IntegrationTestCase):
+	def test_every_desk_script_parses(self):
+		"""Syntax check of every Desk script with Node (no browser infrastructure exists in this repository)."""
+		node = shutil.which("node")
+		if not node:
+			self.skipTest("node is not available")
+		scripts = sorted((Path(__file__).resolve().parents[1] / "public" / "js").glob("*.js"))
+		self.assertGreaterEqual(len(scripts), 5)
+		for script in scripts:
+			result = subprocess.run([node, "--check", str(script)], capture_output=True, text=True, timeout=60)
+			self.assertEqual(result.returncode, 0, f"{script.name}: {result.stderr}")
+
+	def test_widget_hides_without_the_server_flag_and_labels_model_text(self):
+		source = (Path(__file__).resolve().parents[1] / "public" / "js" / "ai_bot_v2.js").read_text()
+		guard, launcher = source.index("if (!frappe.boot.ai_chat_enabled) return;"), source.index('getElementById("ai-agent")')
+		self.assertLess(guard, launcher)  # nothing is built for users who may not chat
+		self.assertIn("General answer, not from your data", source)
+		review = (Path(__file__).resolve().parents[1] / "public" / "js" / "ai_review.js").read_text()
+		self.assertNotIn("openLegacyForm", review)  # the permission-bypassing prefill is gone
+		self.assertIn("__document_role", review)  # the Desk review asks the same direction question as the chat
+
 	def test_collector_behaves_as_documented(self):
 		node = shutil.which("node")
 		if not node:

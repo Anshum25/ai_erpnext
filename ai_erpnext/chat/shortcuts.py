@@ -18,7 +18,7 @@ import re
 from ai_erpnext.chat.queries import DOCUMENT_DOCTYPES, ENTITY_DOCTYPES, REGISTRY, looks_like_id
 
 GREETING_REPLY = ("Hello! How can I help? You can ask about ERPNext, look up your data, create records step by step "
-	"(e.g. “create purchase invoice”), or attach an invoice image.")
+	"(e.g. “create purchase invoice”), or attach an image of a business document.")
 THANKS_REPLY = "You're welcome! Anything else I can help with?"
 
 _END = r"\s*[.!?]*\s*$"
@@ -93,6 +93,19 @@ NAME_PREFIX_DOCTYPES = (*DOCUMENT_DOCTYPES, *ENTITY_DOCTYPES, "Item", "Warehouse
 _LIST_VERB_RE = re.compile(r"^\s*(?:please\s+)?(show|list|display|get|give|last|latest|recent|newest|oldest)\b", re.I)
 
 
+# "show credit notes", "list the debit notes", "how many sales returns": returns are invoices with is_return set.
+RETURNS_RE = re.compile(r"^\s*(?:please\s+)?(?P<verb>show|list|display|get|give(?:\s+me)?|how\s+many|count)?\s*(?:me\s+)?(?:the\s+|all\s+|my\s+)?"
+	r"(?:(?P<sort>last|latest|recent)\s+)?(?P<kind>credit\s+notes?|debit\s+notes?|sales\s+returns?|purchase\s+returns?)" + _END, re.I)
+
+
+def _returns(m):
+	kind = m.group("kind").lower()
+	doctype = "Sales Invoice" if kind.startswith(("credit", "sales")) else "Purchase Invoice"
+	operation = "count" if (m.group("verb") or "").lower() in ("how many", "count") else "list"
+	return {"mode": "query", "query": {"doctype": doctype, "operation": operation, "filters": {},
+		"where": [{"field": "is_return", "op": "=", "value": 1}], **({"sort": "newest"} if operation == "list" else {})}}
+
+
 def match(text, last_query=None):
 	"""A plan dict the engine can run directly, or None to ask the router model."""
 	if GREETING_RE.match(text):
@@ -109,6 +122,9 @@ def match(text, last_query=None):
 		else:
 			index = ORDINALS.get(n) or int(n)
 		return {"mode": "open", "index": index}
+	m = RETURNS_RE.match(text)
+	if m:
+		return _returns(m)
 	m = COUNT_RE.match(text)
 	if m:
 		return _query(m, "count")

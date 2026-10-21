@@ -51,10 +51,15 @@ def make_item(code, item_name, uom="Nos", **extra):
 	).insert()
 
 
+def our_company():
+	return frappe.defaults.get_user_default("Company") or frappe.db.get_single_value("Global Defaults", "default_company")
+
+
 def extracted_invoice(customer=f"{P} Exact Customer", item=f"{P} Exact Item", **overrides):
+	# Issued by our own company to the customer: a Sales Invoice for us (detection/direction.py).
 	data = {
 		"document_type": "Sales Invoice",
-		"supplier_name": "Some Issuer",
+		"supplier_name": our_company(),
 		"customer_name": customer,
 		"invoice_number": INVOICE_NO,
 		"invoice_date": TODAY,
@@ -369,11 +374,14 @@ class TestAISalesInvoiceMapping(IntegrationTestCase):
 
 	# misc ---------------------------------------------------------------------------
 	def test_registry(self):
-		self.assertEqual(supported_doctypes(), ["Sales Invoice"])
+		self.assertEqual(supported_doctypes(), ["Sales Invoice", "Purchase Invoice", "Sales Order", "Purchase Order", "Quotation",
+			"Delivery Note", "Purchase Receipt", "Material Request", "BOM"])
 		d = get_definition("sales invoice")
 		self.assertEqual(d.target_doctype, "Sales Invoice")
 		self.assertIn("customer", d.required_fields)
-		self.assertIsNone(get_definition("Purchase Invoice"))
+		self.assertEqual(get_definition("Purchase Invoice").party_doctype, "Supplier")
+		self.assertTrue(get_definition("Sales Invoice Return").is_return)
+		self.assertIsNone(get_definition("Supplier Quotation"))  # never a target from an image
 
 	def test_untrusted_input_sanitising(self):
 		self.assertEqual(parse_number("$ 1,234.50"), 1234.5)

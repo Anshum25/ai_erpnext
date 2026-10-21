@@ -434,7 +434,9 @@ def execute(q):
 	if op == "sales_summary":
 		return _sales_summary(q)
 	if op == "outstanding_by_customer":
-		return _outstanding_by_customer(q)
+		return _outstanding_by_party(q, "Sales Invoice", "Customer")
+	if op == "outstanding_by_supplier":
+		return _outstanding_by_party(q, "Purchase Invoice", "Supplier")
 	return _list(q)
 
 
@@ -720,6 +722,7 @@ def _aggregate(q):
 	card = {"type": "table", "title": f"{doctype}: {title}", "doctype": None, "source_doctype": doctype, "columns": cols, "rows": table_rows,
 		"note": "From your ERPNext data" + (f" ({'; '.join(notes)})" if notes else "") + ". "
 			+ ("Amounts in different currencies are never added together. " if is_money else "")
+			+ (_RETURN_NOTE + " " if is_money and doctype in ("Sales Invoice", "Purchase Invoice") and not any(w[0] == "is_return" for w in q.get("where") or []) else "")
 			+ (f"Showing only the first {MAX_BUCKET_ROWS if bucket else MAX_GROUPS} rows. " if truncated else "")}
 	return {"text": f"{title} for {doctype} records" + (" (grouped)" if groups_label else "") + ".", "card": card, "names": [], "titles": []}
 
@@ -951,12 +954,13 @@ def _child_table(doctype, doc, table, wanted):
 
 
 def _party_outstanding(doctype, party, company=None):
-	"""Outstanding of submitted invoices of a customer/supplier, per currency, within the companies
+	"""Net outstanding of submitted invoices and notes of a customer/supplier, per currency, within the companies
 	the user may read. None if the user can't read those invoices."""
 	invoice = _INVOICE[doctype]
 	if not frappe.has_permission(invoice, "read"):
 		return None
-	rows = frappe.get_list(invoice, filters=[[doctype.lower(), "=", party], ["docstatus", "=", 1], ["outstanding_amount", ">", 0],
+	# net: standalone credit/debit notes carry a negative outstanding (see _outstanding_by_party)
+	rows = frappe.get_list(invoice, filters=[[doctype.lower(), "=", party], ["docstatus", "=", 1], ["outstanding_amount", "!=", 0],
 		*_company_filter({"doctype": invoice, "company": company})[0]],
 		fields=["currency", {"SUM": "outstanding_amount", "as": "total"}, {"COUNT": "*", "as": "n"}], group_by="currency")
 	rows = [r for r in rows if flt(r["total"], 2)]
@@ -1094,21 +1098,38 @@ def _sales_summary(q):
 	return {"text": f"Here is the sales total for {period}, per company and currency.", "card": card, "names": [], "titles": []}
 
 
-def _outstanding_by_customer(q):
-	rows = frappe.get_list("Sales Invoice", filters=[["docstatus", "=", 1], ["outstanding_amount", ">", 0],
-		*_company_filter(dict(q, doctype="Sales Invoice"))[0]],
-		fields=["customer", "customer_name", "currency", {"SUM": "outstanding_amount", "as": "total"}, {"COUNT": "*", "as": "n"}],
-		group_by="customer, customer_name, currency", order_by="total desc", limit=q["limit"])
+_RETURN_NOTE = "Credit notes (returns) count as negative amounts."
+_PARTY = {"Customer": ("customer", "customer_name", "credit notes"), "Supplier": ("supplier", "supplier_name", "debit notes")}
+
+
+def _outstanding_by_party(q, invoice, party_type):
+	"""Net outstanding per customer (Sales Invoices) or supplier (Purchase Invoices) and currency.
+
+	ERPNext keeps outstanding_amount on each submitted invoice current: payments and returns allocated against an invoice
+	already reduce it, and a standalone credit/debit note carries a negative outstanding. So the net balance is the sum over
+	submitted, non-cancelled invoices and notes, per currency (never converted), within the user's companies. Parties whose
+	net is zero are left out."""
+	field, title_field, notes = _PARTY[party_type]
+	where = q.get("where") or []
+	filters = [["docstatus", "=", 1], ["outstanding_amount", "!=", 0], *_company_filter(dict(q, doctype=invoice))[0],
+		*[[f, o, f"%{v}%" if o == "like" else v] for f, o, v in where]]
+	rows = frappe.get_list(invoice, filters=filters,
+		fields=[field, title_field, "currency", {"SUM": "outstanding_amount", "as": "total"}, {"COUNT": "*", "as": "n"}],
+		group_by=f"{field}, {title_field}, currency", order_by="total desc", limit=max(q["limit"] * 3, 60))
+	rows = [r for r in rows if abs(flt(r["total"])) >= 0.005][: q["limit"]]
+	label = party_type.lower()
 	if not rows:
-		return {"text": "No customer has an outstanding balance on submitted Sales Invoices.", "names": [], "titles": []}
-	card = {"type": "table", "title": "Outstanding by customer", "doctype": "Customer",
-		"columns": [{"key": "name", "label": "Customer", "type": "link"}, {"key": "customer_name", "label": "Name"}, {"key": "currency", "label": "Currency"},
-			{"key": "total", "label": "Outstanding", "type": "currency"}, {"key": "n", "label": "Invoices"}],
-		"rows": [{"name": r["customer"], "customer_name": r["customer_name"], "currency": r["currency"], "total": flt(r["total"], 2), "n": r["n"],
-			"_name": r["customer"], "_n": i + 1} for i, r in enumerate(rows)],
-		"note": "From your ERPNext data: outstanding amounts of submitted Sales Invoices, per currency (not converted)."}
-	return {"text": f"{len(rows)} customer{'s have' if len(rows) != 1 else ' has'} outstanding balances.", "card": card,
-		"names": [r["customer"] for r in rows], "titles": [r["customer_name"] or r["customer"] for r in rows], "result_doctype": "Customer"}
+		return {"text": f"No {label} has an outstanding balance on submitted {invoice}s you can access.", "names": [], "titles": []}
+	card = {"type": "table", "title": f"Outstanding by {label}", "doctype": party_type,
+		"columns": [{"key": "name", "label": party_type, "type": "link"}, {"key": title_field, "label": "Name"}, {"key": "currency", "label": "Currency"},
+			{"key": "total", "label": "Outstanding", "type": "currency"}, {"key": "n", "label": "Documents"}],
+		"rows": [{"name": r[field], title_field: r[title_field], "currency": r["currency"], "total": flt(r["total"], 2), "n": r["n"],
+			"_name": r[field], "_n": i + 1} for i, r in enumerate(rows)],
+		"note": f"From your ERPNext data: net outstanding of submitted {invoice}s per currency (not converted); payments reduce it and "
+			f"standalone {notes} count as negative. Cancelled documents are left out."}
+	return {"text": f"{len(rows)} {label}{'s have' if len(rows) != 1 else ' has'} outstanding balances.", "card": card,
+		"names": [r[field] for r in rows], "titles": [r[title_field] or r[field] for r in rows], "result_doctype": party_type,
+		"requires": [invoice]}
 
 
 def _jsonable(v):

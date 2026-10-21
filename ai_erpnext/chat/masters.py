@@ -13,8 +13,9 @@ from ai_erpnext.capability.access import readable_exists
 from ai_erpnext.mapping.customer import CustomerMatcher
 from ai_erpnext.mapping.item import ItemMatcher
 from ai_erpnext.mapping.normalize import clean_text
+from ai_erpnext.mapping.supplier import SupplierMatcher
 
-TREE_DOCTYPES = {"Customer Group", "Territory", "Item Group"}
+TREE_DOCTYPES = {"Customer Group", "Territory", "Item Group", "Supplier Group"}
 
 FIELDS = {
 	"Customer": {
@@ -22,6 +23,11 @@ FIELDS = {
 		"customer_type": {"label": "customer type", "type": "Select"},
 		"customer_group": {"label": "customer group", "type": "Link", "options": "Customer Group"},
 		"territory": {"label": "territory", "type": "Link", "options": "Territory"},
+	},
+	"Supplier": {
+		"supplier_name": {"label": "supplier name", "type": "Data"},
+		"supplier_type": {"label": "supplier type", "type": "Select"},
+		"supplier_group": {"label": "supplier group", "type": "Link", "options": "Supplier Group"},
 	},
 	"Item": {
 		"item_code": {"label": "item code", "type": "Data"},
@@ -35,6 +41,7 @@ FIELDS = {
 ALWAYS_ASK = {"Item": ["is_stock_item"]}
 SUMMARY_FIELDS = {
 	"Customer": ["customer_name", "customer_type", "customer_group", "territory"],
+	"Supplier": ["supplier_name", "supplier_type", "supplier_group"],
 	"Item": ["item_code", "item_name", "item_group", "stock_uom", "is_stock_item"],
 }
 
@@ -50,8 +57,19 @@ def customer_draft(for_key, name):
 	return _draft("Customer", for_key, values)
 
 
-def item_draft(for_key, name, description=None, uom=None):
-	values = {"is_sales_item": 1}
+def supplier_draft(for_key, name):
+	values = {"supplier_type": _meta_default("Supplier", "supplier_type") or "Company"}
+	if clean_text(name, 140):
+		values["supplier_name"] = clean_text(name, 140)
+	default = frappe.db.get_single_value("Buying Settings", "supplier_group")
+	if default:
+		values["supplier_group"] = default
+	return _draft("Supplier", for_key, values)
+
+
+def item_draft(for_key, name, description=None, uom=None, flags=None):
+	"""flags: the item flags the document needs (is_sales_item / is_purchase_item); a sales item by default."""
+	values = dict(flags or {"is_sales_item": 1})
 	if clean_text(name, 140):
 		values["item_name"] = clean_text(name, 140)
 	if clean_text(description, 1000):
@@ -160,6 +178,8 @@ def find_existing(draft):
 	v = draft["values"]
 	if draft["doctype"] == "Customer":
 		res = CustomerMatcher().match(v.get("customer_name"))
+	elif draft["doctype"] == "Supplier":
+		res = SupplierMatcher().match(v.get("supplier_name"))
 	else:
 		res = ItemMatcher().match({"item_name": v.get("item_name"), "item_code": v.get("item_code")})
 	return res.name if res.matched else None

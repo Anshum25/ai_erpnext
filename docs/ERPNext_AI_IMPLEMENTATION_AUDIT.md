@@ -1,4 +1,250 @@
-# ERPNext AI Chatbot: Implementation and Coverage Audit
+# ERPNext AI Chatbot: Implementation and Coverage Report
+
+This document has two parts.
+
+- **Part I (current)** is the state after the implementation phase of 2026-10-21 (branch `ai-implementation-phase`, based on
+  `ab0a09f`). It holds the changelog, the current coverage per interaction mode, the test evidence and what remains.
+- **Part II (baseline)** is the original audit at commit `085bf0f`, kept unchanged for reference. Its statuses and line
+  numbers describe the code *before* this phase.
+
+---
+
+# Part I: Implementation phase 2026-10-21
+
+## I.1 Summary
+
+| | Baseline (085bf0f) | Now |
+| --- | --- | --- |
+| Tests (collected / passed / failed / skipped) | 471 / 471 / 0 / 0 | 573 / 573 / 0 / 0 |
+| Audited features: implemented and data-tested | 23/72 | 34/72 |
+| Image types with tested Draft creation | 1/11 | 11/11 |
+| Guided creation types (all tested) | 12 | 14 |
+| Model text checked for false claims | no | yes (`chat/claims.py`) |
+| Suite-wide outbound-network guard in tests | no (README overstated) | yes (`tests/network_guard.py`) |
+
+All P0 and P1 findings of the baseline audit are fixed and covered by tests (§I.3). Draft-only creation, System
+Manager-only access, and no edit/submit/cancel/delete/payment remain enforced (§I.6).
+
+## I.2 Changelog
+
+| Area | Change | Files |
+| --- | --- | --- |
+| Document direction (new) | A deterministic classifier decides what an image becomes from the kind of document (perspective-free), the issuer/recipient and seller/buyer, and which side is the user's company (selected, or the validated default; a non-default company named on the document must be confirmed). Contradictions, unrelated parties, intercompany documents, unknown types and a debit note of unknown issuer are refused or asked about. The model's title never decides. | `detection/direction.py` (new), `mapping/mapper.py` |
+| Unsafe override removed | The one-click "Yes, it's a Sales Invoice" question is gone. `remap(target_doctype=…)` and a Desk edit of `target_doctype` can no longer change the classification. The legacy "Open Prefilled Form" path (which used permission-bypassing lookups) is retired. | `chat/engine.py`, `api/mapping.py`, `pipeline/review_service.py`, `public/js/ai_review.js`; deleted `pipeline/mapper.py`, `detection/document_detector.py` |
+| Image types | 11 registered definitions sharing one adapter, mapper, validator and builder: Sales/Purchase Invoice, Sales/Purchase Order, Quotation, Delivery Note, Purchase Receipt, Material Request, BOM, Credit Note (Sales Invoice return), Debit Note (Purchase Invoice return). Returns are linked to their original invoice when it is printed and found (same party and company, submitted, readable), or created unlinked only after an explicit choice. BOMs are created neither active nor default. | `registry/definitions.py`, `registry/document_registry.py`, `mapping/transaction.py`, `validation/transaction.py`, `creation/transaction.py` (new); `mapping/adapters.py`; old Sales Invoice modules are thin aliases |
+| Prompt B3 | The extraction prompt asks for issuer, recipient, seller and buyer explicitly, perspective-free kinds, and the per-type fields (delivery/required-by and valid-till dates, references, original invoice, MR purpose, BOM header). All B2 keys and rules are kept; B2 is kept verbatim; both SHA-256s are pinned. **B3 is not benchmarked against a live model** (§I.8). | `pipeline/processor.py` |
+| Discount (P1-1) | The document discount is applied (`discount_amount`, `apply_discount_on`). The base is read from the document's own numbers (tax computed after or before the discount); if it can't be decided and the document has tax, the user is asked. Discounts larger than the subtotal are data errors. When the Draft's grand total differs from the printed total (e.g. taxes left out), the success message says so. | `mapping/transaction.py`, `creation/transaction.py`, `api/creation.py` |
+| Duplicates | Per-type checks: Sales Invoice (name, source tag, customer/date/total), Purchase Invoice/Receipt and Sales Order by the other party's reference (`bill_no`, `supplier_delivery_note`, `po_no`), others by party/date/total, BOM by item/company/quantity. | `validation/duplicate.py` |
+| Image content | An upload must decode as the image format its extension claims (PNG/JPEG/WEBP, bounded size), checked in the chat and again in the background job before any provider call. | `pipeline/controller.py`, `chat/engine.py` |
+| Model claims (P0-1) | The model's `chat`, `clarify` and `unsupported` text is checked: completed-action claims, counts/amounts/IDs the user didn't give, and report-result claims are replaced by a fixed truthful sentence (metadata-only log). The router prompt states the contract, and the widget labels model text "General answer, not from your data". | `chat/claims.py` (new), `chat/engine.py`, `chat/llm.py`, `public/js/ai_bot_v2.js` |
+| Open record (P1-3) | Model plans may use the opaque `"ref":"open_record"` (queries) and `"party":"open_record"` / `"selected_records"` (creation). The server resolves them from the validated page: same DocType gives a name filter, otherwise the Link field pointing to the open record. A Supplier is never put into a Customer field. "Create X for this customer/supplier/these items" also works without the AI service. | `chat/engine.py`, `chat/llm.py` |
+| Current list (P1-4) | "Show my current list (with its filters)", "what is in this filtered list", "count the items in my current list" and "the records currently visible" are answered from the list's validated filters, or refused with the reason; a model query on the open list's DocType says the list filters weren't applied. | `chat/page_context.py`, `chat/engine.py` |
+| Reports | Questions about report results are answered with the report's description and validated filters plus a plain statement that it was not run. `REPORT_RESULTS_ENABLED` stays False. | `chat/page_context.py` |
+| Supplier parity | New `outstanding_by_supplier`. Outstanding by customer/supplier and in record details is now **net** of standalone credit/debit notes (payments already reduce it), per currency, excluding cancelled documents. | `chat/queries.py`, `capability/policy.py`, `chat/llm.py` |
+| Returns | `is_return` and `return_against` are queryable fields of Sales/Purchase Invoice. "Show credit notes" / "debit notes" is a deterministic route, and invoice totals state that returns count as negative amounts. | `capability/policy.py`, `chat/shortcuts.py`, `chat/queries.py` |
+| Guided creation | New Draft flows: Material Request (purpose, required-by date, warehouse per stock row, no prices) and Stock Entry (Material Receipt / Issue / Transfer only, with the warehouses each needs). Conditional form fields (`when=`). Supplier creation inside the image flow. | `chat/forms.py`, `chat/masters.py`, `chat/requirements.py`, `capability/service.py` |
+| Allow-list fix (found in this phase) | Link lookups merged `{**filters, "name": value}`, which replaced a `name in [...]` allow-list with the typed value (e.g. a "Manufacture" Stock Entry type was accepted). Filters are now combined as conditions. | `chat/forms.py` |
+| Launcher (P3) | A server boot flag `ai_chat_enabled` hides the launcher from users who may not use the chat; the endpoints still check. | `boot.py` (new), `hooks.py`, `public/js/ai_bot_v2.js` |
+| Retention (P3) | A daily job clears extracted content from resolved entries (status Created with a created document) older than "Keep Extracted Document Data For (Days)" (default 180; 0 disables). Unresolved and in-chat entries are never touched; a names-free classification summary and the link to the created document are kept. | `pipeline/retention.py` (new), `setup_doctypes.py`, `hooks.py` |
+| Test safety (P2-1) | Every socket connection to a non-loopback address fails during tests; the README now says exactly that. | `tests/network_guard.py` (new), `tests/__init__.py`, `tests/bootstrap.py`, `README.md` |
+| Inventory (P2-3) | `VERIFIED` corrected and extended only where a data-backed test now asserts returned values; image column added; `docs/coverage_inventory.*` regenerated. | `capability/inventory.py`, `docs/` |
+| Maintenance | Removed `run_tests2.py` (broken imports, inserts with `ignore_permissions`), `check_provider.py`, `fix_client_script.py`; updated help text, engine docstring and README. | — |
+
+## I.3 Baseline findings: status
+
+| Finding | Status | Evidence (tests) |
+| --- | --- | --- |
+| P0-1 model text unchecked | **Fixed** | `test_claims_and_network` (11 claim tests, through the engine with a mocked router) |
+| P1-1 discount dropped | **Fixed** | `test_document_direction.TestDiscounts` (persisted `discount_amount`/`apply_discount_on`/totals, base detection, question, data error) |
+| P1-2 one-click Sales Invoice override | **Fixed (removed)** | `TestNoTypeOverride`, `TestImageChatFlows.test_no_generic_yes_override_exists_for_unsupported_documents`, `test_a_supplier_bill_becomes_a_purchase_invoice_never_a_sales_invoice` |
+| P1-3 open record via the model | **Fixed** | `test_page_reference_and_parity.TestOpenRecordReference`, `TestContextAwareCreation` |
+| P1-4 current-list phrasings | **Fixed** | `TestCurrentList` |
+| P2-1 no network guard | **Fixed** | `TestNetworkGuard` |
+| P2-2 smoke-only features | **Partly fixed**: Purchase Invoice, Payment Entry, Journal Entry, Stock Entry, Stock Ledger Entry, BOM, Work Order, Employee, Sales Order and Supplier summary are now data-backed; 24 features remain smoke-only (§I.5) | `test_coverage_phase_d.TestDataBackedQueries` |
+| P2-3 inventory over-claims | **Fixed** (claims now backed; regenerated) | `test_inventory` |
+| P2-4 browser tests | **Not possible here**: no browser test infrastructure in the repo; added a Node syntax check of every Desk script and guard-order checks | `test_page_context.TestFrontend` |
+| P2-5 untested paths | **Fixed**: why/status, image master correction (customer group, supplier type), image start over, type override, discount, return links | `TestImageChatFlows` |
+| P2-6 CI on newest v16 | **Not run** (local checkout only) | — |
+| P3-1 supplier parity | **Fixed** | `TestSupplierOutstanding` |
+| P3-2 return filtering | **Fixed** | `TestReturns` |
+| P3-3 launcher for non-permitted users | **Fixed** | `TestLauncherFlag` |
+| P3-4 documentation drift | **Fixed** | README, help text, engine docstring |
+| P3-5 stray scripts | **Fixed** (removed after checking no runtime/CI reference) | `test_security_hardening` static checks |
+| P3-6 legacy prefill mapper | **Fixed (retired)** | `TestFrontend.test_widget_hides_without_the_server_flag_and_labels_model_text` |
+| P3-7 "explain this" on Bin/GL/SLE forms | Open | — |
+| P3-8 caption false refusals | **Fixed** (captions no longer block reading; a payment request gets a "never pays" note) | No dedicated test (the image tests upload with captions such as "please process this") |
+| P3-9 business duplicates in guided creation | Open (image flow has them; guided forms rely on confirmation) | — |
+| P3-10 retention | **Fixed** | `test_coverage_phase_d.TestRetention` |
+
+## I.4 Document-direction policy (implemented)
+
+Kind of document (from the title, perspective-free) × the user's company's role (from the parties) → target.
+Implemented in `detection/direction.py:TARGETS`; every row is a test case in
+`test_document_direction.TestDirectionPolicy.test_the_perspective_table`.
+
+| Kind | Issuer's role | We are the seller | We are the buyer |
+| --- | --- | --- | --- |
+| Invoice (any bill, whatever its heading) | seller | Sales Invoice | Purchase Invoice |
+| Credit Note | seller | Sales Invoice return | Purchase Invoice return |
+| Debit Note (issuer must be known) | buyer | Sales Invoice return | Purchase Invoice return |
+| Purchase Order | buyer | Sales Order (the customer's PO number goes to `po_no`) | Purchase Order |
+| Sales Order / order confirmation | seller | Sales Order | Purchase Order |
+| Quotation | seller | Quotation | **refused** (a Supplier Quotation) |
+| Delivery Note / challan | seller | Delivery Note | Purchase Receipt (`supplier_delivery_note`) |
+| Goods Receipt Note | buyer | **refused** (the customer's record) | Purchase Receipt |
+| Material Request | internal | Material Request | — |
+| Bill of Materials | internal | BOM (Draft, not active, not default) | — |
+
+Rules applied before the table:
+
+- **Our company:** the user's explicit choice, else the validated default company. A non-default company named on the
+  document, or a document between two of the user's companies, needs the user to choose. Names match only the same
+  organisation: exact, without legal-form words, or the exact abbreviation; never fuzzy.
+- **Roles:** explicit seller/buyer are checked against the issuer's role. If they contradict each other, nothing is
+  created until the user says which side they are on, and then only the reading that puts the company on that side is used.
+- **Neither party is the company:** the user is asked. A role the user selects can never override a side the document
+  proves.
+- **Unknown title, low confidence, a debit note without an issuer:** refused.
+- **Revalidation:** classification runs again on every mapping and again inside `create_document`.
+
+## I.5 Current coverage
+
+### I.5.1 Features (denominator: the same 72 features as Part II §3)
+
+| Status | Baseline | Now |
+| --- | --- | --- |
+| Implemented (path works and important values are asserted by a data-backed test) | 23 | **34** |
+| Partial | 43 | **32** |
+| …results only smoke-tested | 34 | 24 |
+| …sub-capability missing or excluded (report results, ageing, consumption) | 9 | 8 |
+| Not implemented | 2 | 2 (manufacturing reports; custom `Proposal`, deferred: §I.7) |
+| Blocked (HRMS not installed) | 3 | 3 |
+| Intentionally excluded (payroll) | 1 | 1 |
+
+Newly implemented:
+- Purchase/Sales Invoice returns (credit and debit notes): image, filter and shortcut.
+- Payment Entry and Journal Entry: read-only, data-backed. Creation stays excluded or deferred.
+- Supplier balances and history.
+- Material Request: image and guided creation.
+- Stock Entry: data-backed, plus guided creation.
+- Stock Ledger: real movements asserted.
+- BOM: image and details.
+- Work Order.
+- Employee: organisational fields only.
+
+Still partial:
+- **Reports (results deliberately not read):** Accounts Receivable, Accounts Payable, Trial Balance, P&L, Balance Sheet and the other accounting reports.
+- **Smoke-tested only:** Payment Request, Dunning, Opportunity, Contact, Customer Group, Prospect, RFQ, Supplier Quotation, Supplier Group, Item Group, Stock Reconciliation, Serial No, Batch, Pick List, Brand, Job Card, Production Plan, Timesheet, Asset, Asset Category, Subcontracting Order/Receipt, Warranty Claim and Quality Inspection.
+- **Material consumption:** consumed quantities aren't asserted.
+- **Inventory reports:** described, not run.
+
+### I.5.2 By interaction mode
+
+| Mode | Count | Evidence |
+| --- | --- | --- |
+| Image extraction → Draft | 11/11 authorized types implemented, each with a persisted-Draft test (provider mocked; real classification, mapping, validation, `insert()`); duplicate re-confirmation refused for every type | `test_document_direction.TestDocumentTypes` (and `test_sales_invoice_mapping`, `test_chat_agent`) |
+| Image types refused by policy | Supplier Quotation, a customer's goods receipt note, unknown titles (e.g. Proforma Invoice), debit note of unknown issuer; PDF not supported | `TestDirectionPolicy`, `TestImageChatFlows` |
+| Data Q&A | 54 allowlisted DocTypes; 24 with data-backed manifest entries (`capability/inventory.py:VERIFIED`) | `docs/coverage_inventory.md` |
+| Intents | 40 (37 + `outstanding_by_supplier`, page `show_list`, page `list_count`), all with handlers and tests; model-written text checked in 3 | §I.3 |
+| Guided creation | 14 types: 9 Drafts (SI, PI, SO, PO, Quotation, DN, PR, Material Request, Stock Entry) + 5 saved-immediately (Customer, Supplier, Item, Lead, Issue), all with persisted-record tests | `test_chat_forms`, `test_chat_guided`, `test_chat_creation_requirements`, `test_coverage_batch`, `test_coverage_phase_d.TestGuidedStockDocuments` |
+| Page-aware | form, list (show/count/summary/filters/selected), report (description + "not run"), workspace numbers; opaque open-record references for model plans and creation | `test_page_context`, `test_page_reference_and_parity` |
+| Security | §I.6 | |
+
+## I.6 Invariants re-verified
+
+| Invariant | How it is enforced | Test |
+| --- | --- | --- |
+| System Manager only | DocType permissions + `session._owned` on every request; launcher hidden by the server flag | `test_page_context.test_only_system_managers_can_use_the_chat_with_any_context`, `TestLauncherFlag` |
+| Draft only; no submit/cancel/delete/amend/pay | Builders set `docstatus = 0` and re-check after insert; static check finds exactly one `ignore_permissions` (the job's own entry save) and no lifecycle call | `test_security_hardening.TestDraftOnly`, `test_lifecycle_safety`, every creation test asserts `docstatus == 0` |
+| No editing of existing records | No edit path; `unsupported` mode | `test_page_context.test_edit_requests_do_not_use_unsaved_values…` |
+| Company isolation and permissions | Unchanged query layer; the classifier only uses the user's usable companies; return/original-invoice and duplicate lookups use permission-aware `get_list` | `test_company_isolation`, `TestSupplierOutstanding.test_outstanding_by_supplier_follows_company_permissions`, `TestOpenRecordReference.test_a_forged_or_inaccessible_open_record_is_not_used` |
+| Client context untrusted | Page context still validated server-side; opaque references only | `test_page_context`, `test_page_reference_and_parity` |
+| Model output can't act | Plans validated; text checked | `test_claims_and_network` |
+| No partial transactions / duplicates | Savepoints, row locks, `created_document` check, client_id dedupe | `TestDocumentTypes` (second confirmation raises), `test_lifecycle_safety` |
+| No network in tests | Socket guard | `TestNetworkGuard` |
+| No secrets/content in logs | Static log check (also caught a comment in this phase) | `test_security_hardening.TestLogging` |
+
+## I.7 Remaining, deferred and excluded
+
+| Item | Status | Reason / next step |
+| --- | --- | --- |
+| Report results | Excluded by policy | Needs a per-report permission and company-isolation proof before `REPORT_RESULTS_ENABLED` changes |
+| Journal Entry creation | Deferred | Party accounts, cost centres, multi-currency and balancing need a separate design |
+| Payment Entry creation | Excluded | Payments are out of scope |
+| Custom `Proposal` DocType | Deferred | No company field (no company isolation), holds personal recipient data, app not installed in CI (a static policy entry would break CI). Proposed design: let the `proposals` app register a reviewed query spec through a hook |
+| HR (Attendance, Leave, Expense Claim) | Blocked | HRMS is not installed; nothing was installed or changed |
+| Payroll | Excluded | Sensitive compensation data |
+| 24 smoke-only query features | Partial | Fixture-backed tests per DocType (§I.5.1) |
+| Manufacturing reports, ageing buckets | Not implemented | Depend on report results |
+| "Explain this" on Bin/GL Entry/Stock Ledger Entry forms | Open | These DocTypes have no `details` operation; return a page answer instead of a capability error |
+| Business-duplicate check in guided creation | Open | Warn before confirming (e.g. the same supplier `bill_no`) |
+| Browser end-to-end tests | Not possible without new infrastructure | Node syntax and guard checks only |
+| CI on the newest ERPNext v16 | Not run | Run CI (or the scratch-clone procedure) before release |
+
+## I.8 Manual steps and verification that was not performed
+
+1. **Migrate** each site after deploying: `bench --site <site> migrate`. This adds the "Data Retention" setting to AI
+   Provider Settings and stores its default of 180 days once. No other schema change was made.
+2. **Rebuild the Desk bundle:** `bench build --app ai_erpnext`. The widget and review dialog changed; the committed
+   `public/dist` bundle was not rebuilt in this phase.
+3. **Prompt B3 with a live model was not verified** (no paid calls were allowed). Suggested manual check on a non-production
+   site:
+   - extract 2–3 real samples of each kind (our invoice, a supplier invoice, a customer PO, a supplier delivery challan, a
+     credit note);
+   - confirm that `issuer_name`, `recipient_name`, `supplier_name` and `customer_name` are filled as defined;
+   - confirm that the classification shown on the confirmation card is right.
+   To roll back to B2, set `EXTRACTION_PROMPT = PROMPT_B2`: B2 extractions still classify through `supplier_name` /
+   `customer_name`.
+4. **Router behaviour** for the new `ref`/`open_record` and `outstanding_by_supplier` plans is tested with mocked plans;
+   whether the live model emits them for natural phrasings is unverified. The deterministic routes ("…for this
+   customer", "show my current list", "credit notes") work without the model.
+5. No paid provider call was made. The test site has no provider key, and the suite ran with the socket guard and a
+   dead HTTP proxy.
+
+## I.9 Test execution (this phase)
+
+Command (isolated `ci-test.local`, Docker MariaDB, no provider key, dead HTTP proxy, socket guard active):
+`bench --site ci-test.local run-tests --app ai_erpnext`
+
+| Run | Collected | Passed | Failed | Skipped | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Baseline, first attempt | 283 | — | 9 failures, 49 errors | 0 | Redis was down (the bench was restarted during the run): environment, not code |
+| Baseline (HEAD = audited code) | 471 | 471 | 0 | 0 | |
+| After Phase A | 528 | 527 | 1 | 0 | a log-content static check caught a comment on a log line: fixed |
+| After Phase B | 553 | 552 | 1 | 0 | a line-number pin in a static check: made content-based |
+| After Phases C/D | 573 | 571 | 2 | 0 | two tests pinned the old creation scope (Stock Entry/Material Request query-only; bare "create lead" via the model): updated |
+| **Final** | **573** | **573** | **0** | **0** | 196 s, 29 modules |
+
+Kinds of tests in the final run: all 573 are Frappe integration tests against the local test database. Provider calls are
+always mocked or faked; the HTTP transport is scripted where the SDK is exercised. The new modules are:
+
+- `test_document_direction` (42): the direction policy, plus persisted Drafts for every image type;
+- `test_claims_and_network` (15);
+- `test_page_reference_and_parity` (25);
+- `test_coverage_phase_d` (17): data-backed queries, guided stock documents, image content check, retention.
+
+Frontend:
+
+- a Node check of the page-context collector;
+- a Node syntax check of every Desk script;
+- source checks of the widget guard and labels.
+
+Not run:
+
+- browser end-to-end tests: none exist;
+- CI against the newest ERPNext v16;
+- live provider calls: not allowed.
+
+Test-data hygiene: a `setUpClass` failure during development left fixtures committed on the test site, and so did one
+direct call of the extraction job, which commits. Both were found, the data was removed, and the fixture classes now roll
+back when their setup fails. After the final run no fixture of the new modules remains on the site.
+
+---
+
+# Part II: Baseline audit (commit 085bf0f, unchanged)
+
+All statuses, counts, line numbers and recommendations below describe the code at `085bf0f`, before the implementation phase. Part I supersedes them.
+
 
 | | |
 | --- | --- |

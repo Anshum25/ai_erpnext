@@ -16,7 +16,13 @@ from ai_erpnext.pipeline.review_service import apply_mapping
 from ai_erpnext.tests.fixtures import test_file
 
 
-def extraction(customer="AICHAT Buyer", items=None, supplier="Some Other Seller Pvt", date=None, **extra):
+def our_company():
+	return frappe.defaults.get_user_default("Company") or frappe.db.get_single_value("Global Defaults", "default_company")
+
+
+def extraction(customer="AICHAT Buyer", items=None, supplier=None, date=None, **extra):
+	"""An invoice issued by `supplier` (default: our own company) to `customer`."""
+	supplier = supplier or our_company()
 	data = {
 		"document_type": "Sales Invoice", "supplier_name": supplier, "customer_name": customer,
 		"invoice_number": "AICHAT-INV-" + frappe.generate_hash(length=8), "date": date or nowdate(), "due_date": None, "currency": None,
@@ -116,16 +122,19 @@ class TestChatAgent(IntegrationTestCase):
 
 	def test_image_with_text_creates_draft_after_confirmation(self):
 		before = frappe.db.count("Sales Invoice")
-		r = self.upload_and_extract(extraction())
+		r = self.upload_and_extract(extraction(supplier="Some Other Seller Pvt"))
 		self.assertEqual(self.enqueue.call_count, 1)
-		summary = next(m for m in r["messages"] if (m.get("card") or {}).get("type") == "summary")
-		self.assertEqual(summary["card"]["items"][0]["matched"], "AICHAT-ITEM")
 		q = self.pending()
-		self.assertEqual(q["kind"], "company")  # issuer differs from every company: must ask
+		# neither party is our company: the direction isn't proven, so the assistant asks instead of creating anything
+		self.assertEqual(q["kind"], "role")
 		self.assertIn("Some Other Seller Pvt", chat.get_session(self.s)["messages"][-1]["text"])
 		self.assertEqual(frappe.db.count("Sales Invoice"), before)  # nothing created by upload
+		self.assertEqual(json.loads(self.entry().mapped_data), {})
 
-		self.answer(self.company)
+		self.answer("seller")  # the user says their company is the seller: a Sales Invoice to the buyer
+		summary = next(m for m in chat.get_session(self.s)["messages"] if (m.get("card") or {}).get("type") == "summary")
+		self.assertIn("Some Other Seller Pvt", summary["card"]["rows"][0]["value"])
+		self.assertEqual(json.loads(self.entry().mapped_data)["items"][0]["item_code"], "AICHAT-ITEM")
 		q = self.pending()
 		self.assertEqual(q["kind"], "confirm")
 		self.assertEqual(frappe.db.count("Sales Invoice"), before)

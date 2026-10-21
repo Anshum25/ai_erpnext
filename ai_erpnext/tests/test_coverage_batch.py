@@ -363,7 +363,8 @@ class TestCoverageBatch(IntegrationTestCase):
 
 	def test_model_supplied_lifecycle_values_are_ignored_when_creating_a_lead(self):
 		self.start_chat(self.users["A"])
-		self.say("create lead", {"mode": "create", "doctype": "Lead", "values": {"first_name": "Evil Lead", "docstatus": 1, "owner": "evil@example.com",
+		# not a bare "create lead" (that is answered without the model): the model's plan is what is being checked
+		self.say("create a lead called Evil Lead and mark it converted", {"mode": "create", "doctype": "Lead", "values": {"first_name": "Evil Lead", "docstatus": 1, "owner": "evil@example.com",
 			"status": "Converted", "workflow_state": "Approved", "name": "FAKE-LEAD"}, "items": []})
 		state = json.loads(frappe.db.get_value("AI Chat Session", self.session, "state"))
 		self.assertEqual(set(state["forms"][0]["values"]), {"first_name"})

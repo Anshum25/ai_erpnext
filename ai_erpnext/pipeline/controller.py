@@ -53,6 +53,37 @@ class FileAccessError(Exception):
     pass
 
 
+class ImageContentError(Exception):
+    """The file's content is not a decodable PNG, JPEG or WEBP image (whatever its name says)."""
+
+
+IMAGE_FORMATS = {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "webp": "WEBP"}
+MAX_IMAGE_PIXELS = 50_000_000  # well above any scanned page; stops decompression bombs
+SAFE_IMAGE_ERROR = "The attached file is not a readable JPG, PNG or WEBP image. Please attach a photo or scan of the document."
+
+
+def image_problem(content, extension):
+    """None if `content` decodes as the image format its extension claims, else a user-safe reason.
+
+    The extension alone is never trusted: the bytes must be a real PNG/JPEG/WEBP of that same format and of a sane size.
+    PIL only parses the header and verifies the structure here; nothing in the file is executed."""
+    import io
+
+    from PIL import Image
+
+    expected = IMAGE_FORMATS.get((extension or "").lower())
+    if not expected or not isinstance(content, (bytes, bytearray)) or not content:
+        return SAFE_IMAGE_ERROR
+    try:
+        with Image.open(io.BytesIO(content)) as img:
+            if img.format != expected or img.width * img.height > MAX_IMAGE_PIXELS:
+                return SAFE_IMAGE_ERROR
+            img.verify()
+    except Exception:
+        return SAFE_IMAGE_ERROR
+    return None
+
+
 def run_ai_pipeline(doc_name):
     import json
 
@@ -81,6 +112,8 @@ def run_ai_pipeline(doc_name):
         # "decodes" many binary images into a str that cannot be sent as an image.
         file_content = file_doc.get_content(encodings=())
         file_type = (file_doc.file_name or doc.file).rsplit(".", 1)[-1]
+        if image_problem(file_content, file_type):
+            raise ImageContentError()  # never sent to a provider
 
         settings = providers.get_settings()
 
@@ -117,6 +150,10 @@ def run_ai_pipeline(doc_name):
         logger.warning(f"AI-PIPELINE failed doc={doc.name} category=file_access")
         doc.status = "Failed"
         doc.error_log = SAFE_FILE_ERROR
+    except ImageContentError:
+        logger.warning(f"AI-PIPELINE failed doc={doc.name} category=not_an_image")
+        doc.status = "Failed"
+        doc.error_log = SAFE_IMAGE_ERROR
     except Exception as e:
         logger.error(f"AI-PIPELINE failed doc={doc.name} error_type={type(e).__name__}")
         doc.status = "Failed"

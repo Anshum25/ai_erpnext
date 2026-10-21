@@ -368,8 +368,9 @@ class TestDraftOnly(SecurityCase):
 				if "forms.cancel(" in line:  # cancels the chat's guided form, not a document
 					continue
 				if re.search(r"\.submit\(|\.cancel\(|docstatus\s*=\s*[12]\b|delete_doc|\.amend\(|ignore_permissions\s*=\s*(True|1)", line):
-					found.append(f"{path.relative_to(APP)}:{n}")
-		self.assertEqual(found, ["pipeline/controller.py:129"])
+					found.append(f"{path.relative_to(APP)}: {line.strip()}")
+		# exactly one hit: the extraction job saving its own AI Document Entry result
+		self.assertEqual(found, ["pipeline/controller.py: doc.save(ignore_permissions=True)"])
 
 	def test_model_supplied_lifecycle_fields_never_reach_insert(self):
 		frappe.set_user("Administrator")

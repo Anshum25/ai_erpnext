@@ -66,6 +66,12 @@ AI_PROVIDER_SETTINGS_FIELDS = [
 	("fallback_api_key", {"label": "Fallback API Key", "fieldtype": "Password", "depends_on": "eval:doc.fallback_enabled"}, "fallback_base_url"),
 	("fallback_daily_limit", {"label": "Fallback Daily Request Limit", "fieldtype": "Int", "default": "20", "depends_on": "eval:doc.fallback_enabled",
 		"description": "Hard cap on fallback requests per site per day. 0 disables the fallback."}, "fallback_api_key"),
+	# How long the content read from document images is kept once a document was created from it (pipeline/retention.py).
+	("retention_section", {"label": "Data Retention", "fieldtype": "Section Break", "collapsible": 1}, "fallback_daily_limit"),
+	("document_retention_days", {"label": "Keep Extracted Document Data For (Days)", "fieldtype": "Int", "default": "180",
+		"description": "After this many days, the data read from an image is cleared from AI Document Entries a document was created from "
+			"(the link to the created document stays). Entries that are still pending or under review are never cleared. 0 keeps it forever."},
+		"retention_section"),
 ]
 
 # Existing fields of the base definition whose presentation changed (fieldnames, values and
@@ -141,6 +147,9 @@ def ensure_ai_provider_settings_schema():
 	changed = _add_fields(doc, AI_PROVIDER_SETTINGS_FIELDS) or changed
 	if _add_fields(doc, [u for u in AI_PROVIDER_SETTINGS_UPDATES if u[0] in {f.fieldname for f in doc.fields}]) or changed:
 		doc.save()
+	# A setting added by an upgrade has no stored value (an Int reads as 0): store its default once, never overwrite a choice.
+	if "document_retention_days" not in frappe.db.get_singles_dict("AI Provider Settings", cast=False):
+		frappe.db.set_single_value("AI Provider Settings", "document_retention_days", 180)
 
 
 # --------------------------------------------------------------------------------------

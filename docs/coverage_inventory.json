@@ -51,6 +51,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 13,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "parent_account"
@@ -534,6 +535,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 8,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "parent_cost_center"
@@ -665,6 +667,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 14,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer"
@@ -796,6 +799,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 14,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "account",
@@ -866,24 +870,25 @@
    "app": "erpnext",
    "caps": {
     "aggregate": "Implemented but not sufficiently tested",
-    "child": "Implemented but not sufficiently tested",
+    "child": "Implemented and tested",
     "company": "required",
     "create": "Not implemented",
     "create_tested": false,
     "details": "Implemented but not sufficiently tested",
     "edit": "Not implemented",
-    "filter": "Implemented but not sufficiently tested",
+    "filter": "Implemented and tested",
     "filters": 10,
+    "image": "Not implemented",
     "link": "Not applicable",
     "links": [],
     "measures": 5,
-    "read": "Implemented but not sufficiently tested",
+    "read": "Implemented and tested",
     "reports": "Not implemented",
     "summary": "Not applicable",
     "tables": [
      "accounts"
     ],
-    "tests": "smoke only",
+    "tests": "data-backed: child, filter, read",
     "workflow": "Not implemented"
    },
    "doctype": "Journal Entry",
@@ -1337,23 +1342,24 @@
   {
    "app": "erpnext",
    "caps": {
-    "aggregate": "Implemented but not sufficiently tested",
+    "aggregate": "Implemented and tested",
     "child": "Not applicable",
     "company": "required",
     "create": "Not implemented",
     "create_tested": false,
     "details": "Implemented but not sufficiently tested",
     "edit": "Not implemented",
-    "filter": "Implemented but not sufficiently tested",
+    "filter": "Implemented and tested",
     "filters": 14,
+    "image": "Not implemented",
     "link": "Not applicable",
     "links": [],
     "measures": 4,
-    "read": "Implemented but not sufficiently tested",
+    "read": "Implemented and tested",
     "reports": "Not implemented",
     "summary": "Not applicable",
     "tables": [],
-    "tests": "smoke only",
+    "tests": "data-backed: aggregate, filter, read",
     "workflow": "Not implemented"
    },
    "doctype": "Payment Entry",
@@ -1453,6 +1459,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 13,
+    "image": "Not implemented",
     "link": "Not applicable",
     "links": [],
     "measures": 4,
@@ -1754,23 +1761,25 @@
     "company": "required",
     "create": "Partially implemented",
     "create_tested": true,
-    "details": "Implemented but not sufficiently tested",
+    "details": "Implemented and tested",
     "edit": "Not implemented",
-    "filter": "Implemented but not sufficiently tested",
-    "filters": 14,
+    "filter": "Implemented and tested",
+    "filters": 16,
+    "image": "Implemented and tested",
     "link": "Implemented but not sufficiently tested",
     "links": [
+     "return_against",
      "supplier"
     ],
     "measures": 7,
-    "read": "Implemented but not sufficiently tested",
+    "read": "Implemented and tested",
     "reports": "Not implemented",
     "summary": "Not applicable",
     "tables": [
      "items",
      "taxes"
     ],
-    "tests": "smoke only",
+    "tests": "data-backed: company, details, filter, read",
     "workflow": "Not implemented"
    },
    "doctype": "Purchase Invoice",
@@ -1891,10 +1900,12 @@
     "details": "Implemented and tested",
     "edit": "Not implemented",
     "filter": "Implemented and tested",
-    "filters": 13,
+    "filters": 15,
+    "image": "Implemented and tested",
     "link": "Implemented and tested",
     "links": [
-     "customer"
+     "customer",
+     "return_against"
     ],
     "measures": 7,
     "read": "Implemented and tested",
@@ -2301,6 +2312,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 19,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "asset_category",
@@ -2391,6 +2403,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 5,
+    "image": "Not implemented",
     "link": "Not applicable",
     "links": [],
     "measures": 1,
@@ -2663,6 +2676,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 15,
+    "image": "Implemented and tested",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "set_warehouse",
@@ -2732,6 +2746,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 7,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "opportunity"
@@ -2788,6 +2803,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 10,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "supplier_group",
@@ -2796,9 +2812,9 @@
     "measures": 1,
     "read": "Implemented and tested",
     "reports": "Not implemented",
-    "summary": "Implemented but not sufficiently tested",
+    "summary": "Implemented and tested",
     "tables": [],
-    "tests": "data-backed: read",
+    "tests": "data-backed: read, summary",
     "workflow": "Not implemented"
    },
    "doctype": "Supplier",
@@ -2821,6 +2837,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 12,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "supplier"
@@ -3131,6 +3148,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 18,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer",
@@ -3186,6 +3204,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 15,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "territory"
@@ -3264,6 +3283,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 11,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer_group",
@@ -3360,6 +3380,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 9,
+    "image": "Not implemented",
     "link": "Not applicable",
     "links": [],
     "measures": 1,
@@ -3659,10 +3680,11 @@
     "company": "required",
     "create": "Not implemented",
     "create_tested": false,
-    "details": "Implemented but not sufficiently tested",
+    "details": "Implemented and tested",
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 12,
+    "image": "Implemented and tested",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "item"
@@ -3674,7 +3696,7 @@
     "tables": [
      "items"
     ],
-    "tests": "smoke only",
+    "tests": "data-backed: details",
     "workflow": "Not implemented"
    },
    "doctype": "BOM",
@@ -3851,6 +3873,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 16,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "production_item",
@@ -4006,6 +4029,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 10,
+    "image": "Not implemented",
     "link": "Not applicable",
     "links": [],
     "measures": 6,
@@ -4140,14 +4164,15 @@
    "app": "erpnext",
    "caps": {
     "aggregate": "Implemented but not sufficiently tested",
-    "child": "Implemented but not sufficiently tested",
+    "child": "Implemented and tested",
     "company": "required",
     "create": "Not implemented",
     "create_tested": false,
     "details": "Implemented but not sufficiently tested",
     "edit": "Not implemented",
-    "filter": "Implemented but not sufficiently tested",
+    "filter": "Implemented and tested",
     "filters": 20,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "bom_no",
@@ -4160,13 +4185,13 @@
      "wip_warehouse"
     ],
     "measures": 8,
-    "read": "Implemented but not sufficiently tested",
+    "read": "Implemented and tested",
     "reports": "Not implemented",
     "summary": "Not applicable",
     "tables": [
      "required_items"
     ],
-    "tests": "smoke only",
+    "tests": "data-backed: child, filter, read",
     "workflow": "Not implemented"
    },
    "doctype": "Work Order",
@@ -4340,6 +4365,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 18,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer"
@@ -4438,6 +4464,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 18,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "parent_task",
@@ -4493,6 +4520,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 13,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer",
@@ -4781,6 +4809,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 10,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer_group",
@@ -4903,6 +4932,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 13,
+    "image": "Implemented and tested",
     "link": "Not applicable",
     "links": [],
     "measures": 6,
@@ -4956,22 +4986,23 @@
     "create_tested": true,
     "details": "Implemented but not sufficiently tested",
     "edit": "Not implemented",
-    "filter": "Implemented but not sufficiently tested",
+    "filter": "Implemented and tested",
     "filters": 15,
+    "image": "Implemented and tested",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer",
      "set_warehouse"
     ],
     "measures": 8,
-    "read": "Implemented but not sufficiently tested",
+    "read": "Implemented and tested",
     "reports": "Not implemented",
     "summary": "Not applicable",
     "tables": [
      "items",
      "taxes"
     ],
-    "tests": "data-backed: summary",
+    "tests": "data-backed: filter, read, summary",
     "workflow": "Not implemented"
    },
    "doctype": "Sales Order",
@@ -5082,6 +5113,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 3,
+    "image": "Not implemented",
     "link": "Not applicable",
     "links": [],
     "measures": 1,
@@ -5134,6 +5166,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 5,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "parent_customer_group"
@@ -5230,8 +5263,9 @@
     "create_tested": false,
     "details": "Implemented but not sufficiently tested",
     "edit": "Not implemented",
-    "filter": "Implemented but not sufficiently tested",
+    "filter": "Implemented and tested",
     "filters": 8,
+    "image": "Not implemented",
     "link": "Not applicable",
     "links": [],
     "measures": 1,
@@ -5239,7 +5273,7 @@
     "reports": "Not implemented",
     "summary": "Not applicable",
     "tables": [],
-    "tests": "data-backed: read",
+    "tests": "data-backed: filter, read",
     "workflow": "Not implemented"
    },
    "doctype": "Employee",
@@ -5361,6 +5395,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 5,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "parent_item_group"
@@ -5448,6 +5483,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 5,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "parent_supplier_group"
@@ -5502,6 +5538,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 5,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "parent_territory"
@@ -5611,6 +5648,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 11,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "item",
@@ -5642,8 +5680,9 @@
     "create_tested": false,
     "details": "Not implemented",
     "edit": "Not implemented",
-    "filter": "Implemented but not sufficiently tested",
+    "filter": "Implemented and tested",
     "filters": 11,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "item_code",
@@ -5654,7 +5693,7 @@
     "reports": "Not implemented",
     "summary": "Not applicable",
     "tables": [],
-    "tests": "data-backed: aggregate, company, read",
+    "tests": "data-backed: aggregate, company, filter, read",
     "workflow": "Not implemented"
    },
    "doctype": "Bin",
@@ -5688,6 +5727,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 13,
+    "image": "Implemented and tested",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer",
@@ -5779,6 +5819,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 9,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "item_group"
@@ -5899,6 +5940,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 14,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer",
@@ -6082,12 +6124,13 @@
     "aggregate": "Implemented but not sufficiently tested",
     "child": "Implemented but not sufficiently tested",
     "company": "required",
-    "create": "Not implemented",
-    "create_tested": false,
+    "create": "Partially implemented",
+    "create_tested": true,
     "details": "Implemented but not sufficiently tested",
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 12,
+    "image": "Implemented and tested",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "set_from_warehouse",
@@ -6167,6 +6210,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 12,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer",
@@ -6215,6 +6259,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 7,
+    "image": "Not implemented",
     "link": "Not applicable",
     "links": [],
     "measures": 1,
@@ -6256,6 +6301,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 13,
+    "image": "Implemented and tested",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "set_warehouse",
@@ -6314,6 +6360,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 13,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "batch_no",
@@ -6415,6 +6462,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 13,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "batch_no",
@@ -6530,27 +6578,28 @@
    "app": "erpnext",
    "caps": {
     "aggregate": "Implemented but not sufficiently tested",
-    "child": "Implemented but not sufficiently tested",
+    "child": "Implemented and tested",
     "company": "required",
-    "create": "Not implemented",
-    "create_tested": false,
+    "create": "Partially implemented",
+    "create_tested": true,
     "details": "Implemented but not sufficiently tested",
     "edit": "Not implemented",
-    "filter": "Implemented but not sufficiently tested",
+    "filter": "Implemented and tested",
     "filters": 10,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "from_warehouse",
      "to_warehouse"
     ],
     "measures": 4,
-    "read": "Implemented but not sufficiently tested",
+    "read": "Implemented and tested",
     "reports": "Not implemented",
     "summary": "Not applicable",
     "tables": [
      "items"
     ],
-    "tests": "smoke only",
+    "tests": "data-backed: child, filter, read",
     "workflow": "Not implemented"
    },
    "doctype": "Stock Entry",
@@ -6593,8 +6642,9 @@
     "create_tested": false,
     "details": "Not implemented",
     "edit": "Not implemented",
-    "filter": "Implemented but not sufficiently tested",
+    "filter": "Implemented and tested",
     "filters": 10,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "item_code",
@@ -6605,7 +6655,7 @@
     "reports": "Not implemented",
     "summary": "Not applicable",
     "tables": [],
-    "tests": "data-backed: read",
+    "tests": "data-backed: filter, read",
     "workflow": "Not implemented"
    },
    "doctype": "Stock Ledger Entry",
@@ -6628,6 +6678,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 6,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "set_warehouse"
@@ -6739,6 +6790,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 8,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "parent_warehouse"
@@ -6848,6 +6900,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 12,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "purchase_order",
@@ -6917,6 +6970,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 11,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "set_warehouse",
@@ -6974,6 +7028,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 11,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer",
@@ -7106,6 +7161,7 @@
     "edit": "Not implemented",
     "filter": "Implemented but not sufficiently tested",
     "filters": 13,
+    "image": "Not implemented",
     "link": "Implemented but not sufficiently tested",
     "links": [
      "customer",

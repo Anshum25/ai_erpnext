@@ -13,6 +13,9 @@ TEST_COMPANY = "AI Test Company"
 
 
 def before_tests():
+	from ai_erpnext.tests import network_guard
+
+	network_guard.install()  # no test may reach a provider or any other non-local host
 	frappe.clear_cache()
 	if not frappe.db.a_row_exists("Company"):
 		_complete_setup_wizard()

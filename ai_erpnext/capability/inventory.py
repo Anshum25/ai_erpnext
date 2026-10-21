@@ -37,26 +37,35 @@ QUERY_CAPABILITIES = ("read", "details", "filter", "aggregate", "child", "link",
 # which proves the execution path works but not that the results are right).
 VERIFIED = {
 	"Sales Invoice": {"read", "details", "filter", "aggregate", "child", "link", "company"},
+	"Purchase Invoice": {"read", "details", "filter", "company"},  # test_coverage_phase_d, test_page_reference_and_parity (returns, by supplier)
 	"Customer": {"read", "details", "summary", "company"},
 	"Item": {"read", "details"},
-	"Supplier": {"read"},
-	"Employee": {"read"},
+	"Supplier": {"read", "summary"},  # test_page_reference_and_parity.test_a_supplier_summary_with_values
+	"Employee": {"read", "filter"},  # test_coverage_phase_d.test_employee_organisational_fields_only reads a real Employee
 	"Quotation": {"read", "details", "child", "company"},
-	"Sales Order": {"summary"},
+	"Sales Order": {"read", "filter", "summary"},
+	"Payment Entry": {"read", "filter", "aggregate"},
+	"Journal Entry": {"read", "filter", "child"},
+	"Stock Entry": {"read", "filter", "child"},
+	"BOM": {"details"},
+	"Work Order": {"read", "filter", "child"},
 	"Account": {"read", "company"},
 	"Cost Center": {"read", "company"},
 	"Warehouse": {"read", "company"},
 	"GL Entry": {"read", "aggregate", "company"},
-	"Stock Ledger Entry": {"read"},
+	"Stock Ledger Entry": {"read", "filter"},  # real movements from submitted Stock Entries (test_coverage_phase_d)
 	"Territory": {"read", "company"},
 	"Lead": {"read", "company"},
 	"Project": {"read", "company"},
 	"Issue": {"read", "company"},
 	"Task": {"read", "aggregate", "company"},
-	"Bin": {"read", "aggregate", "company"},
+	"Bin": {"read", "filter", "aggregate", "company"},
 }
 CREATE_TESTED = {"Sales Invoice", "Purchase Invoice", "Sales Order", "Purchase Order", "Quotation", "Delivery Note", "Purchase Receipt", "Customer",
-	"Supplier", "Item", "Lead", "Issue"}
+	"Supplier", "Item", "Lead", "Issue", "Material Request", "Stock Entry"}
+# Target DocTypes an image becomes, each with an end-to-end test of the persisted Draft (tests/test_document_direction.py).
+IMAGE_TESTED = {"Sales Invoice", "Purchase Invoice", "Sales Order", "Purchase Order", "Quotation", "Delivery Note", "Purchase Receipt",
+	"Material Request", "BOM"}
 
 # Sensitive or consequential DocTypes that must not be exposed without a separate design.
 BLOCKED_REASONS = {
@@ -179,8 +188,17 @@ def capabilities_of(doctype):
 		"company": C.company_mode(doctype),
 		"tests": ("data-backed: " + ", ".join(sorted(verified))) if verified else "smoke only",
 		"create_tested": creatable and doctype in CREATE_TESTED,
+		"image": _image_status(doctype),
 		"tables": sorted(tables), "links": sorted(links), "filters": len(C.filterable_fields(doctype)), "measures": len(measures),
 	}
+
+
+def _image_status(doctype):
+	from ai_erpnext.registry.document_registry import supported_doctypes
+
+	if doctype not in supported_doctypes():
+		return NOT_IMPLEMENTED
+	return IMPLEMENTED_TESTED if doctype in IMAGE_TESTED else IMPLEMENTED
 
 
 def overall(caps):
@@ -257,13 +275,13 @@ def render_markdown(data):
 		out.append(f"| {group} | " + " | ".join(str(counts.get(s, 0)) for s in (IMPLEMENTED_TESTED, IMPLEMENTED, NOT_IMPLEMENTED, BLOCKED, NOT_APPLICABLE, "child table / single")) + " |")
 	out += ["", "## Implemented DocTypes", "",
 		"Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L linked records, S party summary, Cr creation (guided; Draft or saved-immediately), "
-		"Co company policy, W workflow (none), Ed edit, Rp reports.", "",
-		"| Module | DocType | R | D | F | A | C | L | S | Cr | Ed | Rp | W | Company policy | Tests |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+		"Img image to Draft (the document's direction decides the target, see detection/direction.py), Co company policy, W workflow (none), Ed edit, Rp reports.", "",
+		"| Module | DocType | R | D | F | A | C | L | S | Cr | Img | Ed | Rp | W | Company policy | Tests |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
 	for e in sorted((e for e in data["entries"] if "caps" in e), key=lambda e: (e["group"], e["doctype"])):
 		c = e["caps"]
 		create = SYMBOL[c["create"]] + ("T" if c["create_tested"] else "") if c["create"] == PARTIAL else "-"
 		out.append(f"| {e['group']} | {e['doctype']} | " + " | ".join(SYMBOL[c[k]] for k in ("read", "details", "filter", "aggregate", "child", "link", "summary"))
-			+ f" | {create} | - | - | {'configured, not driven' if e['workflow'] else '-'} | {c['company']} | {c['tests']} |")
+			+ f" | {create} | {SYMBOL[c['image']]} | - | - | {'configured, not driven' if e['workflow'] else '-'} | {c['company']} | {c['tests']} |")
 	out += ["", "## Not implemented, blocked or not applicable", ""]
 	groups = {}
 	for e in data["entries"]:

@@ -8,9 +8,16 @@
 	const RESOLVED = ["MATCHED", "DEFAULTED"];
 	const EXACT_TYPES = ["exact", "exact_code", "manual", "date:iso"];
 
+	const PURCHASE_TARGETS = ["Purchase Invoice", "Purchase Order", "Purchase Receipt"];
 	const LINK_FILTERS = {
 		Customer: () => ({ disabled: 0 }),
-		Item: () => ({ disabled: 0, has_variants: 0, is_sales_item: 1 }),
+		Supplier: () => ({ disabled: 0 }),
+		Item: (review) => {
+			const f = { disabled: 0, has_variants: 0 };
+			if (PURCHASE_TARGETS.includes(review.target_doctype)) f.is_purchase_item = 1;
+			else if (["Material Request", "BOM"].includes(review.target_doctype) === false) f.is_sales_item = 1;
+			return f;
+		},
 		UOM: () => ({ enabled: 1 }),
 		Currency: () => ({ enabled: 1 }),
 		Company: () => ({}),
@@ -51,7 +58,7 @@
 	function correctableKeys(review) {
 		const keys = [];
 		const results = review.results || {};
-		["customer", "company", "currency", "warehouse"].forEach((k) => results[k] && keys.push(k));
+		["customer", "supplier", "company", "currency", "warehouse", "bom_item"].forEach((k) => results[k] && keys.push(k));
 		Object.keys(results).filter((k) => /^item_\d+$/.test(k)).sort((a, b) => parseInt(a.slice(5)) - parseInt(b.slice(5)))
 			.forEach((k) => { keys.push(k); results[k + "_uom"] && keys.push(k + "_uom"); });
 		return keys;
@@ -80,6 +87,7 @@
 	function summaryHtml(review) {
 		const r = review.results || {}, v = review.validation || {}, m = review.mapped || {}, src = review.source || {};
 		const dt = r.document_type || {};
+		const cls = review.classification || {};
 		const status = review.status || v.document_status;
 		const statusColor = { "Ready To Create": "green", "Ready For Review": "blue", "Needs Review": "orange", "Validation Failed": "red", "Created": "green" }[status] || "gray";
 
@@ -87,8 +95,13 @@
 			<div><span class="text-muted">Document Type:</span> <b>${esc(review.target_doctype || dt.input || "Unknown")}</b>
 				${dt.confidence ? `<span class="text-muted">(${Math.round(dt.confidence * 100)}% ${esc(dt.match_type || "")})</span>` : ""}</div>
 			<span class="indicator-pill ${statusColor}">${esc(status ? status.toUpperCase() : "")}</span>
-			${src.invoice_number ? `<div><span class="text-muted">Invoice No:</span> ${esc(src.invoice_number)}</div>` : ""}
+			${src.invoice_number ? `<div><span class="text-muted">Document No:</span> ${esc(src.invoice_number)}</div>` : ""}
 		</div>`;
+		// What the document is for the user's company, decided on the server from who issued it and who it is for.
+		html += `<div style="margin-bottom:8px"><span class="text-muted">Source:</span> ${esc(cls.source_type || dt.input || "—")}
+			${cls.issuer ? ` · <span class="text-muted">issued by</span> ${esc(cls.issuer)}` : ""}${cls.recipient ? ` <span class="text-muted">to</span> ${esc(cls.recipient)}` : ""}
+			${cls.company ? ` · <span class="text-muted">your company</span> <b>${esc(cls.company)}</b>${cls.our_role ? " (" + esc(cls.our_role) + ")" : ""}` : ""}
+			${cls.status && cls.status !== "ok" ? `<div class="text-warning small">${esc(cls.message || "")}</div>` : ""}</div>`;
 
 		const row = (label, key) => {
 			const res = r[key];
@@ -100,8 +113,10 @@
 		};
 		html += `<div style="overflow-x:auto"><table class="table table-bordered table-sm" style="font-size:12.5px;margin-bottom:6px">
 			<thead><tr><th>Field</th><th>On document</th><th>ERPNext</th><th>Status</th></tr></thead><tbody>
-			${row("Customer", "customer")}${row("Company", "company")}${row("Currency", "currency")}
-			${row("Posting Date", "posting_date")}${row("Due Date", "due_date")}${row("Warehouse", "warehouse")}
+			${row("Customer", "customer")}${row("Supplier", "supplier")}${row("Company", "company")}${row("Currency", "currency")}
+			${row("Posting Date", "posting_date")}${row("Date", "transaction_date")}${row("Due Date", "due_date")}${row("Delivery Date", "delivery_date")}
+			${row("Required By", "schedule_date")}${row("Valid Till", "valid_till")}${row("Warehouse", "warehouse")}${row("Finished Item", "bom_item")}
+			${row("Discount On", "apply_discount_on")}${row("Original Invoice", "return_against")}${row("Purpose", "material_request_type")}
 			</tbody></table></div>`;
 
 		const items = m.items || [];
@@ -124,7 +139,7 @@
 		}
 		if (v.duplicates && v.duplicates.length) {
 			html += `<div style="margin-top:10px;padding:8px;border:1px solid var(--red-300,#fca5a5);border-radius:6px"><b>⚠ Possible duplicate</b>
-				<ul style="margin:4px 0 0 18px;padding:0">${v.duplicates.map((d) => `<li><a href="/app/sales-invoice/${encodeURIComponent(d.name)}" target="_blank">${esc(d.name)}</a> — ${esc(d.reason)}</li>`).join("")}</ul></div>`;
+				<ul style="margin:4px 0 0 18px;padding:0">${v.duplicates.map((d) => `<li><a href="/app/${frappe.router.slug(review.target_doctype || "Sales Invoice")}/${encodeURIComponent(d.name)}" target="_blank">${esc(d.name)}</a> — ${esc(d.reason)}</li>`).join("")}</ul></div>`;
 		}
 		html += issueList(__("Errors"), (v.errors || []).filter((e) => e.category !== "duplicate"), "red");
 		html += issueList(__("Warnings"), v.warnings, "orange");
@@ -134,6 +149,13 @@
 	function buildFields(review) {
 		const results = review.results || {};
 		const fields = [{ fieldtype: "HTML", fieldname: "summary" }];
+		const cls = review.classification || {};
+		if (cls.ask === "company" || (cls.ask === "role" && !cls.company)) {
+			fields.push({ fieldtype: "Link", fieldname: "__company", label: __("Which of your companies is this document for?"), options: "Company" });
+		} else if (cls.ask === "role") {
+			fields.push({ fieldtype: "Select", fieldname: "__document_role", label: __("Which side of this document is {0} on?", [cls.company]),
+				options: "\nseller\nbuyer", description: esc(cls.message || "") });
+		}
 		const unsupported = !results || !Object.keys(results).some((k) => k !== "document_type");
 		if (unsupported) return fields;
 
@@ -172,19 +194,14 @@
 		const values = dialog.get_values(true) || {};
 		const results = review.results || {};
 		const corrections = {};
+		if (values.__company) corrections.company = values.__company;
+		if (values.__document_role) corrections.document_role = values.__document_role;
 		Object.keys(values).forEach((key) => {
-			if (key.startsWith("acknowledge_") || !results[key]) return;
+			if (key.startsWith("acknowledge_") || key.startsWith("__") || !results[key]) return;
 			const current = RESOLVED.includes(results[key].status) ? results[key].name : "";
 			if ((values[key] || "") !== (current || "")) corrections[key] = values[key] || "";
 		});
 		return corrections;
-	}
-
-	function openLegacyForm(review) {
-		const data = review.mapped || {};
-		if (!data.doctype) return frappe.msgprint(__("Select a Target DocType first."));
-		frappe.route_options = data;
-		frappe.set_route("Form", data.doctype, "new-" + data.doctype.toLowerCase().replace(/ /g, "-"));
 	}
 
 	function render(review, opts) {
@@ -241,12 +258,19 @@
 					callback: (r) => { dialog.hide(); done(r.message); render(r.message, opts); },
 				});
 			});
+		} else if (["company", "role"].includes((review.classification || {}).ask)) {
+			// The document's direction isn't proven yet: the answer is applied on the server, which classifies again.
+			dialog.set_primary_action(__("Apply"), () => {
+				frappe.call({
+					method: API + "mapping.apply_corrections",
+					args: { entry: review.name, corrections: collectCorrections(dialog, review) },
+					freeze: true,
+					callback: (r) => { dialog.hide(); done(r.message); render(r.message, opts); },
+				});
+			});
 		} else {
-			if ((review.validation || {}).legacy && review.mapped && review.mapped.doctype) {
-				dialog.set_primary_action(__("Open Prefilled Form"), () => { dialog.hide(); openLegacyForm(review); });
-			} else {
-				dialog.set_primary_action(__("Close"), () => dialog.hide());
-			}
+			// Unknown or unsupported document: nothing can be created from it.
+			dialog.set_primary_action(__("Close"), () => dialog.hide());
 		}
 
 		dialog.$wrapper.on("click", "a.ai-cand", function (e) {

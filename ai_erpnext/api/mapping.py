@@ -38,12 +38,15 @@ def remap(entry, target_doctype=None):
 	if not doc.extracted_data:
 		frappe.throw(_("No extracted data to map"))
 	if target_doctype is not None:
-		# The type comes from the browser: only a server-side registered document type is accepted
-		# (empty clears it, so detection decides again).
-		if target_doctype and target_doctype not in supported_doctypes():
+		# The type comes from the browser: only a server-side registered document type is accepted, and only as a
+		# confirmation. The target follows from the document's parties (detection/direction.py); it can't be chosen.
+		if target_doctype and (not isinstance(target_doctype, str) or target_doctype not in supported_doctypes()):
 			frappe.throw(_("Document type not supported"), frappe.ValidationError)
 		doc.target_doctype = target_doctype or None
 	apply_mapping(doc)
+	if target_doctype and doc.target_doctype != target_doctype:
+		frappe.throw(_("This document is classified from who issued it and who it is for, so it can't be turned into a {0}.").format(target_doctype),
+			frappe.ValidationError)
 	doc.save()
 	return review_payload(doc)
 

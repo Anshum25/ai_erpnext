@@ -12,6 +12,9 @@ import { collectPageContext, snapshotForm } from "./ai_page_context.js";
 
 $(document).ready(function () {
 	if (!window.frappe || !frappe.boot || !frappe.boot.user || frappe.boot.user.name === "Guest") return;
+	// The server says whether this user may use the chat (frappe.boot.ai_chat_enabled, ai_erpnext/boot.py); users who may not
+	// get no launcher. Every chat request is still checked on the server.
+	if (!frappe.boot.ai_chat_enabled) return;
 	if (document.getElementById("ai-agent")) return;
 
 	const API = "ai_erpnext.api.chat.";
@@ -159,7 +162,7 @@ $(document).ready(function () {
 					<button type="button" class="ai-icon-btn" data-act="remove" aria-label="Remove attachment">${ICON.close}</button>
 				</div>
 				<div class="ai-input-row">
-					<button type="button" class="ai-icon-btn" data-act="attach" aria-label="Attach invoice image (JPG, PNG or WEBP)" title="Attach image">${ICON.clip}</button>
+					<button type="button" class="ai-icon-btn" data-act="attach" aria-label="Attach a document image (JPG, PNG or WEBP)" title="Attach image">${ICON.clip}</button>
 					<input type="file" class="ai-file" accept="image/png,image/jpeg,image/webp" hidden />
 					<label class="ai-sr" for="ai-input">Message</label>
 					<textarea id="ai-input" rows="1" placeholder="Ask anything"></textarea>
@@ -355,10 +358,10 @@ $(document).ready(function () {
 		S.lastId = m.id;
 		const $row = $(`<div class="ai-row ai-${m.role === "user" ? "user" : "assistant"}" data-mid="${m.id}"></div>`);
 		if (m.attachment && m.attachment.file_url) {
-			$row.append(`<img class="ai-thumb" src="${esc(m.attachment.file_url)}" alt="Attached invoice image ${esc(m.attachment.file_name)}" loading="lazy">`);
+			$row.append(`<img class="ai-thumb" src="${esc(m.attachment.file_url)}" alt="Attached document image ${esc(m.attachment.file_name)}" loading="lazy">`);
 		}
 		if (m.source === "erpnext") $row.append('<span class="ai-source erpnext">From your	 data</span>');
-		if (m.source === "general") $row.append('<span class="ai-source">General answer</span>');
+		if (m.source === "general") $row.append('<span class="ai-source">General answer, not from your data</span>');
 		if (m.source === "guide") $row.append('<span class="ai-source">General ERPNext guidance</span>');
 		if (m.text) $row.append(`<div class="ai-bubble">${lines(m.text)}</div>`);
 		if (m.card) $row.append(renderCard(m.card, m.id));

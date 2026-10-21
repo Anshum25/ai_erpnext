@@ -3,6 +3,9 @@
 The extraction prompt is free-form, so key names vary between runs/models
 (e.g. `unit` vs `uom`, `date` vs `invoice_date`). Adapters absorb that variation so
 extraction never has to change. Extracted values are treated as untrusted input.
+
+The canonical dict is perspective-free (issuer/recipient, seller/buyer); which side is our
+company and which DocType the document becomes is decided by detection/direction.py.
 """
 
 from ai_erpnext.mapping.normalize import clean_text, parse_number
@@ -26,7 +29,7 @@ class BaseAdapter:
 		raise NotImplementedError
 
 
-class SalesInvoiceAdapter(BaseAdapter):
+class DocumentAdapter(BaseAdapter):
 	def adapt(self, extracted: dict) -> dict:
 		data = extracted if isinstance(extracted, dict) else {}
 		customer = data.get("customer") if isinstance(data.get("customer"), dict) else {}
@@ -35,11 +38,15 @@ class SalesInvoiceAdapter(BaseAdapter):
 
 		canonical = {
 			"document_type": clean_text(data.get("document_type")),
+			"issuer_name": clean_text(first(data, "issuer_name", "issued_by")),
+			"recipient_name": clean_text(first(data, "recipient_name", "addressed_to")),
+			# the buyer (Prompt B2/B3 customer_name) and the seller (supplier_name)
 			"customer_name": clean_text(
-				first(data, "customer_name", "bill_to", "buyer_name", "client_name") or customer.get("name")
+				first(data, "customer_name", "buyer_name", "bill_to", "client_name") or customer.get("name")
 			),
+			"supplier_name": clean_text(first(data, "supplier_name", "seller_name", "vendor_name")),
 			"customer_address": clean_text(first(data, "customer_address", "billing_address")),
-			# On a sales invoice the issuer/seller is our own company.
+			# Kept for older callers: names that may be our own company on a sales invoice.
 			"company_names": [
 				clean_text(v)
 				for v in (
@@ -49,12 +56,23 @@ class SalesInvoiceAdapter(BaseAdapter):
 				)
 				if clean_text(v)
 			],
-			"invoice_number": clean_text(first(data, "invoice_number", "invoice_no", "bill_no", "number"), 140),
-			"invoice_date": clean_text(first(data, "invoice_date", "posting_date", "date"), 64),
+			"invoice_number": clean_text(first(data, "invoice_number", "document_number", "invoice_no", "bill_no", "number"), 140),
+			"invoice_date": clean_text(first(data, "invoice_date", "document_date", "posting_date", "date"), 64),
 			"due_date": clean_text(data.get("due_date"), 64),
+			"delivery_date": clean_text(first(data, "delivery_date", "required_by_date", "required_by", "schedule_date"), 64),
+			"valid_till": clean_text(first(data, "valid_till", "valid_until"), 64),
+			"reference_number": clean_text(first(data, "reference_number", "customer_po_number", "po_number"), 140),
+			"original_invoice_number": clean_text(first(data, "original_invoice_number", "against_invoice", "return_against"), 140),
 			"terms": clean_text(first(data, "terms", "payment_terms"), 140),
 			"currency": clean_text(first(data, "currency", "currency_code"), 60),
 			"warehouse": clean_text(first(data, "warehouse", "set_warehouse"), 140),
+			"material_request_type": clean_text(first(data, "material_request_type", "purpose"), 60),
+			"bom_item": {
+				"item_code": clean_text(data.get("bom_item_code"), 140),
+				"item_name": clean_text(first(data, "bom_item_name", "finished_item")),
+				"qty": parse_number(data.get("bom_quantity")),
+				"uom": clean_text(data.get("bom_uom"), 140),
+			},
 			"subtotal": parse_number(first(data, "subtotal", "sub_total", "net_total")),
 			"discount_amount": parse_number(first(data, "discount_amount", "discount")),
 			"tax_rate": parse_number(data.get("tax_rate")),
@@ -89,3 +107,7 @@ class SalesInvoiceAdapter(BaseAdapter):
 				}
 			)
 		return canonical
+
+
+# The Sales Invoice adapter was the first one; every type now shares the same canonical shape.
+SalesInvoiceAdapter = DocumentAdapter
