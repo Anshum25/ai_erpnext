@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import frappe
 
 from ai_erpnext.capability.access import readable_value
@@ -8,7 +10,7 @@ from ai_erpnext.mapping.normalize import clean_text
 class CurrencyMatcher(BaseMatcher):
 	doctype = "Currency"
 	title_field = "currency_name"
-	base_filters = {"enabled": 1}
+	base_filters: ClassVar[dict] = {"enabled": 1}
 	extra_fields = ("symbol",)
 
 	def match(self, value) -> MatchResult:
@@ -37,15 +39,22 @@ class CurrencyMatcher(BaseMatcher):
 			)
 		return result
 
-	def resolve(self, value, customer=None, company=None) -> MatchResult:
+	def resolve(self, value, customer=None, company=None, party_doctype="Customer") -> MatchResult:
 		if clean_text(value):
 			return self.match(value)
-		if customer:
-			cur = readable_value("Customer", customer, "default_currency")
+		if customer:  # the counterparty (a Customer or a Supplier)
+			cur = readable_value(party_doctype, customer, "default_currency")
 			if cur:
-				return MatchResult.defaulted(self.doctype, cur, cur, "Not on document; used customer's default currency")
+				return MatchResult.defaulted(
+					self.doctype,
+					cur,
+					cur,
+					f"Not on document; used the {party_doctype.lower()}'s default currency",
+				)
 		if company:
 			cur = frappe.get_cached_value("Company", company, "default_currency")
 			if cur:
-				return MatchResult.defaulted(self.doctype, cur, cur, "Not on document; used company's default currency")
+				return MatchResult.defaulted(
+					self.doctype, cur, cur, "Not on document; used company's default currency"
+				)
 		return MatchResult(doctype=self.doctype, message="Currency could not be determined")

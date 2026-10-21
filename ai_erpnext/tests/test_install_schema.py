@@ -23,7 +23,10 @@ class TestInstallSchema(IntegrationTestCase):
 			self.assertTrue(frappe.db.table_exists(table), table)
 
 	def test_install_hooks_are_registered(self):
-		hooks = {key: frappe.get_hooks(key, app_name="ai_erpnext") for key in ("after_install", "after_migrate", "before_tests")}
+		hooks = {
+			key: frappe.get_hooks(key, app_name="ai_erpnext")
+			for key in ("after_install", "after_migrate", "before_tests")
+		}
 		self.assertIn("ai_erpnext.setup_doctypes.after_install", hooks["after_install"])
 		self.assertIn("ai_erpnext.setup_doctypes.after_migrate", hooks["after_migrate"])
 		self.assertIn("ai_erpnext.tests.bootstrap.before_tests", hooks["before_tests"])
@@ -33,9 +36,9 @@ class TestInstallSchema(IntegrationTestCase):
 	def test_full_schema_exists(self):
 		expected = {
 			"AI Document Entry": [f["fieldname"] for f in setup_doctypes.AI_DOCUMENT_ENTRY["fields"]]
-				+ [f for f, _, _ in setup_doctypes.AI_DOCUMENT_ENTRY_FIELDS],
+			+ [f for f, _, _ in setup_doctypes.AI_DOCUMENT_ENTRY_FIELDS],
 			"AI Provider Settings": [f["fieldname"] for f in setup_doctypes.AI_PROVIDER_SETTINGS["fields"]]
-				+ [f for f, _, _ in setup_doctypes.AI_PROVIDER_SETTINGS_FIELDS],
+			+ [f for f, _, _ in setup_doctypes.AI_PROVIDER_SETTINGS_FIELDS],
 			"AI Chat Session": ["title", "status", "active_entry", "last_activity", "messages", "state"],
 		}
 		for doctype, fields in expected.items():
@@ -45,8 +48,16 @@ class TestInstallSchema(IntegrationTestCase):
 			self.assertEqual(missing, [], doctype)
 			if not meta.issingle:
 				self.assertTrue(frappe.db.table_exists(doctype), doctype)
-				self.assertEqual([f for f in fields if f not in frappe.db.get_table_columns(doctype)
-					and meta.get_field(f).fieldtype not in ("Section Break", "Column Break")], [], doctype)
+				self.assertEqual(
+					[
+						f
+						for f in fields
+						if f not in frappe.db.get_table_columns(doctype)
+						and meta.get_field(f).fieldtype not in ("Section Break", "Column Break")
+					],
+					[],
+					doctype,
+				)
 		providers = frappe.get_meta("AI Provider Settings").get_field("provider").options.split("\n")
 		self.assertEqual([p for p in setup_doctypes.PROVIDERS if p not in providers], [])
 		status = frappe.get_meta("AI Document Entry").get_field("status").options.split("\n")
@@ -63,7 +74,12 @@ class TestInstallSchema(IntegrationTestCase):
 	def test_upgrade_adds_missing_fields_in_place(self):
 		"""An older site (without the fallback fields or newer providers) is upgraded, not recreated."""
 		doc = frappe.get_doc("DocType", "AI Provider Settings")
-		doc.fields = [f for f in doc.fields if not f.fieldname.startswith("fallback") and f.fieldname not in ("base_url", "model", "text_model")]
+		doc.fields = [
+			f
+			for f in doc.fields
+			if not f.fieldname.startswith("fallback")
+			and f.fieldname not in ("base_url", "model", "text_model")
+		]
 		provider = next(f for f in doc.fields if f.fieldname == "provider")
 		provider.options = "Gemini\nOpenAI"
 		self.assertTrue(setup_doctypes._add_fields(doc, setup_doctypes.AI_PROVIDER_SETTINGS_FIELDS))
@@ -72,7 +88,9 @@ class TestInstallSchema(IntegrationTestCase):
 		self.assertEqual(order[:4], ["provider", "api_key", "base_url", "model"])
 		self.assertEqual(order[4:], [f for f, _, _ in setup_doctypes.AI_PROVIDER_SETTINGS_FIELDS[2:]])
 		self.assertEqual(provider.options.split("\n"), list(setup_doctypes.PROVIDERS))
-		self.assertFalse(setup_doctypes._add_fields(doc, setup_doctypes.AI_PROVIDER_SETTINGS_FIELDS))  # second pass: nothing to do
+		self.assertFalse(
+			setup_doctypes._add_fields(doc, setup_doctypes.AI_PROVIDER_SETTINGS_FIELDS)
+		)  # second pass: nothing to do
 
 	def test_fallback_defaults_are_safe(self):
 		meta = frappe.get_meta("AI Provider Settings")

@@ -36,14 +36,32 @@ class TestChatGuided(IntegrationTestCase):
 		cls.company = frappe.db.get_single_value("Global Defaults", "default_company")
 		cls.abbr = frappe.get_cached_value("Company", cls.company, "abbr")
 		ig = frappe.db.get_value("Item Group", {"is_group": 0}, "name")
-		frappe.get_doc({"doctype": "Item", "item_code": "AIG-BOTTLE", "item_name": "AIG Bottle", "item_group": ig, "stock_uom": "Nos",
-			"is_stock_item": 1, "is_sales_item": 1, "is_purchase_item": 1}).insert()
+		frappe.get_doc(
+			{
+				"doctype": "Item",
+				"item_code": "AIG-BOTTLE",
+				"item_name": "AIG Bottle",
+				"item_group": ig,
+				"stock_uom": "Nos",
+				"is_stock_item": 1,
+				"is_sales_item": 1,
+				"is_purchase_item": 1,
+			}
+		).insert()
 		sg = frappe.db.get_value("Supplier Group", {"is_group": 0}, "name")
-		cls.supplier = frappe.get_doc({"doctype": "Supplier", "supplier_name": "AIG Harbor Supplies", "supplier_group": sg}).insert().name
+		cls.supplier = (
+			frappe.get_doc(
+				{"doctype": "Supplier", "supplier_name": "AIG Harbor Supplies", "supplier_group": sg}
+			)
+			.insert()
+			.name
+		)
 		cg = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
 		territory = frappe.db.get_value("Territory", {"is_group": 0}, "name")
 		for name in ("AIG Buyer One", "AIG Buyer Two"):
-			frappe.get_doc({"doctype": "Customer", "customer_name": name, "customer_group": cg, "territory": territory}).insert()
+			frappe.get_doc(
+				{"doctype": "Customer", "customer_name": name, "customer_group": cg, "territory": territory}
+			).insert()
 		cls.stores, cls.goods = f"Stores - {cls.abbr}", f"Finished Goods - {cls.abbr}"
 
 	def setUp(self):
@@ -70,7 +88,11 @@ class TestChatGuided(IntegrationTestCase):
 
 	def click(self, value, client_id=None):
 		q = self.pending()
-		return chat.send_message(session=self.s, action=json.dumps({"question_id": q["id"], "value": value, "label": value}), client_id=client_id)
+		return chat.send_message(
+			session=self.s,
+			action=json.dumps({"question_id": q["id"], "value": value, "label": value}),
+			client_id=client_id,
+		)
 
 	def last(self, r):
 		return r["messages"][-1]
@@ -82,7 +104,9 @@ class TestChatGuided(IntegrationTestCase):
 		self.assertEqual((q["kind"], q["key"]), ("form_field", "supplier"))
 		values = [o["value"] for o in q["options"]]
 		self.assertIn("__create__", values)  # Create New is a separate choice
-		self.assertTrue(set(values) - {"__create__", "__more__"} <= set(frappe.get_all("Supplier", pluck="name")))
+		self.assertTrue(
+			set(values) - {"__create__", "__more__"} <= set(frappe.get_all("Supplier", pluck="name"))
+		)
 		self.say(self.supplier) if self.supplier not in values else self.click(self.supplier)
 		self.assertEqual(self.form()["values"]["supplier"], self.supplier)
 		self.assertEqual(self.pending()["key"], "schedule_date")
@@ -106,28 +130,44 @@ class TestChatGuided(IntegrationTestCase):
 		card = self.preview(r)
 		rows = {row["label"]: row["value"] for row in card["rows"]}
 		self.assertEqual((rows["Supplier"], rows["Company"]), ("AIG Harbor Supplies", self.company))
-		self.assertEqual([(i["code"], i["qty"], i["rate"]) for i in card["items"]], [("AIG-BOTTLE", 5, 20)])  # “5 at 20” set both
-		self.assertEqual(card["items"][0]["warehouse"], self.stores)  # the configured default, labelled as such
+		self.assertEqual(
+			[(i["code"], i["qty"], i["rate"]) for i in card["items"]], [("AIG-BOTTLE", 5, 20)]
+		)  # “5 at 20” set both
+		self.assertEqual(
+			card["items"][0]["warehouse"], self.stores
+		)  # the configured default, labelled as such
 		self.assertEqual(card["items"][0]["warehouse_note"], "ERPNext default")
 
 		r = self.say("Use Finished Goods warehouse")
-		self.assertIn(f"set to {self.goods} for all stock rows", "\n".join(m.get("text") or "" for m in r["messages"]))
+		self.assertIn(
+			f"set to {self.goods} for all stock rows", "\n".join(m.get("text") or "" for m in r["messages"])
+		)
 		self.assertEqual(self.preview(r)["items"][0]["warehouse"], self.goods)
 		r = self.say("change quantity to 7")
 		card = self.preview(r)
-		self.assertEqual([(i["qty"], i["rate"], i["warehouse"]) for i in card["items"]], [(7, 20, self.goods)])  # only qty changed
-		self.assertEqual({row["label"]: row["value"] for row in card["rows"]}["Supplier"], "AIG Harbor Supplies")
+		self.assertEqual(
+			[(i["qty"], i["rate"], i["warehouse"]) for i in card["items"]], [(7, 20, self.goods)]
+		)  # only qty changed
+		self.assertEqual(
+			{row["label"]: row["value"] for row in card["rows"]}["Supplier"], "AIG Harbor Supplies"
+		)
 
 		before = frappe.db.count("Purchase Order")
 		r = self.click("__create__", client_id="po-1")
 		created = self.last(r)["card"]
 		po = frappe.get_doc("Purchase Order", created["name"])
 		self.assertEqual((po.docstatus, po.supplier, po.company), (0, self.supplier, self.company))
-		self.assertEqual([(i.item_code, i.qty, i.rate, i.warehouse) for i in po.items], [("AIG-BOTTLE", 7, 20, self.goods)])
+		self.assertEqual(
+			[(i.item_code, i.qty, i.rate, i.warehouse) for i in po.items], [("AIG-BOTTLE", 7, 20, self.goods)]
+		)
 		self.assertEqual(frappe.db.count("Purchase Order"), before + 1)
-		stale = chat.send_message(session=self.s, action=json.dumps({"question_id": "old", "value": "__create__"}), client_id="po-2")
+		stale = chat.send_message(
+			session=self.s, action=json.dumps({"question_id": "old", "value": "__create__"}), client_id="po-2"
+		)
 		self.assertIn("no longer active", self.last(stale)["text"])
-		self.assertEqual(frappe.db.count("Purchase Order"), before + 1)  # a second click never creates a second PO
+		self.assertEqual(
+			frappe.db.count("Purchase Order"), before + 1
+		)  # a second click never creates a second PO
 		self.route.assert_not_called()
 
 	def test_create_po_shows_existing_suppliers_and_create_new_as_buttons(self):
@@ -135,7 +175,9 @@ class TestChatGuided(IntegrationTestCase):
 		r = self.say("create po")
 		self.route.assert_not_called()  # understood without the model (it used to ask in free text, with no buttons)
 		q = self.pending()
-		self.assertEqual((self.form()["doctype"], q["kind"], q["key"]), ("Purchase Order", "form_field", "supplier"))
+		self.assertEqual(
+			(self.form()["doctype"], q["kind"], q["key"]), ("Purchase Order", "form_field", "supplier")
+		)
 		last = self.last(r)
 		self.assertIn("Choose one below or create a new supplier", last["text"])
 		values = [o["value"] for o in last["question"]["options"]]
@@ -144,8 +186,12 @@ class TestChatGuided(IntegrationTestCase):
 		existing = frappe.db.count("Supplier", {"disabled": 0})
 		self.assertEqual(len([v for v in values if not v.startswith("__")]), min(existing, 10))
 		self.assertEqual("__more__" in values, existing > 10)
-		for text, doctype in (("new so", "Sales Order"), ("make a pi", "Purchase Invoice"), ("create grn", "Purchase Receipt"),
-				("create a new SI", "Sales Invoice")):
+		for text, doctype in (
+			("new so", "Sales Order"),
+			("make a pi", "Purchase Invoice"),
+			("create grn", "Purchase Receipt"),
+			("create a new SI", "Sales Invoice"),
+		):
 			self.say("cancel")
 			self.say(text)
 			self.assertEqual(self.form()["doctype"], doctype, text)
@@ -154,7 +200,9 @@ class TestChatGuided(IntegrationTestCase):
 	def test_show_more_pages_through_existing_suppliers(self):
 		sg = frappe.db.get_value("Supplier Group", {"is_group": 0}, "name")
 		for i in range(11):
-			frappe.get_doc({"doctype": "Supplier", "supplier_name": f"AIG Paged Supplier {i:02d}", "supplier_group": sg}).insert()
+			frappe.get_doc(
+				{"doctype": "Supplier", "supplier_name": f"AIG Paged Supplier {i:02d}", "supplier_group": sg}
+			).insert()
 		self.say("create purchase order")
 		first = [o["value"] for o in self.pending()["options"]]
 		self.assertIn("__more__", first)
@@ -166,10 +214,15 @@ class TestChatGuided(IntegrationTestCase):
 
 	def test_model_never_asks_for_creation_details_in_free_text(self):
 		self.route.side_effect = None
-		self.route.return_value = {"mode": "clarify", "question": "Which supplier should the Purchase Order be for?"}
+		self.route.return_value = {
+			"mode": "clarify",
+			"question": "Which supplier should the Purchase Order be for?",
+		}
 		r = self.say("can you make a new po for our office please")
 		self.assertEqual((self.form()["doctype"], self.pending()["key"]), ("Purchase Order", "supplier"))
-		self.assertNotIn("Which supplier should the Purchase Order be for?", [m.get("text") for m in r["messages"]])
+		self.assertNotIn(
+			"Which supplier should the Purchase Order be for?", [m.get("text") for m in r["messages"]]
+		)
 		self.assertIn("__create__", [o["value"] for o in self.pending()["options"]])
 
 	def test_explicit_create_new_supplier_needs_its_own_confirmation(self):
@@ -222,8 +275,15 @@ class TestChatGuided(IntegrationTestCase):
 	def test_create_new_is_only_offered_when_the_user_may_create_that_master(self):
 		email = "aig-purchaser@example.com"
 		if not frappe.db.exists("User", email):
-			frappe.get_doc({"doctype": "User", "email": email, "first_name": "AIG Purchaser", "send_welcome_email": 0,
-				"roles": [{"role": "System Manager"}, {"role": "Purchase User"}]}).insert(ignore_permissions=True)
+			frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": email,
+					"first_name": "AIG Purchaser",
+					"send_welcome_email": 0,
+					"roles": [{"role": "System Manager"}, {"role": "Purchase User"}],
+				}
+			).insert(ignore_permissions=True)
 		frappe.set_user(email)
 		try:
 			self.assertFalse(frappe.has_permission("Supplier", "create"))
@@ -244,7 +304,9 @@ class TestChatGuided(IntegrationTestCase):
 		form = self.form()
 		self.assertEqual(form["doctype"], "Purchase Receipt")
 		self.assertEqual(form["values"]["supplier"], self.supplier)
-		self.assertEqual([(i["item_code"], i["qty"], i["rate"]) for i in form["items"]], [("AIG-BOTTLE", 5, 20)])
+		self.assertEqual(
+			[(i["item_code"], i["qty"], i["rate"]) for i in form["items"]], [("AIG-BOTTLE", 5, 20)]
+		)
 		self.assertIn("Switched to a Purchase Receipt", "\n".join(m.get("text") or "" for m in r["messages"]))
 		self.assertEqual(self.preview(r)["title"], "New Purchase Receipt (Draft)")
 
@@ -252,7 +314,9 @@ class TestChatGuided(IntegrationTestCase):
 		self.po_at_preview()
 		self.say("start over")
 		form = self.form()
-		self.assertEqual((form["doctype"], form["items"], form["values"].get("supplier")), ("Purchase Order", [], None))
+		self.assertEqual(
+			(form["doctype"], form["items"], form["values"].get("supplier")), ("Purchase Order", [], None)
+		)
 		self.assertEqual(self.pending()["key"], "supplier")
 		before = frappe.db.count("Purchase Order")
 		r = self.say("Cancel this.")
@@ -264,10 +328,15 @@ class TestChatGuided(IntegrationTestCase):
 		self.say("create purchase invoice")
 		self.click(self.supplier)
 		r = self.say("set target warehouse to Stores")
-		self.assertIn("A Purchase Invoice created here has no warehouse", self.last(r)["text"] if not self.last(r).get("question")
-			else r["messages"][-2]["text"])
+		self.assertIn(
+			"A Purchase Invoice created here has no warehouse",
+			self.last(r)["text"] if not self.last(r).get("question") else r["messages"][-2]["text"],
+		)
 		r = self.say("set colour to red")
-		self.assertIn("I can't change “colour” on a Purchase Invoice here. You can change: Supplier", "\n".join(m.get("text") or "" for m in r["messages"]))
+		self.assertIn(
+			"I can't change “colour” on a Purchase Invoice here. You can change: Supplier",
+			"\n".join(m.get("text") or "" for m in r["messages"]),
+		)
 		self.assertEqual(self.form()["values"]["supplier"], self.supplier)  # nothing else changed
 		self.route.assert_not_called()
 

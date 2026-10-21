@@ -27,7 +27,7 @@ def _closed(session):
 
 
 @frappe.whitelist(methods=["POST"])
-def get_session(session=None):
+def get_session(session: str | None = None):
 	"""The page's conversation with all its messages: the one it names, or a new one when the page
 	has none yet (also advances finished extractions)."""
 	ctx = _ctx(session)
@@ -38,20 +38,29 @@ def get_session(session=None):
 
 
 @frappe.whitelist(methods=["POST"])
-def send_message(session=None, text=None, file_url=None, action=None, client_id=None, context=None):
+def send_message(
+	session: str | None = None,
+	text: str | None = None,
+	file_url: str | None = None,
+	action: str | dict | None = None,
+	client_id: str | None = None,
+	context: str | dict | None = None,
+):
 	"""context: {"route": frappe.get_route()} of the page the user is on, so “this Sales Order” can be
 	resolved; it is only a hint and is re-checked against the user's permissions."""
 	try:
 		ctx = _ctx(session, active=True)
 	except S.SessionClosed:
 		return _closed(session)
-	engine.handle_message(ctx, text=text, file_url=file_url, action=action, client_id=client_id, context=context)
+	engine.handle_message(
+		ctx, text=text, file_url=file_url, action=action, client_id=client_id, context=context
+	)
 	ctx.save()
 	return ctx.payload()
 
 
 @frappe.whitelist(methods=["POST"])
-def poll(session=None, since=0):
+def poll(session: str | None = None, since: int | str = 0):
 	if not session:
 		return _closed(None)  # polling never creates a conversation
 	try:
@@ -80,7 +89,7 @@ def list_conversations():
 
 
 @frappe.whitelist(methods=["POST"])
-def open_conversation(session):
+def open_conversation(session: str):
 	"""Resume a conversation the caller picked from the history (ownership checked)."""
 	frappe.flags.ai_chat = True
 	ctx = engine.Ctx(S.lock(S.reopen(session)))

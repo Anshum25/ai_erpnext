@@ -5,7 +5,7 @@ from ai_erpnext.pipeline.review_service import evaluate
 
 
 @frappe.whitelist(methods=["POST"])
-def validate_entry(entry):
+def validate_entry(entry: str):
 	"""Dry-run mapping + validation for an entry; nothing is saved."""
 	doc = get_entry(entry, "read")
 	outcome, report = evaluate(doc)

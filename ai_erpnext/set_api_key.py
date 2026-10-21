@@ -8,4 +8,8 @@ import frappe
 
 
 def set_api_key():
-	frappe.throw("Retired. Set the provider and key in AI Provider Settings, or use ai_erpnext.setup_provider.")
+	frappe.throw(
+		frappe._(
+			"Retired. Set the provider and key in AI Provider Settings, or use ai_erpnext.setup_provider."
+		)
+	)

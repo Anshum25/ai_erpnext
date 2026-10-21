@@ -30,16 +30,23 @@ def references(msg):
 	ref = msg.get("ref") if isinstance(msg.get("ref"), dict) else None
 	if ref and isinstance(ref.get("doctype"), str):
 		names = ref.get("names")
-		return ref["doctype"], [n for n in names if isinstance(n, str)][:MAX_REFS] if isinstance(names, list) else []
+		return ref["doctype"], [n for n in names if isinstance(n, str)][:MAX_REFS] if isinstance(
+			names, list
+		) else []
 	if card:
 		doctype = card.get("doctype") or card.get("source_doctype")
 		if isinstance(doctype, str) and doctype:
 			if isinstance(card.get("name"), str):
 				return doctype, [card["name"]]
 			rows = card.get("rows") if isinstance(card.get("rows"), list) else []
-			return doctype, [r.get("_name") for r in rows if isinstance(r, dict) and isinstance(r.get("_name"), str)][:MAX_REFS]
+			return doctype, [
+				r.get("_name") for r in rows if isinstance(r, dict) and isinstance(r.get("_name"), str)
+			][:MAX_REFS]
 	if msg.get("source") == "erpnext":
-		return "", None  # an ERPNext result whose source can't be determined (stored before references were kept)
+		return (
+			"",
+			None,
+		)  # an ERPNext result whose source can't be determined (stored before references were kept)
 	return None, None
 
 
@@ -84,17 +91,30 @@ def recheck(messages, replay_upto):
 		requires = (msg.get("ref") or {}).get("requires") or []
 		msg = {k: v for k, v in msg.items() if k != "ref"}
 		allowed = _readable(doctype, names, cache) if doctype and names is not None else False
-		if allowed is not False and any(_readable(dt, [], cache) is False for dt in requires if isinstance(dt, str)):
+		if allowed is not False and any(
+			_readable(dt, [], cache) is False for dt in requires if isinstance(dt, str)
+		):
 			allowed = False  # e.g. totals computed from invoices the user can no longer read
 		if allowed is None or (allowed is not False and set(names) <= allowed):
 			out.append(msg)
 			continue
 		card = msg.get("card")
-		if allowed and isinstance(card, dict) and card.get("type") == "table" and isinstance(card.get("rows"), list):
+		if (
+			allowed
+			and isinstance(card, dict)
+			and card.get("type") == "table"
+			and isinstance(card.get("rows"), list)
+		):
 			rows = [r for r in card["rows"] if isinstance(r, dict) and r.get("_name") in allowed]
 			if rows:
 				# the card's note can quote the filters that selected the removed rows (their IDs, a customer): it is replaced
-				out.append(dict(msg, card=dict(card, rows=rows, note=PARTIAL_CARD_NOTE), text=(msg.get("text") or "").rstrip() + PARTIAL_NOTE))
+				out.append(
+					dict(
+						msg,
+						card=dict(card, rows=rows, note=PARTIAL_CARD_NOTE),
+						text=(msg.get("text") or "").rstrip() + PARTIAL_NOTE,
+					)
+				)
 				continue
 		out.append(_withheld(msg))
 	return out

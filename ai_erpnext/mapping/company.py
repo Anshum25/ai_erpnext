@@ -26,14 +26,18 @@ class CompanyMatcher(BaseMatcher):
 			reason = "No company on document; used default company"
 			if misses:
 				reason = f"Issuer '{misses[0]}' does not match any Company; used default company"
-			res = MatchResult.defaulted(self.doctype, default, default, reason, input=misses[0] if misses else None)
+			res = MatchResult.defaulted(
+				self.doctype, default, default, reason, input=misses[0] if misses else None
+			)
 			if misses:
 				res.extra["unmatched_issuer"] = misses[0]
 			return res
 
 		companies = self._get_list({}, limit=20)
 		if not companies:
-			return MatchResult.not_found(self.doctype, names[0] if names else None, "No Company is accessible")
+			return MatchResult.not_found(
+				self.doctype, names[0] if names else None, "No Company is accessible"
+			)
 		return MatchResult.ambiguous(
 			self.doctype,
 			names[0] if names else None,

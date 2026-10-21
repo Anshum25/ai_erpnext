@@ -6,6 +6,7 @@ AUTO_ACCEPT_CONFIDENCE is selected; everything else is returned as candidates.
 """
 
 from dataclasses import asdict, dataclass, field
+from typing import ClassVar
 
 import frappe
 
@@ -125,7 +126,7 @@ class BaseMatcher:
 
 	doctype: str = ""
 	title_field: str = "name"
-	base_filters: dict = {}
+	base_filters: ClassVar[dict] = {}
 	extra_fields: tuple = ()
 
 	def __init__(self, filters=None):
@@ -191,7 +192,10 @@ class BaseMatcher:
 
 		scored = []
 		for r in pool:
-			score = max(similarity(wanted, normalize_name(r[self.title_field])), similarity(wanted, normalize_name(r["name"])))
+			score = max(
+				similarity(wanted, normalize_name(r[self.title_field])),
+				similarity(wanted, normalize_name(r["name"])),
+			)
 			if score >= FUZZY_SUGGESTION_SCORE:
 				scored.append((score, r))
 		scored.sort(key=lambda s: s[0], reverse=True)
@@ -243,8 +247,14 @@ class BaseMatcher:
 
 	def _found(self, row, confidence, match_type, text):
 		if confidence < AUTO_ACCEPT_CONFIDENCE:
-			return MatchResult.ambiguous(self.doctype, text, [self._candidate(row, confidence)], match_type=match_type)
-		return MatchResult.found(self.doctype, row["name"], self._display(row), confidence, match_type, input=text)
+			return MatchResult.ambiguous(
+				self.doctype, text, [self._candidate(row, confidence)], match_type=match_type
+			)
+		return MatchResult.found(
+			self.doctype, row["name"], self._display(row), confidence, match_type, input=text
+		)
 
 	def _ambiguous(self, rows, text, match_type):
-		return MatchResult.ambiguous(self.doctype, text, [self._candidate(r, 1.0) for r in rows], match_type=match_type)
+		return MatchResult.ambiguous(
+			self.doctype, text, [self._candidate(r, 1.0) for r in rows], match_type=match_type
+		)

@@ -13,8 +13,9 @@ from ai_erpnext.capability.access import readable_exists
 from ai_erpnext.mapping.customer import CustomerMatcher
 from ai_erpnext.mapping.item import ItemMatcher
 from ai_erpnext.mapping.normalize import clean_text
+from ai_erpnext.mapping.supplier import SupplierMatcher
 
-TREE_DOCTYPES = {"Customer Group", "Territory", "Item Group"}
+TREE_DOCTYPES = {"Customer Group", "Territory", "Item Group", "Supplier Group"}
 
 FIELDS = {
 	"Customer": {
@@ -22,6 +23,11 @@ FIELDS = {
 		"customer_type": {"label": "customer type", "type": "Select"},
 		"customer_group": {"label": "customer group", "type": "Link", "options": "Customer Group"},
 		"territory": {"label": "territory", "type": "Link", "options": "Territory"},
+	},
+	"Supplier": {
+		"supplier_name": {"label": "supplier name", "type": "Data"},
+		"supplier_type": {"label": "supplier type", "type": "Select"},
+		"supplier_group": {"label": "supplier group", "type": "Link", "options": "Supplier Group"},
 	},
 	"Item": {
 		"item_code": {"label": "item code", "type": "Data"},
@@ -35,6 +41,7 @@ FIELDS = {
 ALWAYS_ASK = {"Item": ["is_stock_item"]}
 SUMMARY_FIELDS = {
 	"Customer": ["customer_name", "customer_type", "customer_group", "territory"],
+	"Supplier": ["supplier_name", "supplier_type", "supplier_group"],
 	"Item": ["item_code", "item_name", "item_group", "stock_uom", "is_stock_item"],
 }
 
@@ -50,8 +57,19 @@ def customer_draft(for_key, name):
 	return _draft("Customer", for_key, values)
 
 
-def item_draft(for_key, name, description=None, uom=None):
-	values = {"is_sales_item": 1}
+def supplier_draft(for_key, name):
+	values = {"supplier_type": _meta_default("Supplier", "supplier_type") or "Company"}
+	if clean_text(name, 140):
+		values["supplier_name"] = clean_text(name, 140)
+	default = frappe.db.get_single_value("Buying Settings", "supplier_group")
+	if default:
+		values["supplier_group"] = default
+	return _draft("Supplier", for_key, values)
+
+
+def item_draft(for_key, name, description=None, uom=None, flags=None):
+	"""flags: the item flags the document needs (is_sales_item / is_purchase_item); a sales item by default."""
+	values = dict(flags or {"is_sales_item": 1})
 	if clean_text(name, 140):
 		values["item_name"] = clean_text(name, 140)
 	if clean_text(description, 1000):
@@ -67,13 +85,23 @@ def item_draft(for_key, name, description=None, uom=None):
 
 def _draft(doctype, for_key, values):
 	meta = frappe.get_meta(doctype)
-	required = [f.fieldname for f in meta.fields if f.reqd and not f.read_only and f.fieldtype not in ("Table", "Table MultiSelect")]
+	required = [
+		f.fieldname
+		for f in meta.fields
+		if f.reqd and not f.read_only and f.fieldtype not in ("Table", "Table MultiSelect")
+	]
 	if doctype == "Item" and frappe.db.get_single_value("Stock Settings", "item_naming_by") != "Item Code":
 		required = [f for f in required if f != "item_code"]  # naming series will name the item
 	unsupported = [f for f in required if f not in FIELDS[doctype]]
 	ask = [f for f in required if f in FIELDS[doctype] and not values.get(f)]
 	ask += [f for f in ALWAYS_ASK.get(doctype, []) if f not in ask and f not in values]
-	return {"doctype": doctype, "for_key": for_key, "values": values, "ask": ask, "unsupported_required": unsupported}
+	return {
+		"doctype": doctype,
+		"for_key": for_key,
+		"values": values,
+		"ask": ask,
+		"unsupported_required": unsupported,
+	}
 
 
 def next_field(draft):
@@ -86,7 +114,10 @@ def field_options(doctype, fieldname):
 		opts = [o for o in (frappe.get_meta(doctype).get_field(fieldname).options or "").split("\n") if o]
 		return [{"label": o, "value": o} for o in opts]
 	if spec["type"] == "Check":
-		return [{"label": "Stock item (tracked in inventory)", "value": "1"}, {"label": "Non-stock item / service", "value": "0"}]
+		return [
+			{"label": "Stock item (tracked in inventory)", "value": "1"},
+			{"label": "Non-stock item / service", "value": "0"},
+		]
 	if spec["type"] == "Link":
 		filters = {"is_group": 0} if spec["options"] in TREE_DOCTYPES else {}
 		if spec["options"] == "UOM":
@@ -111,7 +142,9 @@ def set_field(draft, fieldname, raw):
 
 	if spec["type"] == "Data":
 		if fieldname == "item_code" and readable_exists("Item", value):
-			return _("An item with code “{0}” already exists. Choose another code, or say “use existing”.").format(value)
+			return _(
+				"An item with code “{0}” already exists. Choose another code, or say “use existing”."
+			).format(value)
 	elif spec["type"] == "Select":
 		opts = [o["value"] for o in field_options(doctype, fieldname)]
 		match = next((o for o in opts if o.lower() == value.lower()), None)
@@ -122,7 +155,15 @@ def set_field(draft, fieldname, raw):
 		v = value.lower()
 		if v in ("1", "yes", "stock", "stock item", "stock item (tracked in inventory)", "inventory"):
 			value = 1
-		elif v in ("0", "no", "service", "non-stock", "non stock", "non-stock item / service", "non-stock item"):
+		elif v in (
+			"0",
+			"no",
+			"service",
+			"non-stock",
+			"non stock",
+			"non-stock item / service",
+			"non-stock item",
+		):
 			value = 0
 		else:
 			return _("Is it a stock item or a non-stock item / service?")
@@ -142,7 +183,9 @@ def _resolve_link(doctype, value):
 	exact = frappe.get_list(doctype, filters={**filters, "name": value}, pluck="name", limit=2)
 	if exact:
 		return exact[0]
-	like = frappe.get_list(doctype, filters={**filters, "name": ["like", f"%{value}%"]}, pluck="name", limit=2)
+	like = frappe.get_list(
+		doctype, filters={**filters, "name": ["like", f"%{value}%"]}, pluck="name", limit=2
+	)
 	return like[0] if len(like) == 1 else None
 
 
@@ -152,7 +195,12 @@ def summary(draft):
 		v = draft["values"].get(f)
 		if f == "is_stock_item" and v is not None:
 			v = "Stock item" if int(v) else "Non-stock / service"
-		rows.append({"label": FIELDS[draft["doctype"]][f]["label"].capitalize(), "value": v if v not in (None, "") else "Not set"})
+		rows.append(
+			{
+				"label": FIELDS[draft["doctype"]][f]["label"].capitalize(),
+				"value": v if v not in (None, "") else "Not set",
+			}
+		)
 	return rows
 
 
@@ -160,6 +208,8 @@ def find_existing(draft):
 	v = draft["values"]
 	if draft["doctype"] == "Customer":
 		res = CustomerMatcher().match(v.get("customer_name"))
+	elif draft["doctype"] == "Supplier":
+		res = SupplierMatcher().match(v.get("supplier_name"))
 	else:
 		res = ItemMatcher().match({"item_name": v.get("item_name"), "item_code": v.get("item_code")})
 	return res.name if res.matched else None

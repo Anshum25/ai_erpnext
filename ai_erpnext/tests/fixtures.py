@@ -15,8 +15,14 @@ def test_file(ext="png", owner="Administrator"):
 	previous = frappe.session.user
 	frappe.set_user(owner)
 	try:
-		doc = frappe.get_doc({"doctype": "File", "file_name": f"ai-erpnext-test-invoice.{ext}", "content": content,
-			"is_private": 1}).insert()
+		doc = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": f"ai-erpnext-test-invoice.{ext}",
+				"content": content,
+				"is_private": 1,
+			}
+		).insert()
 	finally:
 		frappe.set_user(previous)
 	return doc.file_url
@@ -34,7 +40,9 @@ def _image(ext):
 
 	img = Image.new("RGB", (64, 48), "white")
 	for x in range(64):
-		img.putpixel((x, random.randrange(48)), (random.randrange(256), random.randrange(256), random.randrange(256)))
+		img.putpixel(
+			(x, random.randrange(48)), (random.randrange(256), random.randrange(256), random.randrange(256))
+		)
 	buf = io.BytesIO()
 	img.save(buf, format={"jpg": "JPEG", "jpeg": "JPEG"}.get(ext, ext.upper()))
 	return buf.getvalue()

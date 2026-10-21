@@ -8,9 +8,17 @@
 	const RESOLVED = ["MATCHED", "DEFAULTED"];
 	const EXACT_TYPES = ["exact", "exact_code", "manual", "date:iso"];
 
+	const PURCHASE_TARGETS = ["Purchase Invoice", "Purchase Order", "Purchase Receipt"];
 	const LINK_FILTERS = {
 		Customer: () => ({ disabled: 0 }),
-		Item: () => ({ disabled: 0, has_variants: 0, is_sales_item: 1 }),
+		Supplier: () => ({ disabled: 0 }),
+		Item: (review) => {
+			const f = { disabled: 0, has_variants: 0 };
+			if (PURCHASE_TARGETS.includes(review.target_doctype)) f.is_purchase_item = 1;
+			else if (["Material Request", "BOM"].includes(review.target_doctype) === false)
+				f.is_sales_item = 1;
+			return f;
+		},
 		UOM: () => ({ enabled: 1 }),
 		Currency: () => ({ enabled: 1 }),
 		Company: () => ({}),
@@ -24,36 +32,68 @@
 	function statusBadge(res) {
 		if (!res) return "";
 		const s = res.status;
-		let color = "gray", label = s, icon = "";
+		let color = "gray",
+			label = s,
+			icon = "";
 		if (s === "MATCHED" && EXACT_TYPES.includes(res.match_type)) {
-			color = "green"; icon = "✓ ";
-			label = res.match_type === "manual" ? "Selected" : (res.match_type || "").startsWith("date:") ? "Valid date" : "Exact match";
+			color = "green";
+			icon = "✓ ";
+			label =
+				res.match_type === "manual"
+					? "Selected"
+					: (res.match_type || "").startsWith("date:")
+					? "Valid date"
+					: "Exact match";
 		} else if (s === "MATCHED") {
-			color = "blue"; icon = "✓ "; label = (res.match_type || "").replace(/_/g, " ");
+			color = "blue";
+			icon = "✓ ";
+			label = (res.match_type || "").replace(/_/g, " ");
 		} else if (s === "DEFAULTED") {
-			color = "orange"; icon = "⚠ "; label = "Defaulted";
+			color = "orange";
+			icon = "⚠ ";
+			label = "Defaulted";
 		} else if (s === "AMBIGUOUS") {
-			color = "orange"; icon = "⚠ "; label = res.match_type === "fuzzy_suggestion" ? "Needs confirmation" : "Ambiguous";
+			color = "orange";
+			icon = "⚠ ";
+			label = res.match_type === "fuzzy_suggestion" ? "Needs confirmation" : "Ambiguous";
 		} else if (s === "NOT_FOUND" || s === "INVALID") {
-			color = "red"; icon = "✗ "; label = s === "INVALID" ? "Invalid" : "Not found";
+			color = "red";
+			icon = "✗ ";
+			label = s === "INVALID" ? "Invalid" : "Not found";
 		} else if (s === "NOT_PROVIDED") {
-			color = "gray"; icon = "⚠ "; label = "Not detected";
+			color = "gray";
+			icon = "⚠ ";
+			label = "Not detected";
 		}
 		const conf = res.confidence ? ` ${Math.round(res.confidence * 100)}%` : "";
-		return `<span class="indicator-pill ${color}" style="white-space:nowrap">${icon}${esc(label)}${esc(conf)}</span>`;
+		return `<span class="indicator-pill ${color}" style="white-space:nowrap">${icon}${esc(
+			label
+		)}${esc(conf)}</span>`;
 	}
 
 	function needsAttention(res) {
-		return !res || !RESOLVED.includes(res.status) || res.requires_review || res.status === "DEFAULTED" ||
-			!EXACT_TYPES.includes(res.match_type);
+		return (
+			!res ||
+			!RESOLVED.includes(res.status) ||
+			res.requires_review ||
+			res.status === "DEFAULTED" ||
+			!EXACT_TYPES.includes(res.match_type)
+		);
 	}
 
 	function correctableKeys(review) {
 		const keys = [];
 		const results = review.results || {};
-		["customer", "company", "currency", "warehouse"].forEach((k) => results[k] && keys.push(k));
-		Object.keys(results).filter((k) => /^item_\d+$/.test(k)).sort((a, b) => parseInt(a.slice(5)) - parseInt(b.slice(5)))
-			.forEach((k) => { keys.push(k); results[k + "_uom"] && keys.push(k + "_uom"); });
+		["customer", "supplier", "company", "currency", "warehouse", "bom_item"].forEach(
+			(k) => results[k] && keys.push(k)
+		);
+		Object.keys(results)
+			.filter((k) => /^item_\d+$/.test(k))
+			.sort((a, b) => parseInt(a.slice(5)) - parseInt(b.slice(5)))
+			.forEach((k) => {
+				keys.push(k);
+				results[k + "_uom"] && keys.push(k + "_uom");
+			});
 		return keys;
 	}
 
@@ -65,43 +105,120 @@
 
 	function candidateLinks(key, res) {
 		if (!res || !res.candidates || !res.candidates.length) return "";
-		const links = res.candidates.map((c) =>
-			`<a href="#" class="ai-cand" data-key="${esc(key)}" data-value="${esc(c.name)}">${esc(c.display_name)}${c.display_name !== c.name ? " (" + esc(c.name) + ")" : ""}${c.score ? " " + Math.round(c.score * 100) + "%" : ""}</a>`
-		).join(", ");
+		const links = res.candidates
+			.map(
+				(c) =>
+					`<a href="#" class="ai-cand" data-key="${esc(key)}" data-value="${esc(
+						c.name
+					)}">${esc(c.display_name)}${
+						c.display_name !== c.name ? " (" + esc(c.name) + ")" : ""
+					}${c.score ? " " + Math.round(c.score * 100) + "%" : ""}</a>`
+			)
+			.join(", ");
 		return `Candidates: ${links}`;
 	}
 
 	function issueList(title, issues, color) {
 		if (!issues || !issues.length) return "";
-		return `<div style="margin-top:10px"><b style="color:var(--${color}-600, ${color})">${esc(title)} (${issues.length})</b>
-			<ul style="margin:4px 0 0 18px;padding:0">${issues.map((i) => `<li>${esc(i.message)}</li>`).join("")}</ul></div>`;
+		return `<div style="margin-top:10px"><b style="color:var(--${color}-600, ${color})">${esc(
+			title
+		)} (${issues.length})</b>
+			<ul style="margin:4px 0 0 18px;padding:0">${issues
+				.map((i) => `<li>${esc(i.message)}</li>`)
+				.join("")}</ul></div>`;
 	}
 
 	function summaryHtml(review) {
-		const r = review.results || {}, v = review.validation || {}, m = review.mapped || {}, src = review.source || {};
+		const r = review.results || {},
+			v = review.validation || {},
+			m = review.mapped || {},
+			src = review.source || {};
 		const dt = r.document_type || {};
+		const cls = review.classification || {};
 		const status = review.status || v.document_status;
-		const statusColor = { "Ready To Create": "green", "Ready For Review": "blue", "Needs Review": "orange", "Validation Failed": "red", "Created": "green" }[status] || "gray";
+		const statusColor =
+			{
+				"Ready To Create": "green",
+				"Ready For Review": "blue",
+				"Needs Review": "orange",
+				"Validation Failed": "red",
+				Created: "green",
+			}[status] || "gray";
 
 		let html = `<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:8px">
-			<div><span class="text-muted">Document Type:</span> <b>${esc(review.target_doctype || dt.input || "Unknown")}</b>
-				${dt.confidence ? `<span class="text-muted">(${Math.round(dt.confidence * 100)}% ${esc(dt.match_type || "")})</span>` : ""}</div>
+			<div><span class="text-muted">Document Type:</span> <b>${esc(
+				review.target_doctype || dt.input || "Unknown"
+			)}</b>
+				${
+					dt.confidence
+						? `<span class="text-muted">(${Math.round(dt.confidence * 100)}% ${esc(
+								dt.match_type || ""
+						  )})</span>`
+						: ""
+				}</div>
 			<span class="indicator-pill ${statusColor}">${esc(status ? status.toUpperCase() : "")}</span>
-			${src.invoice_number ? `<div><span class="text-muted">Invoice No:</span> ${esc(src.invoice_number)}</div>` : ""}
+			${
+				src.invoice_number
+					? `<div><span class="text-muted">Document No:</span> ${esc(
+							src.invoice_number
+					  )}</div>`
+					: ""
+			}
 		</div>`;
+		// What the document is for the user's company, decided on the server from who issued it and who it is for.
+		html += `<div style="margin-bottom:8px"><span class="text-muted">Source:</span> ${esc(
+			cls.source_type || dt.input || "—"
+		)}
+			${cls.issuer ? ` · <span class="text-muted">issued by</span> ${esc(cls.issuer)}` : ""}${
+			cls.recipient ? ` <span class="text-muted">to</span> ${esc(cls.recipient)}` : ""
+		}
+			${
+				cls.company
+					? ` · <span class="text-muted">your company</span> <b>${esc(cls.company)}</b>${
+							cls.our_role ? " (" + esc(cls.our_role) + ")" : ""
+					  }`
+					: ""
+			}
+			${
+				cls.status && cls.status !== "ok"
+					? `<div class="text-warning small">${esc(cls.message || "")}</div>`
+					: ""
+			}</div>`;
 
 		const row = (label, key) => {
 			const res = r[key];
 			if (!res) return "";
 			const input = typeof res.input === "object" && res.input !== null ? "" : res.input;
 			return `<tr><td class="text-muted">${esc(label)}</td><td>${esc(input || "—")}</td>
-				<td><b>${esc(res.display_name || res.name || "—")}</b>${res.name && res.display_name && res.name !== res.display_name ? ` <span class="text-muted">${esc(res.name)}</span>` : ""}</td>
-				<td>${statusBadge(res)}${res.message && needsAttention(res) ? `<div class="text-muted small">${esc(res.message)}</div>` : ""}</td></tr>`;
+				<td><b>${esc(res.display_name || res.name || "—")}</b>${
+				res.name && res.display_name && res.name !== res.display_name
+					? ` <span class="text-muted">${esc(res.name)}</span>`
+					: ""
+			}</td>
+				<td>${statusBadge(res)}${
+				res.message && needsAttention(res)
+					? `<div class="text-muted small">${esc(res.message)}</div>`
+					: ""
+			}</td></tr>`;
 		};
 		html += `<div style="overflow-x:auto"><table class="table table-bordered table-sm" style="font-size:12.5px;margin-bottom:6px">
 			<thead><tr><th>Field</th><th>On document</th><th>ERPNext</th><th>Status</th></tr></thead><tbody>
-			${row("Customer", "customer")}${row("Company", "company")}${row("Currency", "currency")}
-			${row("Posting Date", "posting_date")}${row("Due Date", "due_date")}${row("Warehouse", "warehouse")}
+			${row("Customer", "customer")}${row("Supplier", "supplier")}${row("Company", "company")}${row(
+			"Currency",
+			"currency"
+		)}
+			${row("Posting Date", "posting_date")}${row("Date", "transaction_date")}${row(
+			"Due Date",
+			"due_date"
+		)}${row("Delivery Date", "delivery_date")}
+			${row("Required By", "schedule_date")}${row("Valid Till", "valid_till")}${row(
+			"Warehouse",
+			"warehouse"
+		)}${row("Finished Item", "bom_item")}
+			${row("Discount On", "apply_discount_on")}${row("Original Invoice", "return_against")}${row(
+			"Purpose",
+			"material_request_type"
+		)}
 			</tbody></table></div>`;
 
 		const items = m.items || [];
@@ -109,24 +226,56 @@
 			html += `<div style="overflow-x:auto"><table class="table table-bordered table-sm" style="font-size:12.5px">
 				<thead><tr><th>#</th><th>Item on document</th><th>ERPNext Item</th><th>UOM</th><th class="text-right">Qty × Rate</th><th class="text-right">Amount</th></tr></thead><tbody>`;
 			items.forEach((it, i) => {
-				const ir = r[`item_${i + 1}`] || {}, ur = r[`item_${i + 1}_uom`] || {};
+				const ir = r[`item_${i + 1}`] || {},
+					ur = r[`item_${i + 1}_uom`] || {};
 				html += `<tr><td>${i + 1}</td>
-					<td>${esc(ir.input || "")}${it.description && it.description !== ir.input ? `<div class="text-muted small">${esc(it.description)}</div>` : ""}</td>
+					<td>${esc(ir.input || "")}${
+					it.description && it.description !== ir.input
+						? `<div class="text-muted small">${esc(it.description)}</div>`
+						: ""
+				}</td>
 					<td><b>${esc(it.item_code || "—")}</b><div>${statusBadge(ir)}</div></td>
-					<td>${esc(ur.input || "")}${ur.input ? " → " : ""}<b>${esc(it.uom || "—")}</b><div>${statusBadge(ur)}</div></td>
-					<td class="text-right">${esc(it.qty)} × ${esc(it.rate)}</td><td class="text-right">${esc(it.amount)}</td></tr>`;
+					<td>${esc(ur.input || "")}${ur.input ? " → " : ""}<b>${esc(it.uom || "—")}</b><div>${statusBadge(
+					ur
+				)}</div></td>
+					<td class="text-right">${esc(it.qty)} × ${esc(it.rate)}</td><td class="text-right">${esc(
+					it.amount
+				)}</td></tr>`;
 			});
 			html += `</tbody></table></div>`;
 		}
 
-		if (src.subtotal !== undefined || src.tax_amount !== undefined || src.total_amount !== undefined) {
-			html += `<div class="text-muted small">Document totals — Subtotal: ${esc(src.subtotal ?? "—")}, Tax: ${esc(src.tax_amount ?? "—")}${src.tax_rate !== undefined && src.tax_rate !== null ? " (" + esc(src.tax_rate) + ")" : ""}, Total: ${esc(src.total_amount ?? "—")}</div>`;
+		if (
+			src.subtotal !== undefined ||
+			src.tax_amount !== undefined ||
+			src.total_amount !== undefined
+		) {
+			html += `<div class="text-muted small">Document totals — Subtotal: ${esc(
+				src.subtotal ?? "—"
+			)}, Tax: ${esc(src.tax_amount ?? "—")}${
+				src.tax_rate !== undefined && src.tax_rate !== null
+					? " (" + esc(src.tax_rate) + ")"
+					: ""
+			}, Total: ${esc(src.total_amount ?? "—")}</div>`;
 		}
 		if (v.duplicates && v.duplicates.length) {
 			html += `<div style="margin-top:10px;padding:8px;border:1px solid var(--red-300,#fca5a5);border-radius:6px"><b>⚠ Possible duplicate</b>
-				<ul style="margin:4px 0 0 18px;padding:0">${v.duplicates.map((d) => `<li><a href="/app/sales-invoice/${encodeURIComponent(d.name)}" target="_blank">${esc(d.name)}</a> — ${esc(d.reason)}</li>`).join("")}</ul></div>`;
+				<ul style="margin:4px 0 0 18px;padding:0">${v.duplicates
+					.map(
+						(d) =>
+							`<li><a href="/app/${frappe.router.slug(
+								review.target_doctype || "Sales Invoice"
+							)}/${encodeURIComponent(d.name)}" target="_blank">${esc(
+								d.name
+							)}</a> — ${esc(d.reason)}</li>`
+					)
+					.join("")}</ul></div>`;
 		}
-		html += issueList(__("Errors"), (v.errors || []).filter((e) => e.category !== "duplicate"), "red");
+		html += issueList(
+			__("Errors"),
+			(v.errors || []).filter((e) => e.category !== "duplicate"),
+			"red"
+		);
 		html += issueList(__("Warnings"), v.warnings, "orange");
 		return html;
 	}
@@ -134,16 +283,40 @@
 	function buildFields(review) {
 		const results = review.results || {};
 		const fields = [{ fieldtype: "HTML", fieldname: "summary" }];
+		const cls = review.classification || {};
+		if (cls.ask === "company" || (cls.ask === "role" && !cls.company)) {
+			fields.push({
+				fieldtype: "Link",
+				fieldname: "__company",
+				label: __("Which of your companies is this document for?"),
+				options: "Company",
+			});
+		} else if (cls.ask === "role") {
+			fields.push({
+				fieldtype: "Select",
+				fieldname: "__document_role",
+				label: __("Which side of this document is {0} on?", [cls.company]),
+				options: "\nseller\nbuyer",
+				description: esc(cls.message || ""),
+			});
+		}
 		const unsupported = !results || !Object.keys(results).some((k) => k !== "document_type");
 		if (unsupported) return fields;
 
-		fields.push({ fieldtype: "Section Break", label: __("Review / Correct Mappings"), collapsible: 0 });
+		fields.push({
+			fieldtype: "Section Break",
+			label: __("Review / Correct Mappings"),
+			collapsible: 0,
+		});
 		correctableKeys(review).forEach((key) => {
 			const res = results[key];
 			if (key !== "warehouse" && !needsAttention(res)) return;
 			const getFilters = LINK_FILTERS[res.doctype] || (() => ({}));
 			fields.push({
-				fieldtype: "Link", fieldname: key, label: labelFor(key), options: res.doctype,
+				fieldtype: "Link",
+				fieldname: key,
+				label: labelFor(key),
+				options: res.doctype,
 				default: RESOLVED.includes(res.status) ? res.name : "",
 				get_query: () => ({ filters: getFilters(review) }),
 				description: candidateLinks(key, res) || (res.message ? esc(res.message) : ""),
@@ -152,18 +325,35 @@
 		const errorFields = ((review.validation || {}).errors || []).map((e) => e.field);
 		["posting_date", "due_date"].forEach((key) => {
 			const res = results[key];
-			const dateError = errorFields.includes("posting_date") || errorFields.includes("due_date");
+			const dateError =
+				errorFields.includes("posting_date") || errorFields.includes("due_date");
 			if (res && (res.status === "INVALID" || res.status === "DEFAULTED" || dateError)) {
-				fields.push({ fieldtype: "Date", fieldname: key, label: labelFor(key), default: res.name || "", description: esc(res.message || "") });
+				fields.push({
+					fieldtype: "Date",
+					fieldname: key,
+					label: labelFor(key),
+					default: res.name || "",
+					description: esc(res.message || ""),
+				});
 			}
 		});
 
 		const v = review.validation || {};
 		if ((v.needs_acknowledgement || {}).duplicate) {
-			fields.push({ fieldtype: "Check", fieldname: "acknowledge_duplicate", label: __("I confirm this is NOT a duplicate invoice") });
+			fields.push({
+				fieldtype: "Check",
+				fieldname: "acknowledge_duplicate",
+				label: __("I confirm this is NOT a duplicate invoice"),
+			});
 		}
 		if ((v.needs_acknowledgement || {}).data_errors) {
-			fields.push({ fieldtype: "Check", fieldname: "acknowledge_errors", label: __("I reviewed the validation errors; create a Draft that I will correct in ERPNext") });
+			fields.push({
+				fieldtype: "Check",
+				fieldname: "acknowledge_errors",
+				label: __(
+					"I reviewed the validation errors; create a Draft that I will correct in ERPNext"
+				),
+			});
 		}
 		return fields;
 	}
@@ -172,19 +362,14 @@
 		const values = dialog.get_values(true) || {};
 		const results = review.results || {};
 		const corrections = {};
+		if (values.__company) corrections.company = values.__company;
+		if (values.__document_role) corrections.document_role = values.__document_role;
 		Object.keys(values).forEach((key) => {
-			if (key.startsWith("acknowledge_") || !results[key]) return;
+			if (key.startsWith("acknowledge_") || key.startsWith("__") || !results[key]) return;
 			const current = RESOLVED.includes(results[key].status) ? results[key].name : "";
 			if ((values[key] || "") !== (current || "")) corrections[key] = values[key] || "";
 		});
 		return corrections;
-	}
-
-	function openLegacyForm(review) {
-		const data = review.mapped || {};
-		if (!data.doctype) return frappe.msgprint(__("Select a Target DocType first."));
-		frappe.route_options = data;
-		frappe.set_route("Form", data.doctype, "new-" + data.doctype.toLowerCase().replace(/ /g, "-"));
 	}
 
 	function render(review, opts) {
@@ -197,7 +382,9 @@
 		});
 		dialog.fields_dict.summary.$wrapper.html(summaryHtml(review));
 
-		const done = (r) => { opts.on_change && opts.on_change(r); };
+		const done = (r) => {
+			opts.on_change && opts.on_change(r);
+		};
 
 		if (review.created_document) {
 			dialog.set_primary_action(__("Open {0}", [review.created_document]), () => {
@@ -222,7 +409,10 @@
 						done(res);
 						if (res.created) {
 							dialog.hide();
-							frappe.show_alert({ message: __("{0} {1} created as Draft", [res.doctype, res.name]), indicator: "green" });
+							frappe.show_alert({
+								message: __("{0} {1} created as Draft", [res.doctype, res.name]),
+								indicator: "green",
+							});
 							frappe.set_route("Form", res.doctype, res.name);
 						} else {
 							dialog.hide();
@@ -238,15 +428,30 @@
 					method: API + "mapping.apply_corrections",
 					args: { entry: review.name, corrections: collectCorrections(dialog, review) },
 					freeze: true,
-					callback: (r) => { dialog.hide(); done(r.message); render(r.message, opts); },
+					callback: (r) => {
+						dialog.hide();
+						done(r.message);
+						render(r.message, opts);
+					},
+				});
+			});
+		} else if (["company", "role"].includes((review.classification || {}).ask)) {
+			// The document's direction isn't proven yet: the answer is applied on the server, which classifies again.
+			dialog.set_primary_action(__("Apply"), () => {
+				frappe.call({
+					method: API + "mapping.apply_corrections",
+					args: { entry: review.name, corrections: collectCorrections(dialog, review) },
+					freeze: true,
+					callback: (r) => {
+						dialog.hide();
+						done(r.message);
+						render(r.message, opts);
+					},
 				});
 			});
 		} else {
-			if ((review.validation || {}).legacy && review.mapped && review.mapped.doctype) {
-				dialog.set_primary_action(__("Open Prefilled Form"), () => { dialog.hide(); openLegacyForm(review); });
-			} else {
-				dialog.set_primary_action(__("Close"), () => dialog.hide());
-			}
+			// Unknown or unsupported document: nothing can be created from it.
+			dialog.set_primary_action(__("Close"), () => dialog.hide());
 		}
 
 		dialog.$wrapper.on("click", "a.ai-cand", function (e) {
@@ -257,7 +462,7 @@
 		return dialog;
 	}
 
-	ai_erpnext.review = {
+	window.ai_erpnext.review = {
 		open(entry, opts = {}) {
 			// Always re-map on open (unless already created) so the review reflects the
 			// current ERPNext masters and invoices, not a stale snapshot.
@@ -266,11 +471,18 @@
 				args: { entry },
 				freeze: true,
 				freeze_message: __("Mapping and validating..."),
-				callback: (r) => { opts.on_change && opts.on_change(r.message); render(r.message, opts); },
+				callback: (r) => {
+					opts.on_change && opts.on_change(r.message);
+					render(r.message, opts);
+				},
 			});
 		},
 		remap(entry, target_doctype) {
-			return frappe.call({ method: API + "mapping.remap", args: { entry, target_doctype }, freeze: true });
+			return frappe.call({
+				method: API + "mapping.remap",
+				args: { entry, target_doctype },
+				freeze: true,
+			});
 		},
 		status_badge: statusBadge,
 		escape: esc,

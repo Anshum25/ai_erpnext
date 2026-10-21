@@ -55,7 +55,9 @@ def is_prohibited_field(info):
 	if info.fieldtype in P.PROHIBITED_FIELDTYPES:
 		return True
 	name = info.fieldname.lower()
-	return bool(set(name.split("_")) & P.PROHIBITED_NAME_TOKENS) or any(part in name for part in P.PROHIBITED_NAME_PARTS)
+	return bool(set(name.split("_")) & P.PROHIBITED_NAME_TOKENS) or any(
+		part in name for part in P.PROHIBITED_NAME_PARTS
+	)
 
 
 def refuse_lifecycle(operation):
@@ -76,14 +78,30 @@ def check_operation(doctype, operation):
 
 def _policy_fields(spec):
 	fields = set(spec.list_fields) | set(spec.detail_fields) | {"name", "creation"}
-	fields.update(f for f in (spec.date_field, spec.status_field, spec.party_field, spec.party_title_field, spec.amount_field) if f)
+	fields.update(
+		f
+		for f in (
+			spec.date_field,
+			spec.status_field,
+			spec.party_field,
+			spec.party_title_field,
+			spec.amount_field,
+		)
+		if f
+	)
 	return fields
 
 
 def allowed_fields(doctype, permitted_only=True):
 	"""Fields of a queryable DocType the chat may expose: policy ∩ metadata ∩ not prohibited ∩ (by default) the user's field permissions."""
 	spec = query_spec(doctype)
-	listed = [f for f in dict.fromkeys(("name", *spec.list_fields, *spec.detail_fields, *sorted(_policy_fields(spec)))) if f in _policy_fields(spec)]
+	listed = [
+		f
+		for f in dict.fromkeys(
+			("name", *spec.list_fields, *spec.detail_fields, *sorted(_policy_fields(spec)))
+		)
+		if f in _policy_fields(spec)
+	]
 	fields = [f for f in listed if not is_prohibited_field(M.field_info(doctype, f))]
 	if permitted_only:
 		permitted = set(get_permitted_fields(doctype)) | {"name", "creation"}
@@ -120,12 +138,22 @@ def filterable_fields(doctype):
 def measure_fields(doctype, date_ok=False):
 	"""Numeric fields (and dates, for min/max) an aggregate may use."""
 	types = M.NUMERIC_TYPES | (M.DATE_TYPES if date_ok else frozenset())
-	return [f for f in allowed_fields(doctype) if f != "docstatus" and (M.field_info(doctype, f) or None) and M.field_info(doctype, f).fieldtype in types]
+	return [
+		f
+		for f in allowed_fields(doctype)
+		if f != "docstatus"
+		and (M.field_info(doctype, f) or None)
+		and M.field_info(doctype, f).fieldtype in types
+	]
 
 
 def group_fields(doctype):
 	"""Fields results may be grouped by: Link/Select/Check fields (no free text, so no personal data)."""
-	return [f for f in allowed_fields(doctype) if f != "name" and M.field_info(doctype, f).fieldtype in ("Link", "Select", "Check")]
+	return [
+		f
+		for f in allowed_fields(doctype)
+		if f != "name" and M.field_info(doctype, f).fieldtype in ("Link", "Select", "Check")
+	]
 
 
 def currency_source(doctype, fieldname):
@@ -160,7 +188,9 @@ def child_tables(doctype):
 		if not child:
 			continue
 		permitted = set(get_permitted_fields(child, parenttype=doctype))
-		result[table] = tuple(f for f in fields if f in permitted and not is_prohibited_field(M.field_info(child, f)))
+		result[table] = tuple(
+			f for f in fields if f in permitted and not is_prohibited_field(M.field_info(child, f))
+		)
 	return result
 
 
@@ -173,8 +203,11 @@ def child_fields(doctype, table):
 
 def link_fields(doctype):
 	"""{link field: target DocType} for Link fields whose target is itself queryable (one hop only)."""
-	return {f: M.link_target(doctype, f) for f in allowed_fields(doctype)
-		if M.link_target(doctype, f) and is_queryable(M.link_target(doctype, f))}
+	return {
+		f: M.link_target(doctype, f)
+		for f in allowed_fields(doctype)
+		if M.link_target(doctype, f) and is_queryable(M.link_target(doctype, f))
+	}
 
 
 def company_mode(doctype):
@@ -188,11 +221,44 @@ def company_mode(doctype):
 # --------------------------------------------------------------------------------------------
 # Plan normalisation (model output is untrusted)
 # --------------------------------------------------------------------------------------------
-OP_SYNONYMS = {"==": "=", "eq": "=", "equals": "=", "is": "=", "ne": "!=", "<>": "!=", "neq": "!=", "not": "!=", "gt": ">", "greater": ">",
-	"lt": "<", "less": "<", "gte": ">=", "ge": ">=", "lte": "<=", "le": "<=", "contains": "like", "like": "like", "search": "like",
-	"in": "in", "not in": "not in", "nin": "not in", "between": "between", "range": "between"}
-FN_SYNONYMS = {"total": "sum", "average": "avg", "mean": "avg", "maximum": "max", "highest": "max", "largest": "max", "minimum": "min",
-	"lowest": "min", "smallest": "min", "number": "count"}
+OP_SYNONYMS = {
+	"==": "=",
+	"eq": "=",
+	"equals": "=",
+	"is": "=",
+	"ne": "!=",
+	"<>": "!=",
+	"neq": "!=",
+	"not": "!=",
+	"gt": ">",
+	"greater": ">",
+	"lt": "<",
+	"less": "<",
+	"gte": ">=",
+	"ge": ">=",
+	"lte": "<=",
+	"le": "<=",
+	"contains": "like",
+	"like": "like",
+	"search": "like",
+	"in": "in",
+	"not in": "not in",
+	"nin": "not in",
+	"between": "between",
+	"range": "between",
+}
+FN_SYNONYMS = {
+	"total": "sum",
+	"average": "avg",
+	"mean": "avg",
+	"maximum": "max",
+	"highest": "max",
+	"largest": "max",
+	"minimum": "min",
+	"lowest": "min",
+	"smallest": "min",
+	"number": "count",
+}
 TRUE_WORDS, FALSE_WORDS = ("1", "true", "yes", "y"), ("0", "false", "no", "n")
 
 
@@ -206,8 +272,16 @@ def _op(raw):
 
 def _scalar(info, doctype, op, value):
 	"""One filter value coerced to the field's type (CapabilityError if it doesn't fit)."""
-	bad = CapabilityError(f"“{value}” isn't a valid value for {info.label}." if isinstance(value, (str, int, float)) else f"That isn't a valid value for {info.label}.")
-	if isinstance(value, (dict, list, tuple, set)) or value is None or (isinstance(value, bool) and info.fieldtype != "Check"):
+	bad = CapabilityError(
+		f"“{value}” isn't a valid value for {info.label}."
+		if isinstance(value, (str, int, float))
+		else f"That isn't a valid value for {info.label}."
+	)
+	if (
+		isinstance(value, (dict, list, tuple, set))
+		or value is None
+		or (isinstance(value, bool) and info.fieldtype != "Check")
+	):
 		raise bad
 	t = info.fieldtype
 	if t in M.NUMERIC_TYPES:
@@ -255,7 +329,9 @@ def normalize_where(doctype, where, table=None):
 		target, allowed = doctype, filterable_fields(doctype)
 	out = []
 	for cond in where:
-		if isinstance(cond, (list, tuple)) and len(cond) == 3:  # already normalised (re-validation of a stored plan)
+		if (
+			isinstance(cond, (list, tuple)) and len(cond) == 3
+		):  # already normalised (re-validation of a stored plan)
 			cond = {"field": cond[0], "op": cond[1], "value": cond[2]}
 		if not isinstance(cond, dict):
 			raise CapabilityError("That filter isn't supported.")
@@ -271,7 +347,11 @@ def normalize_where(doctype, where, table=None):
 			raise CapabilityError(f"“{op}” can't be used on {info.label}.")
 		value = cond.get("value")
 		if op in ("in", "not in"):
-			items = value if isinstance(value, (list, tuple)) else [v for v in str(value or "").split(",") if v.strip()]
+			items = (
+				value
+				if isinstance(value, (list, tuple))
+				else [v for v in str(value or "").split(",") if v.strip()]
+			)
 			if not items or len(items) > MAX_IN_VALUES:
 				raise CapabilityError(f"Please give between 1 and {MAX_IN_VALUES} values for {info.label}.")
 			value = [_scalar(info, target, op, v) for v in items]
@@ -315,9 +395,16 @@ def normalize_aggregate(doctype, agg):
 	if fn != "count":
 		allowed = measure_fields(doctype, date_ok=fn in ("min", "max"))
 		if not field or field not in allowed:
-			raise CapabilityError(f"I can't calculate the {fn if fn != 'avg' else 'average'} of “{field or 'that'}” for {doctype} records.")
-		if fn in ("sum", "avg", "min", "max") and (currency_source(doctype, field) or ("", None))[0] == "unknown":
-			raise CapabilityError(f"I can't {fn} {M.field_info(doctype, field).label} safely: its currency isn't recorded on the record.")
+			raise CapabilityError(
+				f"I can't calculate the {fn if fn != 'avg' else 'average'} of “{field or 'that'}” for {doctype} records."
+			)
+		if (
+			fn in ("sum", "avg", "min", "max")
+			and (currency_source(doctype, field) or ("", None))[0] == "unknown"
+		):
+			raise CapabilityError(
+				f"I can't {fn} {M.field_info(doctype, field).label} safely: its currency isn't recorded on the record."
+			)
 	else:
 		field = None
 	group_by = clean_text(agg.get("group_by"), 60) if agg.get("group_by") else None
@@ -339,12 +426,17 @@ def normalize_child(doctype, child):
 		raise CapabilityError("I couldn't understand which rows you want.")
 	table = clean_text(child.get("table"), 60)
 	allowed = child_fields(doctype, table)
-	fields = [clean_text(f, 60) for f in (child.get("fields") if isinstance(child.get("fields"), list) else [])[:10]]
+	fields = [
+		clean_text(f, 60) for f in (child.get("fields") if isinstance(child.get("fields"), list) else [])[:10]
+	]
 	bad = [f for f in fields if f and f not in allowed]
 	if bad:
 		raise CapabilityError(f"I can't show {', '.join(bad[:3])} from those rows.")
-	return {"table": table, "where": normalize_where(doctype, child.get("where"), table=table),
-		"fields": [f for f in dict.fromkeys(fields) if f] or [f for f in allowed[:6]]}
+	return {
+		"table": table,
+		"where": normalize_where(doctype, child.get("where"), table=table),
+		"fields": [f for f in dict.fromkeys(fields) if f] or [f for f in allowed[:6]],
+	}
 
 
 def normalize_link(doctype, link):
@@ -357,17 +449,25 @@ def normalize_link(doctype, link):
 		raise CapabilityError(f"I can't follow “{field or 'that'}” from {doctype} records.")
 	target = links[field]
 	target_fields = [f for f in allowed_fields(target) if f in P.REGISTRY[target].list_fields and f != "name"]
-	wanted = [clean_text(f, 60) for f in (link.get("fields") if isinstance(link.get("fields"), list) else [])[:6]]
+	wanted = [
+		clean_text(f, 60) for f in (link.get("fields") if isinstance(link.get("fields"), list) else [])[:6]
+	]
 	bad = [f for f in wanted if f and f not in target_fields]
 	if bad:
 		raise CapabilityError(f"I can't show {', '.join(bad[:3])} of the related {target}.")
-	return {"field": field, "target": target, "fields": [f for f in dict.fromkeys(wanted) if f] or target_fields[:3]}
+	return {
+		"field": field,
+		"target": target,
+		"fields": [f for f in dict.fromkeys(wanted) if f] or target_fields[:3],
+	}
 
 
 # --------------------------------------------------------------------------------------------
 # Creation capability (separate from query capability; Draft documents only)
 # --------------------------------------------------------------------------------------------
-ROW_FIELDS = frozenset({"item_code", "qty", "rate", "warehouse", "schedule_date", "delivery_date"})
+ROW_FIELDS = frozenset(
+	{"item_code", "qty", "rate", "warehouse", "schedule_date", "delivery_date", "s_warehouse", "t_warehouse"}
+)
 DOC_KEYS = frozenset({"doctype", "items", "set_posting_time"})
 
 

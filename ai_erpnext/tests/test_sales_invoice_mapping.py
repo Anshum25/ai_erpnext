@@ -51,10 +51,17 @@ def make_item(code, item_name, uom="Nos", **extra):
 	).insert()
 
 
+def our_company():
+	return frappe.defaults.get_user_default("Company") or frappe.db.get_single_value(
+		"Global Defaults", "default_company"
+	)
+
+
 def extracted_invoice(customer=f"{P} Exact Customer", item=f"{P} Exact Item", **overrides):
+	# Issued by our own company to the customer: a Sales Invoice for us (detection/direction.py).
 	data = {
 		"document_type": "Sales Invoice",
-		"supplier_name": "Some Issuer",
+		"supplier_name": our_company(),
 		"customer_name": customer,
 		"invoice_number": INVOICE_NO,
 		"invoice_date": TODAY,
@@ -194,8 +201,16 @@ class TestAISalesInvoiceMapping(IntegrationTestCase):
 
 	def test_12b_document_totals(self):
 		canonical = {
-			"items": [{"qty": 1, "rate": 24.99, "amount": 24.99}, {"qty": 1, "rate": 16.99, "amount": 16.99}, {"qty": 1, "rate": 19.99, "amount": 19.99}],
-			"subtotal": 61.97, "tax_rate": 0.05, "tax_amount": 3.10, "total_amount": 65.06, "discount_amount": None,
+			"items": [
+				{"qty": 1, "rate": 24.99, "amount": 24.99},
+				{"qty": 1, "rate": 16.99, "amount": 16.99},
+				{"qty": 1, "rate": 19.99, "amount": 19.99},
+			],
+			"subtotal": 61.97,
+			"tax_rate": 0.05,
+			"tax_amount": 3.10,
+			"total_amount": 65.06,
+			"discount_amount": None,
 		}
 		report = ValidationReport()
 		validate_totals(report, canonical)
@@ -276,11 +291,16 @@ class TestAISalesInvoiceMapping(IntegrationTestCase):
 
 	def test_18_successful_mapped_document(self):
 		# distinct total so the "same customer/date/total" heuristic does not hit test_13's invoices
-		entry = make_entry(extracted_invoice(
-			invoice_number="AITEST-UNIQUE-18",
-			items=[{"item_name": f"{P} Exact Item", "qty": 7, "unit": "Nos", "rate": 3.0, "amount": 21.0}],
-			subtotal=21.0, total_amount=21.0,
-		))
+		entry = make_entry(
+			extracted_invoice(
+				invoice_number="AITEST-UNIQUE-18",
+				items=[
+					{"item_name": f"{P} Exact Item", "qty": 7, "unit": "Nos", "rate": 3.0, "amount": 21.0}
+				],
+				subtotal=21.0,
+				total_amount=21.0,
+			)
+		)
 		from ai_erpnext.api.mapping import remap
 
 		review = remap(entry.name)
@@ -293,7 +313,9 @@ class TestAISalesInvoiceMapping(IntegrationTestCase):
 		self.assertEqual(json.loads(entry.extracted_data)["customer_name"], f"{P} Exact Customer")
 
 	def test_19_needs_review_document_and_correction(self):
-		entry = make_entry(extracted_invoice(customer=f"{P} Twin Customer", invoice_number="AITEST-UNIQUE-19"))
+		entry = make_entry(
+			extracted_invoice(customer=f"{P} Twin Customer", invoice_number="AITEST-UNIQUE-19")
+		)
 		from ai_erpnext.api.creation import create_document
 		from ai_erpnext.api.mapping import apply_corrections, remap
 
@@ -313,7 +335,13 @@ class TestAISalesInvoiceMapping(IntegrationTestCase):
 			apply_corrections(entry.name, {"not_a_field": "x"})
 
 	def test_19b_uom_without_conversion_needs_review(self):
-		outcome = map_document(extracted_invoice(items=[{"item_name": f"{P} Exact Item", "qty": 1, "unit": "Square feet", "rate": 5, "amount": 5}]))
+		outcome = map_document(
+			extracted_invoice(
+				items=[
+					{"item_name": f"{P} Exact Item", "qty": 1, "unit": "Square feet", "rate": 5, "amount": 5}
+				]
+			)
+		)
 		self.assertEqual(outcome.mapped["items"][0]["uom"], "Square Foot")
 		report = validate_outcome(outcome)
 		self.assertIn("uom_no_conversion", [i.code for i in report.blocking])
@@ -337,8 +365,21 @@ class TestAISalesInvoiceMapping(IntegrationTestCase):
 		extracted = extracted_invoice(
 			invoice_number="AITEST-UNIQUE-20",
 			items=[
-				{"item_name": f"{P} Exact Item", "description": "Blue", "qty": 2, "unit": "Nos", "rate": 10.0, "amount": 20.0},
-				{"item_name": f"{P} Floor Tile", "qty": 3, "unit": "Square feet", "rate": 4.5, "amount": 13.5},
+				{
+					"item_name": f"{P} Exact Item",
+					"description": "Blue",
+					"qty": 2,
+					"unit": "Nos",
+					"rate": 10.0,
+					"amount": 20.0,
+				},
+				{
+					"item_name": f"{P} Floor Tile",
+					"qty": 3,
+					"unit": "Square feet",
+					"rate": 4.5,
+					"amount": 13.5,
+				},
 			],
 			subtotal=33.5,
 			total_amount=33.5,
@@ -369,11 +410,26 @@ class TestAISalesInvoiceMapping(IntegrationTestCase):
 
 	# misc ---------------------------------------------------------------------------
 	def test_registry(self):
-		self.assertEqual(supported_doctypes(), ["Sales Invoice"])
+		self.assertEqual(
+			supported_doctypes(),
+			[
+				"Sales Invoice",
+				"Purchase Invoice",
+				"Sales Order",
+				"Purchase Order",
+				"Quotation",
+				"Delivery Note",
+				"Purchase Receipt",
+				"Material Request",
+				"BOM",
+			],
+		)
 		d = get_definition("sales invoice")
 		self.assertEqual(d.target_doctype, "Sales Invoice")
 		self.assertIn("customer", d.required_fields)
-		self.assertIsNone(get_definition("Purchase Invoice"))
+		self.assertEqual(get_definition("Purchase Invoice").party_doctype, "Supplier")
+		self.assertTrue(get_definition("Sales Invoice Return").is_return)
+		self.assertIsNone(get_definition("Supplier Quotation"))  # never a target from an image
 
 	def test_untrusted_input_sanitising(self):
 		self.assertEqual(parse_number("$ 1,234.50"), 1234.5)

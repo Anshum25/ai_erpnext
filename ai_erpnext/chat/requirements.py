@@ -36,16 +36,29 @@ WAREHOUSE_RULES = {
 	"Purchase Receipt": "Which warehouse should {items} be received into?",
 	"Sales Order": "Which warehouse will {items} be delivered from?",
 	"Delivery Note": "Which warehouse will {items} be delivered from?",
+	"Material Request": "Which warehouse are {items} needed in?",
 }
 BUNDLE_DOCTYPES = ("Sales Order", "Delivery Note")
 
 # ERPNext messages that mean "this row needs a warehouse" (validation happens in controller code).
 WAREHOUSE_ERRORS = re.compile(
 	r"(Warehouse is mandatory for stock Item|Source warehouse required for stock item|Warehouse required for stock Item"
-	r"|Warehouse is required)", re.I)
+	r"|Warehouse is required)",
+	re.I,
+)
 # Field types the chat can ask for generically when a site makes such a field mandatory.
-COLLECTIBLE_TYPES = {"Data": "data", "Small Text": "data", "Text": "data", "Date": "date", "Select": "select", "Link": "link",
-	"Int": "number", "Float": "number", "Currency": "number", "Percent": "number"}
+COLLECTIBLE_TYPES = {
+	"Data": "data",
+	"Small Text": "data",
+	"Text": "data",
+	"Date": "date",
+	"Select": "select",
+	"Link": "link",
+	"Int": "number",
+	"Float": "number",
+	"Currency": "number",
+	"Percent": "number",
+}
 
 
 def needs_warehouse(doctype, item_code):
@@ -54,8 +67,14 @@ def needs_warehouse(doctype, item_code):
 		return False
 	if frappe.get_cached_value("Item", item_code, "is_stock_item"):
 		return True
-	if doctype in BUNDLE_DOCTYPES and frappe.db.exists("Product Bundle", {"new_item_code": item_code, "disabled": 0}):
-		bundle_items = frappe.get_all("Product Bundle Item", filters={"parent": item_code, "parenttype": "Product Bundle"}, pluck="item_code")
+	if doctype in BUNDLE_DOCTYPES and frappe.db.exists(
+		"Product Bundle", {"new_item_code": item_code, "disabled": 0}
+	):
+		bundle_items = frappe.get_all(
+			"Product Bundle Item",
+			filters={"parent": item_code, "parenttype": "Product Bundle"},
+			pluck="item_code",
+		)
 		return any(frappe.get_cached_value("Item", code, "is_stock_item") for code in bundle_items)
 	return False
 
@@ -78,7 +97,11 @@ def inspect(doc_dict):
 		return {"defaults": {}, "missing": []}
 	finally:
 		frappe.local.message_log = []
-	defaults = {row.idx or i + 1: row.get("warehouse") for i, row in enumerate(doc.get("items") or []) if row.get("warehouse")}
+	defaults = {
+		row.idx or i + 1: row.get("warehouse")
+		for i, row in enumerate(doc.get("items") or [])
+		if row.get("warehouse")
+	}
 	missing = [fieldname for fieldname, _msg in doc._get_missing_mandatory_fields()]
 	return {"defaults": defaults, "missing": missing}
 
@@ -94,9 +117,19 @@ def collectible_field(doctype, fieldname):
 	if not frappe.has_permission(doctype, "write") and not frappe.has_permission(doctype, "create"):
 		return None
 	kind = COLLECTIBLE_TYPES[df.fieldtype]
-	field = {"fieldname": df.fieldname, "label": df.label or df.fieldname, "type": kind, "required": True, "doctype": None,
-		"filters": {}, "default": None, "ask": True, "master": None, "prompt": f"ERPNext requires “{df.label or df.fieldname}”. What should it be?",
-		"skip_label": None}
+	field = {
+		"fieldname": df.fieldname,
+		"label": df.label or df.fieldname,
+		"type": kind,
+		"required": True,
+		"doctype": None,
+		"filters": {},
+		"default": None,
+		"ask": True,
+		"master": None,
+		"prompt": f"ERPNext requires “{df.label or df.fieldname}”. What should it be?",
+		"skip_label": None,
+	}
 	if kind == "link":
 		if not df.options or not frappe.db.exists("DocType", df.options):
 			return None
@@ -119,16 +152,33 @@ def explain(exc, doctype):
 	if isinstance(exc, frappe.MandatoryError):
 		fields = [f.strip() for f in message.split(":", 1)[-1].split(",") if f.strip()]
 		rows = sorted({int(r) for m in shown for r in re.findall(r"Row #(\d+)", m)})
-		readable = "; ".join(m.replace("Error: ", "") for m in shown if m) or f"Missing values: {', '.join(fields)}"
+		readable = (
+			"; ".join(m.replace("Error: ", "") for m in shown if m) or f"Missing values: {', '.join(fields)}"
+		)
 		return {"kind": "mandatory", "fields": fields, "rows": rows, "items": [], "message": readable[:300]}
 	text = " ".join([message, *shown])
-	if WAREHOUSE_ERRORS.search(text) or exc.__class__.__name__ in ("WarehouseRequired", "WarehouseMissingError"):
+	if WAREHOUSE_ERRORS.search(text) or exc.__class__.__name__ in (
+		"WarehouseRequired",
+		"WarehouseMissingError",
+	):
 		items = re.findall(r"(?:Item|item)\s+([^\s,.:;]+)", text)
 		rows = sorted({int(r) for r in re.findall(r"Row (?:#|No )?(\d+)", text)})
-		return {"kind": "warehouse", "fields": ["warehouse"], "rows": rows, "items": items, "message": (message or text)[:300]}
+		return {
+			"kind": "warehouse",
+			"fields": ["warehouse"],
+			"rows": rows,
+			"items": items,
+			"message": (message or text)[:300],
+		}
 	if isinstance(exc, frappe.LinkValidationError):
 		return {"kind": "link", "fields": [], "rows": [], "items": [], "message": (message or text)[:300]}
-	return {"kind": "other", "fields": [], "rows": [], "items": [], "message": (message or " ".join(shown) or "unknown error")[:300]}
+	return {
+		"kind": "other",
+		"fields": [],
+		"rows": [],
+		"items": [],
+		"message": (message or " ".join(shown) or "unknown error")[:300],
+	}
 
 
 def _message_text(raw):

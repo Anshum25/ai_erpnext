@@ -25,10 +25,20 @@ from ai_erpnext.ai.errors import AIProviderError, get_ai_logger
 # chat: the text-only chat router needs complete_json(), which only the OpenAI-compatible
 # adapter has. extract: invoice image extraction.
 PROVIDERS = {
-	"Groq": {"base_url": "https://api.groq.com/openai/v1", "model": "qwen/qwen3.8-27b", "chat": True, "extract": True},
+	"Groq": {
+		"base_url": "https://api.groq.com/openai/v1",
+		"model": "qwen/qwen3.8-27b",
+		"chat": True,
+		"extract": True,
+	},
 	"OpenAI": {"base_url": None, "model": "gpt-4.1-mini", "chat": True, "extract": True},
 	"OpenRouter": {"base_url": "https://openrouter.ai/api/v1", "model": None, "chat": True, "extract": True},
-	"Nvidia NIM": {"base_url": "https://integrate.api.nvidia.com/v1", "model": None, "chat": True, "extract": True},
+	"Nvidia NIM": {
+		"base_url": "https://integrate.api.nvidia.com/v1",
+		"model": None,
+		"chat": True,
+		"extract": True,
+	},
 	"Gemini": {"base_url": None, "model": "gemini-3.6-flash", "chat": False, "extract": True},
 }
 OPENAI_COMPATIBLE = tuple(name for name, info in PROVIDERS.items() if info["chat"])
@@ -58,7 +68,13 @@ def build(provider, api_key, base_url=None, model=None):
 		return GeminiProvider(api_key=api_key, model=model)
 	from ai_erpnext.ai.openai_provider import OpenAIProvider
 
-	return OpenAIProvider(api_key=api_key, base_url=base_url or info["base_url"], model=model, provider_name=provider, max_retries=0)
+	return OpenAIProvider(
+		api_key=api_key,
+		base_url=base_url or info["base_url"],
+		model=model,
+		provider_name=provider,
+		max_retries=0,
+	)
 
 
 def primary(settings=None, text_only=False):
@@ -69,7 +85,11 @@ def primary(settings=None, text_only=False):
 	"""
 	s = settings or get_settings()
 	provider = getattr(s, "provider", None)
-	if not getattr(s, "api_key", None) or provider not in PROVIDERS or (text_only and provider not in OPENAI_COMPATIBLE):
+	if (
+		not getattr(s, "api_key", None)
+		or provider not in PROVIDERS
+		or (text_only and provider not in OPENAI_COMPATIBLE)
+	):
 		raise AIProviderError("config")
 	model = (text_only and getattr(s, "text_model", None)) or getattr(s, "model", None)
 	return build(provider, s.get_password("api_key"), getattr(s, "base_url", None), model)
@@ -106,8 +126,10 @@ def run(operation, call, primary_provider, settings=None):
 		if not fallback:
 			raise
 		logger = get_ai_logger()
-		logger.warning(f"AI-FALLBACK used operation={operation} from={primary_provider.provider_name} "
-			f"to={fallback.provider_name} model={fallback.model} reason={error.category}")
+		logger.warning(
+			f"AI-FALLBACK used operation={operation} from={primary_provider.provider_name} "
+			f"to={fallback.provider_name} model={fallback.model} reason={error.category}"
+		)
 		try:
 			result = call(fallback, True)
 		except AIProviderError as fallback_error:
@@ -132,12 +154,20 @@ def configuration_issues(s):
 		if not getattr(s, "model", None) and not info["model"]:
 			errors.append(_("Model Name is required for {0}.").format(provider))
 		if not info["chat"]:
-			warnings.append(_("{0} is used for invoice image extraction only. Chat and data questions need Groq, OpenAI, "
-				"OpenRouter or Nvidia NIM; with {0} the chat answers only what it can without AI.").format(provider))
+			warnings.append(
+				_(
+					"{0} is used for invoice image extraction only. Chat and data questions need Groq, OpenAI, "
+					"OpenRouter or Nvidia NIM; with {0} the chat answers only what it can without AI."
+				).format(provider)
+			)
 	for field in ("base_url", "fallback_base_url"):
 		url = (getattr(s, field, None) or "").strip()
 		if url and not url.startswith("https://"):
-			errors.append(_("{0} must start with https://.").format(_("Fallback Base URL") if field.startswith("fallback") else _("Base URL")))
+			errors.append(
+				_("{0} must start with https://.").format(
+					_("Fallback Base URL") if field.startswith("fallback") else _("Base URL")
+				)
+			)
 	if cint(getattr(s, "fallback_enabled", 0)):
 		fallback = getattr(s, "fallback_provider", None)
 		if fallback not in FALLBACK_PROVIDERS:
@@ -149,10 +179,18 @@ def configuration_issues(s):
 		if cint(getattr(s, "fallback_daily_limit", 0)) <= 0:
 			errors.append(_("Fallback Requests Per Day must be at least 1 while the fallback is enabled."))
 		if provider not in FALLBACK_FROM:
-			warnings.append(_("The fallback is only used when {0} reports an exhausted daily quota; with {1} as the primary "
-				"provider it will not be used.").format(" / ".join(FALLBACK_FROM), provider or _("no provider")))
-		warnings.append(_("The fallback is a paid service: requests are only sent when its account has credits, and each "
-			"one counts against Fallback Requests Per Day."))
+			warnings.append(
+				_(
+					"The fallback is only used when {0} reports an exhausted daily quota; with {1} as the primary "
+					"provider it will not be used."
+				).format(" / ".join(FALLBACK_FROM), provider or _("no provider"))
+			)
+		warnings.append(
+			_(
+				"The fallback is a paid service: requests are only sent when its account has credits, and each "
+				"one counts against Fallback Requests Per Day."
+			)
+		)
 	return errors, warnings
 
 

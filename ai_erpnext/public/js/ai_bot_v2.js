@@ -11,14 +11,19 @@
 import { collectPageContext, snapshotForm } from "./ai_page_context.js";
 
 $(document).ready(function () {
-	if (!window.frappe || !frappe.boot || !frappe.boot.user || frappe.boot.user.name === "Guest") return;
+	if (!window.frappe || !frappe.boot || !frappe.boot.user || frappe.boot.user.name === "Guest")
+		return;
+	// The server says whether this user may use the chat (frappe.boot.ai_chat_enabled, ai_erpnext/boot.py); users who may not
+	// get no launcher. Every chat request is still checked on the server.
+	if (!frappe.boot.ai_chat_enabled) return;
 	if (document.getElementById("ai-agent")) return;
 
 	const API = "ai_erpnext.api.chat.";
 	// A clean form is remembered when it is drawn, so that later edits can be named (nothing is stored in the browser).
 	$(document).on("form-refresh", (e, frm) => snapshotForm(frm));
 	const MAX_BYTES = 10 * 1024 * 1024;
-	const UPLOAD_KEY = "ai_agent_pending_upload:" + ((frappe.session && frappe.session.user) || "");
+	const UPLOAD_KEY =
+		"ai_agent_pending_upload:" + ((frappe.session && frappe.session.user) || "");
 	const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 	const POLL_MS = 2500;
 	const POLL_LIMIT_MS = 10 * 60 * 1000;
@@ -26,8 +31,20 @@ $(document).ready(function () {
 	const lines = (v) => esc(v).replace(/\n/g, "<br>");
 	const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 	const store = {
-		get(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } },
-		set(k, v) { try { window.localStorage.setItem(k, v); } catch (e) { /* storage unavailable */ } },
+		get(k) {
+			try {
+				return window.localStorage.getItem(k);
+			} catch (e) {
+				return null;
+			}
+		},
+		set(k, v) {
+			try {
+				window.localStorage.setItem(k, v);
+			} catch (e) {
+				/* storage unavailable */
+			}
+		},
 	};
 
 	const ICON = {
@@ -35,7 +52,8 @@ $(document).ready(function () {
 		clip: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>',
 		send: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>',
 		plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
-		history: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>',
+		history:
+			'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>',
 		expand: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>',
 		close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>',
 	};
@@ -159,33 +177,55 @@ $(document).ready(function () {
 					<button type="button" class="ai-icon-btn" data-act="remove" aria-label="Remove attachment">${ICON.close}</button>
 				</div>
 				<div class="ai-input-row">
-					<button type="button" class="ai-icon-btn" data-act="attach" aria-label="Attach invoice image (JPG, PNG or WEBP)" title="Attach image">${ICON.clip}</button>
+					<button type="button" class="ai-icon-btn" data-act="attach" aria-label="Attach a document image (JPG, PNG or WEBP)" title="Attach image">${ICON.clip}</button>
 					<input type="file" class="ai-file" accept="image/png,image/jpeg,image/webp" hidden />
 					<label class="ai-sr" for="ai-input">Message</label>
 					<textarea id="ai-input" rows="1" placeholder="Ask anything"></textarea>
 					<button type="submit" class="ai-send" aria-label="Send message">${ICON.send}</button>
 				</div>
-			
+
 			</form>
 		</section>
 		<button type="button" id="ai-bot-btn" class="ai-launcher" aria-label="Open AI Assistant" aria-expanded="false" aria-controls="ai-chat-panel">${ICON.chat}</button>
 	</div>`);
 
-	const $root = $("#ai-agent"), $panel = $("#ai-chat-panel"), $log = $("#ai-chat-body"), $btn = $("#ai-bot-btn");
-	const $form = $root.find(".ai-composer"), $input = $("#ai-input"), $send = $root.find(".ai-send"), $file = $root.find(".ai-file");
-	const $attach = $root.find(".ai-attach"), $history = $root.find(".ai-history");
+	const $root = $("#ai-agent"),
+		$panel = $("#ai-chat-panel"),
+		$log = $("#ai-chat-body"),
+		$btn = $("#ai-bot-btn");
+	const $form = $root.find(".ai-composer"),
+		$input = $("#ai-input"),
+		$send = $root.find(".ai-send"),
+		$file = $root.find(".ai-file");
+	const $attach = $root.find(".ai-attach"),
+		$history = $root.find(".ai-history");
 
 	// gen changes whenever another conversation is shown; responses of an older gen are dropped.
-	const S = { session: null, gen: 0, lastId: 0, pendingId: null, busy: false, sending: false, loaded: false, pollTimer: null,
-		pollStarted: 0, attachment: null, lastPayload: null };
+	const S = {
+		session: null,
+		gen: 0,
+		lastId: 0,
+		pendingId: null,
+		busy: false,
+		sending: false,
+		loaded: false,
+		pollTimer: null,
+		pollStarted: 0,
+		attachment: null,
+		lastPayload: null,
+	};
 
 	// ---------------------------------------------------------------- panel
 	function openPanel() {
 		$panel.prop("hidden", false);
 		$btn.attr("aria-expanded", "true");
 		if (store.get("ai_agent_expanded") === "1") setExpanded(true);
-		if (!S.loaded) loadSession(); else scrollToEnd();  // only the first open of a page creates a conversation
-		if (S.loaded && S.busy && !S.pollTimer) { S.pollStarted = Date.now(); schedulePoll(); }  // resume after the poll limit
+		if (!S.loaded) loadSession();
+		else scrollToEnd(); // only the first open of a page creates a conversation
+		if (S.loaded && S.busy && !S.pollTimer) {
+			S.pollStarted = Date.now();
+			schedulePoll();
+		} // resume after the poll limit
 		setTimeout(() => $input.trigger("focus"), 50);
 	}
 	function closePanel() {
@@ -194,26 +234,47 @@ $(document).ready(function () {
 	}
 	function setExpanded(on) {
 		$panel.toggleClass("ai-expanded", on);
-		$root.find('[data-act="expand"]').attr("aria-pressed", on ? "true" : "false").attr("aria-label", on ? "Shrink chat" : "Expand chat");
+		$root
+			.find('[data-act="expand"]')
+			.attr("aria-pressed", on ? "true" : "false")
+			.attr("aria-label", on ? "Shrink chat" : "Expand chat");
 		store.set("ai_agent_expanded", on ? "1" : "0");
 	}
 	$btn.on("click", () => ($panel.prop("hidden") ? openPanel() : closePanel()));
-	$panel.on("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); closePanel(); } });
+	$panel.on("keydown", (e) => {
+		if (e.key === "Escape") {
+			e.stopPropagation();
+			closePanel();
+		}
+	});
 	$root.on("click", '[data-act="close"]', closePanel);
 	$root.on("click", '[data-act="expand"]', () => setExpanded(!$panel.hasClass("ai-expanded")));
 	$root.on("click", '[data-act="new"]', () => {
 		if (S.sending) return;
 		hideHistory();
-		switchTo(null);  // nothing of the old conversation may be rendered from now on
-		call("new_conversation", {}, (r) => { apply(r); $input.trigger("focus"); }, null);
+		switchTo(null); // nothing of the old conversation may be rendered from now on
+		call(
+			"new_conversation",
+			{},
+			(r) => {
+				apply(r);
+				$input.trigger("focus");
+			},
+			null
+		);
 	});
-	$root.on("click", '[data-act="history"]', () => ($history.prop("hidden") ? showHistory() : hideHistory()));
+	$root.on("click", '[data-act="history"]', () =>
+		$history.prop("hidden") ? showHistory() : hideHistory()
+	);
 
 	// ---------------------------------------------------------------- conversations
 	function switchTo(session) {
 		S.gen += 1;
 		S.session = session;
-		if (S.pollTimer) { clearTimeout(S.pollTimer); S.pollTimer = null; }
+		if (S.pollTimer) {
+			clearTimeout(S.pollTimer);
+			S.pollTimer = null;
+		}
 		S.busy = false;
 		resetLog();
 	}
@@ -224,15 +285,26 @@ $(document).ready(function () {
 	function showHistory() {
 		$root.find('[data-act="history"]').attr("aria-expanded", "true");
 		$history.prop("hidden", false).html('<div class="ai-note">Loading…</div>');
-		frappe.call({ method: API + "list_conversations", type: "POST",
+		frappe.call({
+			method: API + "list_conversations",
+			type: "POST",
 			callback: (r) => {
 				const rows = r.message || [];
 				$history.empty();
-				if (!rows.length) { $history.append('<div class="ai-note">No previous conversations.</div>'); return; }
+				if (!rows.length) {
+					$history.append('<div class="ai-note">No previous conversations.</div>');
+					return;
+				}
 				rows.forEach((c) => {
-					const when = c.last_activity ? frappe.datetime.comment_when(c.last_activity) : "";
+					const when = c.last_activity
+						? frappe.datetime.comment_when(c.last_activity)
+						: "";
 					const current = c.session === S.session;
-					const $b = $(`<button type="button" class="ai-history-item"${current ? ' aria-current="true"' : ""}><div>${esc(c.title)}${current ? ' <span class="ai-pill ok">Current</span>' : ""}</div>
+					const $b = $(`<button type="button" class="ai-history-item"${
+						current ? ' aria-current="true"' : ""
+					}><div>${esc(c.title)}${
+						current ? ' <span class="ai-pill ok">Current</span>' : ""
+					}</div>
 						<div class="ai-note">${esc(when)}</div></button>`);
 					$b.on("click", () => {
 						hideHistory();
@@ -243,33 +315,61 @@ $(document).ready(function () {
 					$history.append($b);
 				});
 			},
-			error: () => { $history.html('<div class="ai-note">Couldn\'t load previous conversations.</div>'); } });
+			error: () => {
+				$history.html('<div class="ai-note">Couldn\'t load previous conversations.</div>');
+			},
+		});
 	}
 
 	// ---------------------------------------------------------------- server calls
 	function call(method, args, ok, retryPayload, failed) {
 		const gen = S.gen;
-		S.sending = true; updateComposer(); showTyping(true);
+		S.sending = true;
+		updateComposer();
+		showTyping(true);
 		frappe.call({
-			method: API + method, args, type: "POST",
+			method: API + method,
+			args,
+			type: "POST",
 			callback: (r) => {
-				S.sending = false; showTyping(false); updateComposer();
-				if (gen !== S.gen) return;  // another conversation is shown now
+				S.sending = false;
+				showTyping(false);
+				updateComposer();
+				if (gen !== S.gen) return; // another conversation is shown now
 				if (r.message) ok(r.message);
 			},
 			error: () => {
-				S.sending = false; showTyping(false); updateComposer();
+				S.sending = false;
+				showTyping(false);
+				updateComposer();
 				if (failed) failed();
 				if (gen !== S.gen) return;
-				systemNote("The request didn't go through.", retryPayload ? () => send(retryPayload) : null);
+				systemNote(
+					"The request didn't go through.",
+					retryPayload ? () => send(retryPayload) : null
+				);
 			},
 		});
 	}
 	function loadSession() {
-		if (S.loading) return;  // a reopened panel must not start a second conversation
+		if (S.loading) return; // a reopened panel must not start a second conversation
 		S.loading = true;
-		call("get_session", { session: S.session }, (r) => { S.loading = false; S.loaded = true; resetLog(); S.session = null; apply(r); restoreAttachment(); },
-			null, () => { S.loading = false; });
+		call(
+			"get_session",
+			{ session: S.session },
+			(r) => {
+				S.loading = false;
+				S.loaded = true;
+				resetLog();
+				S.session = null;
+				apply(r);
+				restoreAttachment();
+			},
+			null,
+			() => {
+				S.loading = false;
+			}
+		);
 	}
 	function send(payload) {
 		S.lastPayload = payload;
@@ -280,7 +380,15 @@ $(document).ready(function () {
 		// (page-aware: the record, list filters/selection or report named by the page; see ai_page_context.js)
 		if (!payload.context) {
 			let page = null;
-			try { page = collectPageContext({ frappe, cur_frm: window.cur_frm, cur_list: window.cur_list }); } catch (e) { page = null; }
+			try {
+				page = collectPageContext({
+					frappe,
+					cur_frm: window.cur_frm,
+					cur_list: window.cur_list,
+				});
+			} catch (e) {
+				page = null;
+			}
 			if (page) payload.context = JSON.stringify(page);
 		}
 		call("send_message", payload, apply, payload);
@@ -289,13 +397,25 @@ $(document).ready(function () {
 		if (r.closed) {
 			// That conversation has expired: nothing was sent. Start a new one and give the typed text
 			// back instead of posting it to some other conversation.
-			const typed = S.lastPayload && S.lastPayload.session === r.session ? S.lastPayload.text : null;
+			const typed =
+				S.lastPayload && S.lastPayload.session === r.session ? S.lastPayload.text : null;
 			switchTo(null);
-			call("get_session", {}, (x) => {
-				apply(x);
-				systemNote("That conversation has expired, so your message wasn't sent. A new conversation was started; the old one is no longer available.");
-				if (typed && !$input.val()) { $input.val(typed); autosize(); updateComposer(); }
-			}, null);
+			call(
+				"get_session",
+				{},
+				(x) => {
+					apply(x);
+					systemNote(
+						"That conversation has expired, so your message wasn't sent. A new conversation was started; the old one is no longer available."
+					);
+					if (typed && !$input.val()) {
+						$input.val(typed);
+						autosize();
+						updateComposer();
+					}
+				},
+				null
+			);
 			return;
 		}
 		if (S.session && r.session !== S.session) resetLog();
@@ -308,7 +428,10 @@ $(document).ready(function () {
 	}
 	function setBusy(busy) {
 		S.busy = !!busy;
-		if (S.busy && !S.pollTimer) { S.pollStarted = Date.now(); schedulePoll(); }
+		if (S.busy && !S.pollTimer) {
+			S.pollStarted = Date.now();
+			schedulePoll();
+		}
 		showTyping(S.sending || S.busy);
 	}
 	function schedulePoll() {
@@ -316,26 +439,42 @@ $(document).ready(function () {
 			S.pollTimer = null;
 			if (!S.busy) return;
 			if (Date.now() - S.pollStarted > POLL_LIMIT_MS) {
-				systemNote("Still working on it. Check again in a moment.", () => { S.pollStarted = Date.now(); schedulePoll(); });
+				systemNote("Still working on it. Check again in a moment.", () => {
+					S.pollStarted = Date.now();
+					schedulePoll();
+				});
 				return;
 			}
-			const gen = S.gen, session = S.session;
-			frappe.call({ method: API + "poll", type: "POST", args: { session, since: S.lastId },
+			const gen = S.gen,
+				session = S.session;
+			frappe.call({
+				method: API + "poll",
+				type: "POST",
+				args: { session, since: S.lastId },
 				callback: (r) => {
-					if (gen !== S.gen || !r.message || r.message.session !== session) return;  // a newer conversation is shown
+					if (gen !== S.gen || !r.message || r.message.session !== session) return; // a newer conversation is shown
 					apply(r.message);
 					if (S.busy && !S.pollTimer) schedulePoll();
 				},
-				error: () => { if (gen === S.gen) schedulePoll(); } });
+				error: () => {
+					if (gen === S.gen) schedulePoll();
+				},
+			});
 		}, POLL_MS);
 	}
 
 	// ---------------------------------------------------------------- rendering
-	function resetLog() { $log.empty(); S.lastId = 0; S.pendingId = null; }
+	function resetLog() {
+		$log.empty();
+		S.lastId = 0;
+		S.pendingId = null;
+	}
 	function scrollToEnd() {
 		const el = $log[0];
 		el.scrollTop = el.scrollHeight;
-		requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+		requestAnimationFrame(() => {
+			el.scrollTop = el.scrollHeight;
+		});
 	}
 	function showTyping(on) {
 		$log.find(".ai-typing-row").remove();
@@ -347,19 +486,40 @@ $(document).ready(function () {
 	}
 	function systemNote(text, retry) {
 		const $n = $(`<div class="ai-system error" role="alert"><span>${esc(text)}</span></div>`);
-		if (retry) $n.append($('<button type="button" class="ai-opt secondary">Retry</button>').on("click", function () { $n.remove(); retry(); }));
-		$log.append($n); scrollToEnd();
+		if (retry)
+			$n.append(
+				$('<button type="button" class="ai-opt secondary">Retry</button>').on(
+					"click",
+					function () {
+						$n.remove();
+						retry();
+					}
+				)
+			);
+		$log.append($n);
+		scrollToEnd();
 	}
 	function renderMessage(m) {
 		if (m.id <= S.lastId) return;
 		S.lastId = m.id;
-		const $row = $(`<div class="ai-row ai-${m.role === "user" ? "user" : "assistant"}" data-mid="${m.id}"></div>`);
+		const $row = $(
+			`<div class="ai-row ai-${m.role === "user" ? "user" : "assistant"}" data-mid="${
+				m.id
+			}"></div>`
+		);
 		if (m.attachment && m.attachment.file_url) {
-			$row.append(`<img class="ai-thumb" src="${esc(m.attachment.file_url)}" alt="Attached invoice image ${esc(m.attachment.file_name)}" loading="lazy">`);
+			$row.append(
+				`<img class="ai-thumb" src="${esc(
+					m.attachment.file_url
+				)}" alt="Attached document image ${esc(m.attachment.file_name)}" loading="lazy">`
+			);
 		}
-		if (m.source === "erpnext") $row.append('<span class="ai-source erpnext">From your	 data</span>');
-		if (m.source === "general") $row.append('<span class="ai-source">General answer</span>');
-		if (m.source === "guide") $row.append('<span class="ai-source">General ERPNext guidance</span>');
+		if (m.source === "erpnext")
+			$row.append('<span class="ai-source erpnext">From your	 data</span>');
+		if (m.source === "general")
+			$row.append('<span class="ai-source">General answer, not from your data</span>');
+		if (m.source === "guide")
+			$row.append('<span class="ai-source">General ERPNext guidance</span>');
 		if (m.text) $row.append(`<div class="ai-bubble">${lines(m.text)}</div>`);
 		if (m.card) $row.append(renderCard(m.card, m.id));
 		if (m.suggestions && m.suggestions.length) $row.append(renderSuggestions(m.suggestions));
@@ -370,14 +530,27 @@ $(document).ready(function () {
 	function pill(status) {
 		const map = { ok: ["✓", "Matched"], warn: ["!", "Check"], error: ["✗", "Needs input"] };
 		const [icon, label] = map[status] || ["", ""];
-		return status ? `<span class="ai-pill ${status}"><span aria-hidden="true">${icon}</span> ${label}</span>` : "";
+		return status
+			? `<span class="ai-pill ${status}"><span aria-hidden="true">${icon}</span> ${label}</span>`
+			: "";
 	}
 	function renderTable(card, mid) {
-		const $c = $(`<div class="ai-card" role="group" aria-label="${esc(card.title || "Results")}"></div>`);
+		const $c = $(
+			`<div class="ai-card" role="group" aria-label="${esc(card.title || "Results")}"></div>`
+		);
 		if (card.title) $c.append(`<div class="ai-card-title">${esc(card.title)}</div>`);
 		const cols = card.columns || [];
-		const $t = $('<table></table>');
-		$t.append(`<thead><tr><th scope="col">#</th>${cols.map((c) => `<th scope="col" class="${c.type === "currency" ? "num" : ""}">${esc(c.label)}</th>`).join("")}</tr></thead>`);
+		const $t = $("<table></table>");
+		$t.append(
+			`<thead><tr><th scope="col">#</th>${cols
+				.map(
+					(c) =>
+						`<th scope="col" class="${c.type === "currency" ? "num" : ""}">${esc(
+							c.label
+						)}</th>`
+				)
+				.join("")}</tr></thead>`
+		);
 		const $b = $("<tbody></tbody>");
 		(card.rows || []).forEach((r, i) => {
 			const $tr = $(`<tr><td>${esc(r._n || i + 1)}</td></tr>`);
@@ -385,8 +558,11 @@ $(document).ready(function () {
 				const v = r[c.key];
 				const $td = $(`<td class="${c.type === "currency" ? "num" : ""}"></td>`);
 				if (c.type === "link" && card.doctype && r._name) {
-					$td.append($(`<button type="button" class="ai-link">${esc(v)}</button>`).attr("aria-label", `Open ${card.doctype} ${r._name}`)
-						.on("click", () => openDoc(card.doctype, r._name)));
+					$td.append(
+						$(`<button type="button" class="ai-link">${esc(v)}</button>`)
+							.attr("aria-label", `Open ${card.doctype} ${r._name}`)
+							.on("click", () => openDoc(card.doctype, r._name))
+					);
 				} else $td.text(v === null || v === undefined ? "" : String(v));
 				$tr.append($td);
 			});
@@ -397,82 +573,172 @@ $(document).ready(function () {
 		if (card.note) $c.append(`<div class="ai-note ai-table-note">${esc(card.note)}</div>`);
 		const $actions = $('<div class="ai-card-actions"></div>');
 		if (card.has_more) {
-			$actions.append($('<button type="button" class="ai-opt secondary ai-more">Show more</button>').on("click", function () {
-				if (S.sending) return;
-				$(this).prop("disabled", true);
-				send({ action: JSON.stringify({ command: "more" }), client_id: uid() });
-			}));
+			$actions.append(
+				$('<button type="button" class="ai-opt secondary ai-more">Show more</button>').on(
+					"click",
+					function () {
+						if (S.sending) return;
+						$(this).prop("disabled", true);
+						send({ action: JSON.stringify({ command: "more" }), client_id: uid() });
+					}
+				)
+			);
 		}
 		if (card.list_route && card.list_route.doctype) {
-			$actions.append($('<button type="button" class="ai-opt secondary">Open in ERPNext</button>').on("click", () => {
-				frappe.route_options = card.list_route.filters || {};
-				frappe.set_route("List", card.list_route.doctype);
-			}));
+			$actions.append(
+				$('<button type="button" class="ai-opt secondary">Open in ERPNext</button>').on(
+					"click",
+					() => {
+						frappe.route_options = card.list_route.filters || {};
+						frappe.set_route("List", card.list_route.doctype);
+					}
+				)
+			);
 		}
 		if ($actions.children().length) $c.append($actions);
 		return $c;
 	}
 	function renderSuggestions(list) {
 		const $s = $('<div class="ai-options" role="group" aria-label="Suggestions"></div>');
-		list.forEach((t) => $s.append($(`<button type="button" class="ai-opt secondary">${esc(t)}</button>`).on("click", function () {
-			if (S.sending) return;
-			send({ action: JSON.stringify({ command: "say", value: t }), client_id: uid() });
-		})));
+		list.forEach((t) =>
+			$s.append(
+				$(`<button type="button" class="ai-opt secondary">${esc(t)}</button>`).on(
+					"click",
+					function () {
+						if (S.sending) return;
+						send({
+							action: JSON.stringify({ command: "say", value: t }),
+							client_id: uid(),
+						});
+					}
+				)
+			)
+		);
 		return $s;
 	}
 	function renderCard(card, mid) {
 		if (card.type === "table") return renderTable(card, mid);
-		const $c = $(`<div class="ai-card" role="group" aria-label="${esc(card.title || "Details")}"></div>`);
+		const $c = $(
+			`<div class="ai-card" role="group" aria-label="${esc(card.title || "Details")}"></div>`
+		);
 		if (card.title) $c.append(`<div class="ai-card-title">${esc(card.title)}</div>`);
 		if (card.rows && card.rows.length) {
-			const kv = card.rows.map((r) => `<dt>${esc(r.label)}</dt><dd>${esc(r.value)}${pill(r.status)}${r.note ? `<span class="ai-note">${esc(r.note)}</span>` : ""}</dd>`).join("");
+			const kv = card.rows
+				.map(
+					(r) =>
+						`<dt>${esc(r.label)}</dt><dd>${esc(r.value)}${pill(r.status)}${
+							r.note ? `<span class="ai-note">${esc(r.note)}</span>` : ""
+						}</dd>`
+				)
+				.join("");
 			$c.append(`<dl class="ai-kv">${kv}</dl>`);
 		}
 		if (card.items && card.items.columns) {
 			const ic = card.items.columns;
-			const body = (card.items.rows || []).map((r) => `<tr>${ic.map((c) => `<td>${esc(r[c.key])}</td>`).join("")}</tr>`).join("");
-			$c.append(`<div class="ai-items"><table><thead><tr>${ic.map((c) => `<th scope="col">${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`);
+			const body = (card.items.rows || [])
+				.map((r) => `<tr>${ic.map((c) => `<td>${esc(r[c.key])}</td>`).join("")}</tr>`)
+				.join("");
+			$c.append(
+				`<div class="ai-items"><table><thead><tr>${ic
+					.map((c) => `<th scope="col">${esc(c.label)}</th>`)
+					.join("")}</tr></thead><tbody>${body}</tbody></table></div>`
+			);
 		} else if (card.items && card.items.length) {
-			const body = card.items.map((it, i) => `<tr><td>${i + 1}</td><td>${esc(it.name)}${it.matched || it.code ? `<span class="ai-note">${esc(it.matched || it.code)}</span>` : ""}${it.warehouse ? `<span class="ai-note">Warehouse: ${esc(it.warehouse)}${it.warehouse_note ? ` (${esc(it.warehouse_note)})` : ""}</span>` : ""}${it.status ? pill(it.status) : ""}</td>
-				<td class="num">${esc(it.qty)}</td><td>${esc(it.uom)}</td><td class="num">${esc(it.rate)}</td><td class="num">${esc(it.amount)}</td></tr>`).join("");
+			const body = card.items
+				.map(
+					(it, i) => `<tr><td>${i + 1}</td><td>${esc(it.name)}${
+						it.matched || it.code
+							? `<span class="ai-note">${esc(it.matched || it.code)}</span>`
+							: ""
+					}${
+						it.warehouse
+							? `<span class="ai-note">Warehouse: ${esc(it.warehouse)}${
+									it.warehouse_note ? ` (${esc(it.warehouse_note)})` : ""
+							  }</span>`
+							: ""
+					}${it.status ? pill(it.status) : ""}</td>
+				<td class="num">${esc(it.qty)}</td><td>${esc(it.uom)}</td><td class="num">${esc(
+						it.rate
+					)}</td><td class="num">${esc(it.amount)}</td></tr>`
+				)
+				.join("");
 			$c.append(`<div class="ai-items"><table><thead><tr><th scope="col">#</th><th scope="col">Item</th><th scope="col" class="num">Qty</th>
 				<th scope="col">UOM</th><th scope="col" class="num">Rate</th><th scope="col" class="num">Amount</th></tr></thead><tbody>${body}</tbody></table></div>`);
 		}
 		if (card.totals) {
-			const t = card.totals, parts = [];
-			if (t.subtotal !== null && t.subtotal !== undefined) parts.push(`Subtotal ${esc(t.subtotal)}`);
+			const t = card.totals,
+				parts = [];
+			if (t.subtotal !== null && t.subtotal !== undefined)
+				parts.push(`Subtotal ${esc(t.subtotal)}`);
 			if (t.tax !== null && t.tax !== undefined) parts.push(`Tax ${esc(t.tax)}`);
 			if (t.total !== null && t.total !== undefined) parts.push(`Total ${esc(t.total)}`);
-			if (parts.length) $c.append(`<div class="ai-note" style="margin-top:6px">On the invoice: ${parts.join(" · ")}</div>`);
+			if (parts.length)
+				$c.append(
+					`<div class="ai-note" style="margin-top:6px">On the invoice: ${parts.join(
+						" · "
+					)}</div>`
+				);
 		}
-		if (card.notes && card.notes.length) $c.append(`<ul class="ai-notes">${card.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`);
+		if (card.notes && card.notes.length)
+			$c.append(
+				`<ul class="ai-notes">${card.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`
+			);
 		if (card.note) $c.append(`<div class="ai-note ai-table-note">${esc(card.note)}</div>`);
 		if ((card.type === "created" || card.type === "record") && card.doctype && card.name) {
-			$c.append($(`<button type="button" class="ai-primary">${esc(card.action_label || "Open")}</button>`)
-				.on("click", () => openDoc(card.doctype, card.name)));
+			$c.append(
+				$(
+					`<button type="button" class="ai-primary">${esc(
+						card.action_label || "Open"
+					)}</button>`
+				).on("click", () => openDoc(card.doctype, card.name))
+			);
 		}
 		return $c;
 	}
 	function renderLinks(links) {
 		const $l = $('<div class="ai-options"></div>');
-		links.forEach((l) => $l.append($(`<button type="button" class="ai-opt secondary">${esc(l.label)}</button>`).on("click", () => openDoc(l.doctype, l.name))));
+		links.forEach((l) =>
+			$l.append(
+				$(`<button type="button" class="ai-opt secondary">${esc(l.label)}</button>`).on(
+					"click",
+					() => openDoc(l.doctype, l.name)
+				)
+			)
+		);
 		return $l;
 	}
 	function renderQuestion(q, links) {
 		const $q = $(`<div class="ai-question" data-qid="${esc(q.id)}"></div>`);
 		if (links) $q.append(renderLinks(links));
 		if (q.options && q.options.length) {
-			const $opts = $('<div class="ai-options" role="group" aria-label="Choose an answer"></div>');
+			const $opts = $(
+				'<div class="ai-options" role="group" aria-label="Choose an answer"></div>'
+			);
 			q.options.forEach((o) => {
-				$opts.append($(`<button type="button" class="ai-opt ${o.style === "secondary" ? "secondary" : ""}">${esc(o.label)}</button>`)
-					.on("click", function () { answer(q.id, o.value, o.label); }));
+				$opts.append(
+					$(
+						`<button type="button" class="ai-opt ${
+							o.style === "secondary" ? "secondary" : ""
+						}">${esc(o.label)}</button>`
+					).on("click", function () {
+						answer(q.id, o.value, o.label);
+					})
+				);
 			});
 			$q.append($opts);
 		}
 		if (q.input === "date") {
-			const $d = $(`<div class="ai-date" style="margin-top:6px"><label class="ai-sr" for="d-${esc(q.id)}">Date</label>
-				<input type="date" id="d-${esc(q.id)}"><button type="button" class="ai-opt">Use this date</button></div>`);
-			$d.find("button").on("click", () => { const v = $d.find("input").val(); if (v) answer(q.id, v, v); });
+			const $d =
+				$(`<div class="ai-date" style="margin-top:6px"><label class="ai-sr" for="d-${esc(
+					q.id
+				)}">Date</label>
+				<input type="date" id="d-${esc(
+					q.id
+				)}"><button type="button" class="ai-opt">Use this date</button></div>`);
+			$d.find("button").on("click", () => {
+				const v = $d.find("input").val();
+				if (v) answer(q.id, v, v);
+			});
 			$q.append($d);
 		} else if (q.input === "text") {
 			$q.append('<div class="ai-note">…or type your answer below.</div>');
@@ -489,7 +755,10 @@ $(document).ready(function () {
 	}
 	function answer(qid, value, label) {
 		if (S.sending || qid !== S.pendingId) return;
-		send({ action: JSON.stringify({ question_id: qid, value: value, label: label }), client_id: uid() });
+		send({
+			action: JSON.stringify({ question_id: qid, value: value, label: label }),
+			client_id: uid(),
+		});
 	}
 	function openDoc(doctype, name) {
 		frappe.set_route("Form", doctype, name);
@@ -506,10 +775,18 @@ $(document).ready(function () {
 		$root.find('[data-act="history"]').prop("disabled", S.sending);
 		refreshQuestions();
 	}
-	function autosize() { $input.css("height", "auto").css("height", Math.min($input[0].scrollHeight, 140) + "px"); }
-	$input.on("input", () => { autosize(); updateComposer(); });
+	function autosize() {
+		$input.css("height", "auto").css("height", Math.min($input[0].scrollHeight, 140) + "px");
+	}
+	$input.on("input", () => {
+		autosize();
+		updateComposer();
+	});
 	$input.on("keydown", (e) => {
-		if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $form.trigger("submit"); }
+		if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+			e.preventDefault();
+			$form.trigger("submit");
+		}
 	});
 	$form.on("submit", (e) => {
 		e.preventDefault();
@@ -517,28 +794,53 @@ $(document).ready(function () {
 		const text = $input.val().trim();
 		const payload = { text: text || null, client_id: uid() };
 		if (S.attachment && S.attachment.file_url) payload.file_url = S.attachment.file_url;
-		$input.val(""); autosize(); clearAttachment();
+		$input.val("");
+		autosize();
+		clearAttachment();
 		send(payload);
 	});
 
 	$root.on("click", '[data-act="attach"]', () => $file.trigger("click"));
-	$file.on("change", function () { const f = this.files && this.files[0]; this.value = ""; if (f) setAttachment(f); });
+	$file.on("change", function () {
+		const f = this.files && this.files[0];
+		this.value = "";
+		if (f) setAttachment(f);
+	});
 	$root.on("click", '[data-act="remove"]', clearAttachment);
-	$root.on("click", '[data-act="retry-upload"]', () => { if (S.attachment && S.attachment.file) upload(S.attachment); });
+	$root.on("click", '[data-act="retry-upload"]', () => {
+		if (S.attachment && S.attachment.file) upload(S.attachment);
+	});
 
 	function setAttachment(file) {
 		clearAttachment();
-		if (!IMAGE_TYPES.includes(file.type)) { systemNote("Please attach a JPG, PNG or WEBP image. PDF files aren't supported yet."); return; }
-		if (file.size > MAX_BYTES) { systemNote("That image is larger than 10 MB. Please choose a smaller image."); return; }
-		S.attachment = { file, preview: URL.createObjectURL(file), uploading: false, file_url: null, xhr: null };
-		$attach.prop("hidden", false).find("img").attr("src", S.attachment.preview).attr("alt", `Preview of ${file.name}`);
+		if (!IMAGE_TYPES.includes(file.type)) {
+			systemNote("Please attach a JPG, PNG or WEBP image. PDF files aren't supported yet.");
+			return;
+		}
+		if (file.size > MAX_BYTES) {
+			systemNote("That image is larger than 10 MB. Please choose a smaller image.");
+			return;
+		}
+		S.attachment = {
+			file,
+			preview: URL.createObjectURL(file),
+			uploading: false,
+			file_url: null,
+			xhr: null,
+		};
+		$attach
+			.prop("hidden", false)
+			.find("img")
+			.attr("src", S.attachment.preview)
+			.attr("alt", `Preview of ${file.name}`);
 		$attach.find(".ai-attach-name").text(file.name);
 		upload(S.attachment);
 	}
 	function clearAttachment() {
 		if (S.attachment) {
 			if (S.attachment.xhr) S.attachment.xhr.abort();
-			if (S.attachment.preview && S.attachment.preview.startsWith("blob:")) URL.revokeObjectURL(S.attachment.preview);
+			if (S.attachment.preview && S.attachment.preview.startsWith("blob:"))
+				URL.revokeObjectURL(S.attachment.preview);
 		}
 		S.attachment = null;
 		store.set(UPLOAD_KEY, "");
@@ -551,28 +853,44 @@ $(document).ready(function () {
 		fd.append("is_private", "1");
 		fd.append("folder", "Home");
 		const xhr = new XMLHttpRequest();
-		att.xhr = xhr; att.uploading = true; att.file_url = null;
-		const $bar = $attach.find(".ai-progress > div"), $state = $attach.find(".ai-attach-state");
+		att.xhr = xhr;
+		att.uploading = true;
+		att.file_url = null;
+		const $bar = $attach.find(".ai-progress > div"),
+			$state = $attach.find(".ai-attach-state");
 		$attach.find('[data-act="retry-upload"]').prop("hidden", true);
-		$state.removeClass("ai-attach-err").text("Uploading… 0%"); $bar.css("width", "0%");
+		$state.removeClass("ai-attach-err").text("Uploading… 0%");
+		$bar.css("width", "0%");
 		xhr.upload.onprogress = (e) => {
 			if (!e.lengthComputable) return;
 			const pct = Math.round((e.loaded / e.total) * 100);
-			$bar.css("width", pct + "%"); $state.text(`Uploading… ${pct}%`);
+			$bar.css("width", pct + "%");
+			$state.text(`Uploading… ${pct}%`);
 		};
 		xhr.onload = () => {
-			att.uploading = false; att.xhr = null;
+			att.uploading = false;
+			att.xhr = null;
 			let url = null;
-			try { url = JSON.parse(xhr.responseText).message.file_url; } catch (e) { url = null; }
+			try {
+				url = JSON.parse(xhr.responseText).message.file_url;
+			} catch (e) {
+				url = null;
+			}
 			if (xhr.status === 200 && url) {
-				att.file_url = url; $bar.css("width", "100%"); $state.text("Ready to send");
+				att.file_url = url;
+				$bar.css("width", "100%");
+				$state.text("Ready to send");
 				// an uploaded but unsent image survives a page reload (the File already exists on the server)
 				store.set(UPLOAD_KEY, JSON.stringify({ file_url: url, name: att.file.name }));
-			}
-			else uploadFailed();
+			} else uploadFailed();
 			updateComposer();
 		};
-		xhr.onerror = () => { att.uploading = false; att.xhr = null; uploadFailed(); updateComposer(); };
+		xhr.onerror = () => {
+			att.uploading = false;
+			att.xhr = null;
+			uploadFailed();
+			updateComposer();
+		};
 		xhr.open("POST", "/api/method/upload_file");
 		xhr.setRequestHeader("X-Frappe-CSRF-Token", frappe.csrf_token);
 		xhr.setRequestHeader("Accept", "application/json");
@@ -581,10 +899,24 @@ $(document).ready(function () {
 	}
 	function restoreAttachment() {
 		let saved = null;
-		try { saved = JSON.parse(store.get(UPLOAD_KEY) || "null"); } catch (e) { saved = null; }
+		try {
+			saved = JSON.parse(store.get(UPLOAD_KEY) || "null");
+		} catch (e) {
+			saved = null;
+		}
 		if (!saved || !saved.file_url || S.attachment) return;
-		S.attachment = { file: null, preview: saved.file_url, uploading: false, file_url: saved.file_url, xhr: null };
-		$attach.prop("hidden", false).find("img").attr("src", saved.file_url).attr("alt", `Preview of ${saved.name || "attachment"}`);
+		S.attachment = {
+			file: null,
+			preview: saved.file_url,
+			uploading: false,
+			file_url: saved.file_url,
+			xhr: null,
+		};
+		$attach
+			.prop("hidden", false)
+			.find("img")
+			.attr("src", saved.file_url)
+			.attr("alt", `Preview of ${saved.name || "attachment"}`);
 		$attach.find(".ai-attach-name").text(saved.name || "Attachment");
 		$attach.find(".ai-progress > div").css("width", "100%");
 		$attach.find(".ai-attach-state").removeClass("ai-attach-err").text("Ready to send");

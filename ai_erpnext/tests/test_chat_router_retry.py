@@ -44,7 +44,9 @@ class FakeProvider:
 
 def run_policy(provider):
 	sleeps = []
-	result = llm.complete_with_policy(provider, "system", [{"role": "user", "content": "q"}], sleep=sleeps.append, jitter=lambda: 1.0)
+	result = llm.complete_with_policy(
+		provider, "system", [{"role": "user", "content": "q"}], sleep=sleeps.append, jitter=lambda: 1.0
+	)
 	return result, sleeps
 
 
@@ -67,7 +69,9 @@ class TestRouterRetryPolicy(IntegrationTestCase):
 
 	def test_rejected_output_that_is_valid_json_is_used_directly(self):
 		fg = json.dumps({"mode": "query", "query": {"doctype": "Customer", "operation": "count"}})
-		p = FakeProvider(err("invalid_response", status_code=400, failed_generation="```json\n" + fg + "\n```"))
+		p = FakeProvider(
+			err("invalid_response", status_code=400, failed_generation="```json\n" + fg + "\n```")
+		)
 		result, _ = run_policy(p)
 		self.assertEqual((result["mode"], len(p.calls)), ("query", 1))
 
@@ -78,7 +82,9 @@ class TestRouterRetryPolicy(IntegrationTestCase):
 		self.assertEqual(p.calls[1]["messages"][-1]["content"], llm.CORRECTION)
 
 	def test_malformed_output_respects_attempt_limit(self):
-		bad = err("invalid_response", status_code=400, failed_generation='{"mode": "chat", "reply": "unterminated')
+		bad = err(
+			"invalid_response", status_code=400, failed_generation='{"mode": "chat", "reply": "unterminated'
+		)
 		p = FakeProvider(bad, bad, bad, CHAT_PLAN)
 		with self.assertRaises(AIProviderError) as ctx:
 			run_policy(p)
@@ -93,7 +99,7 @@ class TestRouterRetryPolicy(IntegrationTestCase):
 	def test_5xx_stops_at_attempt_limit_within_budget(self):
 		p = FakeProvider(*[err("unavailable", status_code=503)] * 5)
 		with self.assertRaises(AIProviderError) as ctx:
-			_, sleeps = run_policy(p)
+			run_policy(p)
 		self.assertEqual((ctx.exception.category, len(p.calls)), ("unavailable", 3))
 
 	def test_429_waits_for_retry_after_only_within_budget(self):
@@ -111,7 +117,13 @@ class TestRouterRetryPolicy(IntegrationTestCase):
 		self.assertEqual(len(p.calls), 1)
 
 	def test_quota_and_permanent_errors_are_never_retried(self):
-		for category, status in (("quota_exhausted", 429), ("auth", 401), ("config", 404), ("bad_request", 400), ("billing", 402)):
+		for category, status in (
+			("quota_exhausted", 429),
+			("auth", 401),
+			("config", 404),
+			("bad_request", 400),
+			("billing", 402),
+		):
 			p = FakeProvider(err(category, status_code=status, retry_after=1.0), CHAT_PLAN)
 			with self.assertRaises(AIProviderError) as ctx:
 				run_policy(p)
@@ -120,16 +132,47 @@ class TestRouterRetryPolicy(IntegrationTestCase):
 
 class TestProviderErrorDetails(IntegrationTestCase):
 	def _status_error(self, cls, status, message, headers=None, body=None):
-		return cls(message, response=httpx.Response(status, request=REQ, headers=headers or {}), body=body or {"error": {"message": message}})
+		return cls(
+			message,
+			response=httpx.Response(status, request=REQ, headers=headers or {}),
+			body=body or {"error": {"message": message}},
+		)
 
 	def test_classify_reads_retry_after_and_failed_generation(self):
-		e = classify(self._status_error(openai.RateLimitError, 429, "Rate limit reached on tokens per minute (TPM)", headers={"retry-after": "7"}))
+		e = classify(
+			self._status_error(
+				openai.RateLimitError,
+				429,
+				"Rate limit reached on tokens per minute (TPM)",
+				headers={"retry-after": "7"},
+			)
+		)
 		self.assertEqual((e.category, e.retry_after), ("rate_limited", 7.0))
-		e = classify(self._status_error(openai.RateLimitError, 429, "limit on tokens per minute", headers={"x-ratelimit-reset-tokens": "1m26.4s"}))
+		e = classify(
+			self._status_error(
+				openai.RateLimitError,
+				429,
+				"limit on tokens per minute",
+				headers={"x-ratelimit-reset-tokens": "1m26.4s"},
+			)
+		)
 		self.assertAlmostEqual(e.retry_after, 86.4)
-		e = classify(self._status_error(openai.RateLimitError, 429, "Rate limit reached on tokens per day (TPD)", headers={"retry-after": "3"}))
+		e = classify(
+			self._status_error(
+				openai.RateLimitError,
+				429,
+				"Rate limit reached on tokens per day (TPD)",
+				headers={"retry-after": "3"},
+			)
+		)
 		self.assertEqual(e.category, "quota_exhausted")
-		body = {"error": {"message": "Failed to generate JSON", "code": "json_validate_failed", "failed_generation": PROSE}}
+		body = {
+			"error": {
+				"message": "Failed to generate JSON",
+				"code": "json_validate_failed",
+				"failed_generation": PROSE,
+			}
+		}
 		e = classify(self._status_error(openai.BadRequestError, 400, "json_validate_failed", body=body))
 		self.assertEqual((e.category, e.failed_generation), ("invalid_response", PROSE))
 		self.assertNotIn(PROSE, str(e))  # the user-facing message never contains model output
@@ -160,13 +203,20 @@ class TestRouterEndToEnd(IntegrationTestCase):
 	def setUp(self):
 		frappe.set_user("Administrator")
 		self.s = chat.new_conversation()["session"]
-		self.counts = {dt: frappe.db.count(dt) for dt in ("Sales Invoice", "Purchase Invoice", "Customer", "Item")}
+		self.counts = {
+			dt: frappe.db.count(dt) for dt in ("Sales Invoice", "Purchase Invoice", "Customer", "Item")
+		}
 
 	def tearDown(self):
-		self.assertEqual({dt: frappe.db.count(dt) for dt in self.counts}, self.counts)  # no business records touched
+		self.assertEqual(
+			{dt: frappe.db.count(dt) for dt in self.counts}, self.counts
+		)  # no business records touched
 
 	def ask(self, text, provider):
-		with mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=provider), mock.patch("time.sleep"):
+		with (
+			mock.patch("ai_erpnext.chat.llm.get_text_provider", return_value=provider),
+			mock.patch("time.sleep"),
+		):
 			return chat.send_message(session=self.s, text=text)
 
 	def test_history_is_sent_as_json_and_prose_failure_recovers(self):
@@ -178,7 +228,9 @@ class TestRouterEndToEnd(IntegrationTestCase):
 		self.assertIn("bill sent to a customer", r["messages"][-1]["text"])
 		assistant_turns = [m for m in p.calls[0]["messages"] if m["role"] == "assistant"]
 		self.assertTrue(assistant_turns)
-		self.assertTrue(all(json.loads(m["content"])["mode"] == "chat" for m in assistant_turns))  # root-cause fix
+		self.assertTrue(
+			all(json.loads(m["content"])["mode"] == "chat" for m in assistant_turns)
+		)  # root-cause fix
 		joined = "\n".join(logs.output)
 		self.assertIn("AI-CHAT route attempts=2 outcome=ok_after_retry", joined)
 		self.assertNotIn("bill sent to a customer", joined)

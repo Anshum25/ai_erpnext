@@ -27,13 +27,30 @@ class TestChatSessions(IntegrationTestCase):
 		super().setUpClass()
 		frappe.set_user("Administrator")
 		sg = frappe.db.get_value("Supplier Group", {"is_group": 0}, "name")
-		cls.supplier = frappe.get_doc({"doctype": "Supplier", "supplier_name": "AIS Session Supplier", "supplier_group": sg}).insert().name
+		cls.supplier = (
+			frappe.get_doc(
+				{"doctype": "Supplier", "supplier_name": "AIS Session Supplier", "supplier_group": sg}
+			)
+			.insert()
+			.name
+		)
 		cls.users = {}
 		for key in ("a", "b"):
 			email = f"ais-user-{key}@example.com"
 			if not frappe.db.exists("User", email):
-				frappe.get_doc({"doctype": "User", "email": email, "first_name": f"AIS {key.upper()}", "send_welcome_email": 0,
-					"roles": [{"role": "System Manager"}, {"role": "Purchase Manager"}, {"role": "Sales User"}]}).insert(ignore_permissions=True)
+				frappe.get_doc(
+					{
+						"doctype": "User",
+						"email": email,
+						"first_name": f"AIS {key.upper()}",
+						"send_welcome_email": 0,
+						"roles": [
+							{"role": "System Manager"},
+							{"role": "Purchase Manager"},
+							{"role": "Sales User"},
+						],
+					}
+				).insert(ignore_permissions=True)
 			cls.users[key] = email
 
 	def setUp(self):
@@ -54,7 +71,9 @@ class TestChatSessions(IntegrationTestCase):
 
 	def click(self, session, value):
 		q = self.state(session)["pending"]
-		return chat.send_message(session=session, action=json.dumps({"question_id": q["id"], "value": value, "label": value}))
+		return chat.send_message(
+			session=session, action=json.dumps({"question_id": q["id"], "value": value, "label": value})
+		)
 
 	# ---- fresh conversations ---------------------------------------------------------------------
 	def test_fresh_browser_starts_its_own_conversation(self):
@@ -85,11 +104,15 @@ class TestChatSessions(IntegrationTestCase):
 		r = chat.new_conversation()
 		second = r["session"]
 		self.assertNotEqual(second, first)
-		self.assertEqual([(m["role"], m.get("text")) for m in r["messages"]], [("assistant", r["messages"][0]["text"])])  # greeting only
+		self.assertEqual(
+			[(m["role"], m.get("text")) for m in r["messages"]], [("assistant", r["messages"][0]["text"])]
+		)  # greeting only
 		self.assertNotIn("create purchase order", json.dumps(r))
 		self.assertEqual(self.state(second).get("forms") or [], [])
 		self.assertIsNone(self.state(second).get("pending"))
-		self.assertEqual((self.messages(first), self.state(first)), (old_messages, old_state))  # untouched, pending work kept
+		self.assertEqual(
+			(self.messages(first), self.state(first)), (old_messages, old_state)
+		)  # untouched, pending work kept
 		self.assertEqual(frappe.db.get_value("AI Chat Session", first, "status"), "Open")
 		self.assertIn(first, {c["session"] for c in chat.list_conversations()})  # still in the history
 
@@ -99,7 +122,9 @@ class TestChatSessions(IntegrationTestCase):
 		fresh = chat.get_session()  # a page that has no conversation yet
 		self.assertNotEqual(fresh["session"], older)
 		self.assertEqual(len(fresh["messages"]), 1)  # only the greeting
-		self.assertEqual(chat.get_session(fresh["session"])["session"], fresh["session"])  # the page keeps its own
+		self.assertEqual(
+			chat.get_session(fresh["session"])["session"], fresh["session"]
+		)  # the page keeps its own
 
 	def test_polling_and_rerendering_do_not_create_conversations(self):
 		s = chat.get_session()["session"]
@@ -118,12 +143,16 @@ class TestChatSessions(IntegrationTestCase):
 		chat.send_message(session=first, text="create purchase order")  # asks for the supplier
 		second = chat.new_conversation()["session"]
 		chat.send_message(session=second, text="create purchase receipt")
-		frappe.db.set_value("AI Chat Session", first, "last_activity", add_days(now_datetime(), -(S.EXPIRY_DAYS + 1)))
+		frappe.db.set_value(
+			"AI Chat Session", first, "last_activity", add_days(now_datetime(), -(S.EXPIRY_DAYS + 1))
+		)
 		S.cleanup_expired_sessions()  # the first conversation expires while a page still shows it
 		before = {s: (self.messages(s), self.state(s)) for s in (first, second)}
 		r = chat.send_message(session=first, text=self.supplier, client_id="late-1")
 		self.assertEqual((r["closed"], r["messages"], r["session"]), (True, [], first))
-		self.assertEqual({s: (self.messages(s), self.state(s)) for s in (first, second)}, before)  # neither conversation changed
+		self.assertEqual(
+			{s: (self.messages(s), self.state(s)) for s in (first, second)}, before
+		)  # neither conversation changed
 		self.assertEqual(chat.poll(session=first, since=0)["messages"], [])  # a late poll gets nothing either
 		self.assertTrue(chat.poll(session=first, since=0)["closed"])
 
@@ -133,13 +162,17 @@ class TestChatSessions(IntegrationTestCase):
 		old_question = self.state(first)["pending"]
 		second = chat.new_conversation()["session"]
 		# a button of the old conversation's question is not an answer in the new one
-		r = chat.send_message(session=second, action=json.dumps({"question_id": old_question["id"], "value": self.supplier}))
+		r = chat.send_message(
+			session=second, action=json.dumps({"question_id": old_question["id"], "value": self.supplier})
+		)
 		self.assertIn("That question is no longer active.", r["messages"][-1]["text"])
 		self.assertEqual(self.state(second).get("forms") or [], [])
 		# reopening the first conversation from the history resumes its pending question, and the answer lands there
 		r = chat.open_conversation(first)
 		self.assertEqual((r["session"], r["pending_id"]), (first, old_question["id"]))
-		self.assertEqual(frappe.db.get_value("AI Chat Session", second, "status"), "Open")  # the other page is unaffected
+		self.assertEqual(
+			frappe.db.get_value("AI Chat Session", second, "status"), "Open"
+		)  # the other page is unaffected
 		self.click(first, self.supplier)
 		self.assertEqual(self.state(first)["forms"][-1]["values"]["supplier"], self.supplier)
 		self.assertEqual(self.state(second).get("forms") or [], [])
@@ -170,7 +203,9 @@ class TestChatSessions(IntegrationTestCase):
 		used = chat.get_session()["session"]
 		chat.send_message(session=used, text="create purchase order")
 		image_only = chat.get_session()["session"]
-		chat.send_message(session=image_only, file_url="/private/files/not-an-upload.png")  # no text, refused attachment
+		chat.send_message(
+			session=image_only, file_url="/private/files/not-an-upload.png"
+		)  # no text, refused attachment
 		day_ago = add_days(now_datetime(), -2)
 		for s in (empty, used, image_only):
 			frappe.db.set_value("AI Chat Session", s, "last_activity", day_ago)
@@ -183,7 +218,9 @@ class TestChatSessions(IntegrationTestCase):
 	def test_expired_conversations_are_not_listed_or_reopened(self):
 		old = chat.new_conversation()["session"]
 		chat.new_conversation()
-		frappe.db.set_value("AI Chat Session", old, "last_activity", add_days(now_datetime(), -(S.EXPIRY_DAYS + 1)))
+		frappe.db.set_value(
+			"AI Chat Session", old, "last_activity", add_days(now_datetime(), -(S.EXPIRY_DAYS + 1))
+		)
 		self.assertNotIn(old, {r["session"] for r in chat.list_conversations()})
 		with self.assertRaises(frappe.PermissionError):
 			chat.open_conversation(old)
@@ -206,7 +243,9 @@ class TestChatSessions(IntegrationTestCase):
 			self.assertEqual(str(ctx.exception), "Conversation not found.", name)
 		with self.assertRaises(frappe.PermissionError) as ctx:
 			chat.send_message(session="no-such-session", text="hello")
-		self.assertEqual(str(ctx.exception), "Conversation not found.")  # same answer: existence isn't revealed
+		self.assertEqual(
+			str(ctx.exception), "Conversation not found."
+		)  # same answer: existence isn't revealed
 		self.as_user("a")
 		self.assertEqual((self.messages(mine), self.state(mine)), before)
 

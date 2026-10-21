@@ -20,7 +20,14 @@ class OpenAIProvider(LLMProvider):
 	TIMEOUT_SECONDS = 90  # per attempt
 	MAX_RETRIES = 2  # SDK default when max_retries is not given (408/409/429/5xx and connection errors)
 
-	def __init__(self, api_key: str, base_url: str = None, model: str = "gpt-4o", provider_name: str = None, max_retries: int | None = None):
+	def __init__(
+		self,
+		api_key: str,
+		base_url: str | None = None,
+		model: str = "gpt-4o",
+		provider_name: str | None = None,
+		max_retries: int | None = None,
+	):
 		self.model = model
 		self.provider_name = provider_name or "openai-compatible"
 		self._requests = 0
@@ -66,13 +73,24 @@ class OpenAIProvider(LLMProvider):
 			)
 		except Exception as exc:
 			error = classify(exc)
-			log_ai_event(**meta, status="error", category=error.category, http_status=error.status_code or self._last_status,
-				elapsed_ms=self._elapsed(started), retries=max(0, self._requests - 1))
+			log_ai_event(
+				**meta,
+				status="error",
+				category=error.category,
+				http_status=error.status_code or self._last_status,
+				elapsed_ms=self._elapsed(started),
+				retries=max(0, self._requests - 1),
+			)
 			raise error from None
 
 		usage = getattr(response, "usage", None)
-		meta.update(http_status=self._last_status, elapsed_ms=self._elapsed(started), retries=max(0, self._requests - 1),
-			tokens_in=getattr(usage, "prompt_tokens", None), tokens_out=getattr(usage, "completion_tokens", None))
+		meta.update(
+			http_status=self._last_status,
+			elapsed_ms=self._elapsed(started),
+			retries=max(0, self._requests - 1),
+			tokens_in=getattr(usage, "prompt_tokens", None),
+			tokens_out=getattr(usage, "completion_tokens", None),
+		)
 
 		content = response.choices[0].message.content if response.choices else None
 		try:
@@ -104,12 +122,24 @@ class OpenAIProvider(LLMProvider):
 			)
 		except Exception as exc:
 			error = classify(exc)
-			log_ai_event(**meta, status="error", category=error.category, limit=error.limit, http_status=error.status_code or self._last_status,
-				elapsed_ms=self._elapsed(started), retries=max(0, self._requests - 1))
+			log_ai_event(
+				**meta,
+				status="error",
+				category=error.category,
+				limit=error.limit,
+				http_status=error.status_code or self._last_status,
+				elapsed_ms=self._elapsed(started),
+				retries=max(0, self._requests - 1),
+			)
 			raise error from None
 		usage = getattr(response, "usage", None)
-		meta.update(http_status=self._last_status, elapsed_ms=self._elapsed(started), retries=max(0, self._requests - 1),
-			tokens_in=getattr(usage, "prompt_tokens", None), tokens_out=getattr(usage, "completion_tokens", None))
+		meta.update(
+			http_status=self._last_status,
+			elapsed_ms=self._elapsed(started),
+			retries=max(0, self._requests - 1),
+			tokens_in=getattr(usage, "prompt_tokens", None),
+			tokens_out=getattr(usage, "completion_tokens", None),
+		)
 		content = response.choices[0].message.content if response.choices else None
 		try:
 			data = json.loads(content or "")
@@ -117,7 +147,9 @@ class OpenAIProvider(LLMProvider):
 			data = None
 		if not isinstance(data, dict):
 			log_ai_event(**meta, status="error", category="invalid_response")
-			raise AIProviderError("invalid_response", status_code=self._last_status, failed_generation=content)
+			raise AIProviderError(
+				"invalid_response", status_code=self._last_status, failed_generation=content
+			)
 		log_ai_event(**meta, status="ok")
 		return data
 

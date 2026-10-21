@@ -35,8 +35,15 @@ USER_MESSAGES = {
 _CREDIT_CODES = ("insufficient_quota", "insufficient_credits", "billing_hard_limit_reached")
 _MINUTE_HINTS = ("per minute", "(tpm)", "(rpm)", "per second", "(tps)", "(rps)")
 _DAILY_HINTS = ("per day", "perday", "(tpd)", "(rpd)", "daily", "per month", "permonth", "monthly")
-_CREDIT_HINTS = ("exceeded your current quota", "insufficient quota", "insufficient credits", "out of credits",
-	"credit balance", "no credits", "requires more credits")
+_CREDIT_HINTS = (
+	"exceeded your current quota",
+	"insufficient quota",
+	"insufficient credits",
+	"out of credits",
+	"credit balance",
+	"no credits",
+	"requires more credits",
+)
 
 
 class AIProviderError(Exception):
@@ -168,8 +175,16 @@ def rate_limit_category(text, code=""):
 
 
 # Context-window / per-request token errors (the request itself is too big; retrying the same request can't help).
-_TOO_LARGE_HINTS = ("context length", "context_length", "maximum context", "too many tokens", "reduce the length", "request too large",
-	"reduce your message size", "prompt is too long")
+_TOO_LARGE_HINTS = (
+	"context length",
+	"context_length",
+	"maximum context",
+	"too many tokens",
+	"reduce the length",
+	"request too large",
+	"reduce your message size",
+	"prompt is too long",
+)
 
 
 def rate_limit_kind(text, code=""):
@@ -203,7 +218,9 @@ def _from_status(status, text, code=""):
 		category = "config"  # unknown model or endpoint
 	elif status == 408:
 		category = "timeout"
-	elif status == 400 and any(h in text for h in ("json_validate_failed", "failed_generation", "failed to generate json")):
+	elif status == 400 and any(
+		h in text for h in ("json_validate_failed", "failed_generation", "failed to generate json")
+	):
 		category = "invalid_response"  # the model produced invalid JSON (Groq JSON mode); retrying may help
 	elif status in (400, 413, 415, 422):
 		category = "bad_request"
@@ -231,7 +248,20 @@ def get_ai_logger():
 	return logger
 
 
-_SAFE_FIELDS = ("corr", "stage", "provider", "model", "status", "category", "limit", "http_status", "elapsed_ms", "retries", "tokens_in", "tokens_out")
+_SAFE_FIELDS = (
+	"corr",
+	"stage",
+	"provider",
+	"model",
+	"status",
+	"category",
+	"limit",
+	"http_status",
+	"elapsed_ms",
+	"retries",
+	"tokens_in",
+	"tokens_out",
+)
 
 
 def log_ai_event(**fields):
@@ -260,5 +290,9 @@ def log_safe_error(title, exc, reference_doctype=None, reference_name=None):
 	import frappe
 
 	frames = "".join(traceback.format_tb(exc.__traceback__)) if exc.__traceback__ else ""
-	frappe.log_error(title=title, message=f"{frames}{type(exc).__name__} (message omitted: may contain document data)",
-		reference_doctype=reference_doctype, reference_name=reference_name)
+	frappe.log_error(
+		title=title,
+		message=f"{frames}{type(exc).__name__} (message omitted: may contain document data)",
+		reference_doctype=reference_doctype,
+		reference_name=reference_name,
+	)

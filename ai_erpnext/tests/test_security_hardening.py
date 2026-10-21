@@ -25,13 +25,27 @@ APP = Path(__file__).resolve().parents[1]
 
 def make_user(email, roles, permissions=()):
 	if not frappe.db.exists("User", email):
-		frappe.get_doc({"doctype": "User", "email": email, "first_name": email.split("@")[0], "send_welcome_email": 0,
-			"roles": [{"role": r} for r in roles]}).insert(ignore_permissions=True)
+		frappe.get_doc(
+			{
+				"doctype": "User",
+				"email": email,
+				"first_name": email.split("@")[0],
+				"send_welcome_email": 0,
+				"roles": [{"role": r} for r in roles],
+			}
+		).insert(ignore_permissions=True)
 	for allow, value in permissions:
 		if frappe.db.exists("User Permission", {"user": email, "allow": allow, "for_value": value}):
 			continue
-		frappe.get_doc({"doctype": "User Permission", "user": email, "allow": allow, "for_value": value,
-			"apply_to_all_doctypes": 1 if allow == "Company" else 0}).insert(ignore_permissions=True)
+		frappe.get_doc(
+			{
+				"doctype": "User Permission",
+				"user": email,
+				"allow": allow,
+				"for_value": value,
+				"apply_to_all_doctypes": 1 if allow == "Company" else 0,
+			}
+		).insert(ignore_permissions=True)
 	frappe.cache.delete_value("user_permissions")
 	return email
 
@@ -41,29 +55,103 @@ class SecurityCase(IntegrationTestCase):
 	def setUpClass(cls):
 		super().setUpClass()
 		frappe.set_user("Administrator")
-		currency = frappe.db.get_value("Company", frappe.db.get_single_value("Global Defaults", "default_company"), "default_currency") or "INR"
+		currency = (
+			frappe.db.get_value(
+				"Company",
+				frappe.db.get_single_value("Global Defaults", "default_company"),
+				"default_currency",
+			)
+			or "INR"
+		)
 		country = frappe.db.get_single_value("System Settings", "country") or "India"
 		for key, name in COMPANIES.items():
 			if not frappe.db.exists("Company", name):
-				frappe.get_doc({"doctype": "Company", "company_name": name, "abbr": f"AIS{key}", "default_currency": currency, "country": country,
-					"create_chart_of_accounts_based_on": "Standard Template", "chart_of_accounts": "Standard"}).insert()
+				frappe.get_doc(
+					{
+						"doctype": "Company",
+						"company_name": name,
+						"abbr": f"AIS{key}",
+						"default_currency": currency,
+						"country": country,
+						"create_chart_of_accounts_based_on": "Standard Template",
+						"chart_of_accounts": "Standard",
+					}
+				).insert()
 		group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
 		territory = frappe.db.get_value("Territory", {"is_group": 0}, "name")
-		cls.customer = frappe.get_doc({"doctype": "Customer", "customer_name": "AIS Hidden Buyer", "customer_group": group, "territory": territory,
-			"default_currency": "USD"}).insert().name
-		cls.other_customer = frappe.get_doc({"doctype": "Customer", "customer_name": "AIS Visible Buyer", "customer_group": group, "territory": territory}).insert().name
+		cls.customer = (
+			frappe.get_doc(
+				{
+					"doctype": "Customer",
+					"customer_name": "AIS Hidden Buyer",
+					"customer_group": group,
+					"territory": territory,
+					"default_currency": "USD",
+				}
+			)
+			.insert()
+			.name
+		)
+		cls.other_customer = (
+			frappe.get_doc(
+				{
+					"doctype": "Customer",
+					"customer_name": "AIS Visible Buyer",
+					"customer_group": group,
+					"territory": territory,
+				}
+			)
+			.insert()
+			.name
+		)
 		ig = frappe.db.get_value("Item Group", {"is_group": 0}, "name")
 		for code in ("AIS-ITEM", "AIS-OTHER"):
-			frappe.get_doc({"doctype": "Item", "item_code": code, "item_name": code, "item_group": ig, "stock_uom": "Nos", "is_stock_item": 0,
-				"is_sales_item": 1, "is_purchase_item": 1}).insert()
-		frappe.get_doc({"doctype": "Item Price", "item_code": "AIS-ITEM", "price_list": "Standard Selling", "price_list_rate": 12, "selling": 1}).insert()
+			frappe.get_doc(
+				{
+					"doctype": "Item",
+					"item_code": code,
+					"item_name": code,
+					"item_group": ig,
+					"stock_uom": "Nos",
+					"is_stock_item": 0,
+					"is_sales_item": 1,
+					"is_purchase_item": 1,
+				}
+			).insert()
+		frappe.get_doc(
+			{
+				"doctype": "Item Price",
+				"item_code": "AIS-ITEM",
+				"price_list": "Standard Selling",
+				"price_list_rate": 12,
+				"selling": 1,
+			}
+		).insert()
 		cls.invoices = {}
 		for key in COMPANIES:
-			cls.invoices[key] = frappe.get_doc({"doctype": "Sales Invoice", "customer": cls.customer, "company": COMPANIES[key],
-				"posting_date": frappe.utils.add_days(frappe.utils.nowdate(), -3), "set_posting_time": 1, "due_date": frappe.utils.add_days(frappe.utils.nowdate(), -3),
-				"items": [{"item_code": "AIS-ITEM", "qty": 1, "rate": 100}]}).insert().name
-		cls.sm_a = make_user("ais-sm-a@example.com", ["System Manager", "Accounts User"], [("Company", COMPANIES["A"])])
-		cls.sm_ab = make_user("ais-sm-ab@example.com", ["System Manager", "Accounts User"], [("Company", COMPANIES["A"]), ("Company", COMPANIES["B"])])
+			cls.invoices[key] = (
+				frappe.get_doc(
+					{
+						"doctype": "Sales Invoice",
+						"customer": cls.customer,
+						"company": COMPANIES[key],
+						"posting_date": frappe.utils.add_days(frappe.utils.nowdate(), -3),
+						"set_posting_time": 1,
+						"due_date": frappe.utils.add_days(frappe.utils.nowdate(), -3),
+						"items": [{"item_code": "AIS-ITEM", "qty": 1, "rate": 100}],
+					}
+				)
+				.insert()
+				.name
+			)
+		cls.sm_a = make_user(
+			"ais-sm-a@example.com", ["System Manager", "Accounts User"], [("Company", COMPANIES["A"])]
+		)
+		cls.sm_ab = make_user(
+			"ais-sm-ab@example.com",
+			["System Manager", "Accounts User"],
+			[("Company", COMPANIES["A"]), ("Company", COMPANIES["B"])],
+		)
 		cls.sm_2 = make_user("ais-sm-2@example.com", ["System Manager"])
 
 	def setUp(self):
@@ -76,7 +164,9 @@ class SecurityCase(IntegrationTestCase):
 
 	def drop_permission(self, user, company):
 		frappe.set_user("Administrator")
-		for name in frappe.get_all("User Permission", filters={"user": user, "allow": "Company", "for_value": company}, pluck="name"):
+		for name in frappe.get_all(
+			"User Permission", filters={"user": user, "allow": "Company", "for_value": company}, pluck="name"
+		):
 			frappe.delete_doc("User Permission", name, ignore_permissions=True, force=True)
 		frappe.cache.delete_value("user_permissions")
 
@@ -91,8 +181,14 @@ class TestConversationHistory(SecurityCase):
 		# fresh users per test: permissions are changed during the tests and the transaction is only rolled back per class
 		TestConversationHistory.counter += 1
 		n = TestConversationHistory.counter
-		self.u_a = make_user(f"ais-h{n}-a@example.com", ["System Manager", "Accounts User"], [("Company", COMPANIES["A"])])
-		self.u_ab = make_user(f"ais-h{n}-ab@example.com", ["System Manager", "Accounts User"], [("Company", COMPANIES["A"]), ("Company", COMPANIES["B"])])
+		self.u_a = make_user(
+			f"ais-h{n}-a@example.com", ["System Manager", "Accounts User"], [("Company", COMPANIES["A"])]
+		)
+		self.u_ab = make_user(
+			f"ais-h{n}-ab@example.com",
+			["System Manager", "Accounts User"],
+			[("Company", COMPANIES["A"]), ("Company", COMPANIES["B"])],
+		)
 
 	def ask(self, user, plan, text="show them"):
 		frappe.set_user(user)
@@ -102,7 +198,12 @@ class TestConversationHistory(SecurityCase):
 		return session
 
 	def listing(self):
-		return {"doctype": "Sales Invoice", "operation": "list", "filters": {"party": "AIS Hidden"}, "limit": 20}
+		return {
+			"doctype": "Sales Invoice",
+			"operation": "list",
+			"filters": {"party": "AIS Hidden"},
+			"limit": 20,
+		}
 
 	def reopen(self, user, session):
 		frappe.set_user(user)
@@ -115,7 +216,9 @@ class TestConversationHistory(SecurityCase):
 		session = self.ask(self.u_ab, self.listing())
 		msg = self.result_message(self.reopen(self.u_ab, session))
 		self.assertEqual({r["_name"] for r in msg["card"]["rows"]}, set(self.invoices.values()))
-		self.assertTrue(all("ref" not in m for m in self.reopen(self.u_ab, session)))  # internal references never reach the browser
+		self.assertTrue(
+			all("ref" not in m for m in self.reopen(self.u_ab, session))
+		)  # internal references never reach the browser
 
 	def test_a_company_that_is_no_longer_permitted_is_removed_from_the_history(self):
 		session = self.ask(self.u_ab, self.listing())
@@ -137,8 +240,13 @@ class TestConversationHistory(SecurityCase):
 		self.assertNotIn(self.invoices["A"], json.dumps(msgs))
 
 	def test_record_details_are_withheld_when_the_record_is_no_longer_readable(self):
-		session = self.ask(self.u_a, {"doctype": "Sales Invoice", "operation": "details", "filters": {"name": self.invoices["A"]}})
-		self.assertEqual(self.result_message(self.reopen(self.u_a, session))["card"]["name"], self.invoices["A"])
+		session = self.ask(
+			self.u_a,
+			{"doctype": "Sales Invoice", "operation": "details", "filters": {"name": self.invoices["A"]}},
+		)
+		self.assertEqual(
+			self.result_message(self.reopen(self.u_a, session))["card"]["name"], self.invoices["A"]
+		)
 		self.drop_permission(self.u_a, COMPANIES["A"])
 		make_user(self.u_a, [], [("Company", COMPANIES["B"])])
 		msg = self.result_message(self.reopen(self.u_a, session))
@@ -146,11 +254,20 @@ class TestConversationHistory(SecurityCase):
 		self.assertNotIn("card", msg)
 
 	def test_aggregate_results_need_the_doctype_to_stay_readable(self):
-		session = self.ask(self.u_ab, {"doctype": "Sales Invoice", "operation": "aggregate", "aggregate": {"fn": "sum", "field": "grand_total"},
-			"filters": {"party": "AIS Hidden"}})
+		session = self.ask(
+			self.u_ab,
+			{
+				"doctype": "Sales Invoice",
+				"operation": "aggregate",
+				"aggregate": {"fn": "sum", "field": "grand_total"},
+				"filters": {"party": "AIS Hidden"},
+			},
+		)
 		msg = self.result_message(self.reopen(self.u_ab, session))
 		self.assertTrue(msg["card"]["rows"])
-		with mock.patch("frappe.has_permission", side_effect=lambda dt=None, ptype="read", *a, **k: dt != "Sales Invoice"):
+		with mock.patch(
+			"frappe.has_permission", side_effect=lambda dt=None, ptype="read", *a, **k: dt != "Sales Invoice"
+		):
 			msg = self.result_message(chat.open_conversation(session)["messages"])
 		self.assertEqual(msg["text"], history.SAFE_TEXT)
 
@@ -188,14 +305,20 @@ class TestConversationHistory(SecurityCase):
 		self.drop_permission(self.u_ab, COMPANIES["B"])
 		msgs = self.reopen(self.u_ab, session)
 		self.assertEqual(msgs[0]["role"], "assistant")  # the greeting
-		self.assertIn("AIS Hidden", next(m for m in msgs if m["role"] == "user")["text"])  # the user's own words stay
+		self.assertIn(
+			"AIS Hidden", next(m for m in msgs if m["role"] == "user")["text"]
+		)  # the user's own words stay
 
 	def test_a_user_who_lost_chat_access_gets_nothing_from_stored_conversations(self):
 		session = self.ask(self.u_ab, self.listing())
 		frappe.set_user("Administrator")
 		frappe.get_doc("User", self.u_ab).remove_roles("System Manager")
 		frappe.clear_cache(user=self.u_ab)
-		for call in (lambda: chat.open_conversation(session), lambda: chat.get_session(session), lambda: chat.poll(session=session)):
+		for call in (
+			lambda: chat.open_conversation(session),
+			lambda: chat.get_session(session),
+			lambda: chat.poll(session=session),
+		):
 			frappe.set_user(self.u_ab)
 			with self.assertRaises(frappe.PermissionError):
 				call()
@@ -207,10 +330,21 @@ class TestConversationHistory(SecurityCase):
 			chat.open_conversation(session)
 
 	def test_recheck_helper_passes_new_messages_and_messages_without_data(self):
-		msgs = [{"id": 1, "role": "assistant", "text": "Hi"}, {"id": 2, "role": "user", "text": "x"},
-			{"id": 3, "role": "assistant", "text": "fresh", "source": "erpnext", "ref": {"doctype": "Sales Invoice", "names": ["NOPE"]}}]
+		msgs = [
+			{"id": 1, "role": "assistant", "text": "Hi"},
+			{"id": 2, "role": "user", "text": "x"},
+			{
+				"id": 3,
+				"role": "assistant",
+				"text": "fresh",
+				"source": "erpnext",
+				"ref": {"doctype": "Sales Invoice", "names": ["NOPE"]},
+			},
+		]
 		out = history.recheck(msgs, replay_upto=2)
-		self.assertEqual([m["text"] for m in out], ["Hi", "x", "fresh"])  # id 3 was produced by this very request
+		self.assertEqual(
+			[m["text"] for m in out], ["Hi", "x", "fresh"]
+		)  # id 3 was produced by this very request
 		self.assertTrue(all("ref" not in m for m in out))
 		again = history.recheck(msgs, replay_upto=3)
 		self.assertEqual(again[2]["text"], history.SAFE_TEXT)  # a stored result naming an unreadable record
@@ -219,8 +353,22 @@ class TestConversationHistory(SecurityCase):
 class TestAIDocumentEntryOwnership(SecurityCase):
 	def make_entry(self, user):
 		frappe.set_user(user)
-		extracted = {"invoice_number": "SECRET-INV-1", "total_amount": 123.45, "supplier_name": "Private Supplier"}
-		return frappe.get_doc({"doctype": "AI Document Entry", "status": "Processed", "extracted_data": json.dumps(extracted)}).insert().name
+		extracted = {
+			"invoice_number": "SECRET-INV-1",
+			"total_amount": 123.45,
+			"supplier_name": "Private Supplier",
+		}
+		return (
+			frappe.get_doc(
+				{
+					"doctype": "AI Document Entry",
+					"status": "Processed",
+					"extracted_data": json.dumps(extracted),
+				}
+			)
+			.insert()
+			.name
+		)
 
 	def test_owner_has_access_other_system_managers_do_not(self):
 		entry = self.make_entry(self.sm_a)
@@ -254,8 +402,11 @@ class TestAIDocumentEntryOwnership(SecurityCase):
 				call(entry)
 			with self.assertRaises(frappe.PermissionError, msg=name) as missing:
 				call("AI-DOC-DOES-NOT-EXIST")
-			self.assertEqual(str(foreign.exception), str(missing.exception), name)  # existence is not revealed
-		with self.assertRaises(frappe.PermissionError):
+			self.assertEqual(
+				str(foreign.exception), str(missing.exception), name
+			)  # existence is not revealed
+		# a non-name is refused before the function runs (Frappe validates the endpoint's type hints) or by get_entry
+		with self.assertRaises((frappe.PermissionError, TypeError)):
 			mapping.get_review(["not", "a", "name"])
 
 	def test_the_entry_stays_unchanged_after_a_refused_call(self):
@@ -297,8 +448,20 @@ class TestEndpointMethods(SecurityCase):
 		return frappe.allowed_http_methods_for_whitelisted_func.get(fn)
 
 	def test_state_changing_endpoints_accept_post_only(self):
-		for fn in (mapping.get_review, mapping.remap, mapping.apply_corrections, validation.validate_entry, creation.create_document,
-			extraction.retry_extraction, chat.get_session, chat.send_message, chat.poll, chat.new_conversation, chat.list_conversations, chat.open_conversation):
+		for fn in (
+			mapping.get_review,
+			mapping.remap,
+			mapping.apply_corrections,
+			validation.validate_entry,
+			creation.create_document,
+			extraction.retry_extraction,
+			chat.get_session,
+			chat.send_message,
+			chat.poll,
+			chat.new_conversation,
+			chat.list_conversations,
+			chat.open_conversation,
+		):
 			self.assertEqual(self.methods(fn), ["POST"], fn.__name__)
 
 	def test_every_whitelisted_endpoint_of_the_app_declares_its_methods(self):
@@ -314,8 +477,11 @@ class TestEndpointMethods(SecurityCase):
 class TestPermissionAwareLookups(SecurityCase):
 	def restricted_user(self):
 		"""A System Manager whose User Permissions allow only the other item / customer."""
-		return make_user("ais-restricted@example.com", ["System Manager", "Sales User", "Accounts User"],
-			[("Item", "AIS-OTHER"), ("Customer", self.other_customer)])
+		return make_user(
+			"ais-restricted@example.com",
+			["System Manager", "Sales User", "Accounts User"],
+			[("Item", "AIS-OTHER"), ("Customer", self.other_customer)],
+		)
 
 	def test_price_suggestions_respect_item_permissions(self):
 		form = {"doctype": "Sales Order"}
@@ -333,7 +499,9 @@ class TestPermissionAwareLookups(SecurityCase):
 		self.assertEqual(forms._exists_named("Customer", "customer_name", "AIS Hidden Buyer"), self.customer)
 		frappe.set_user(self.restricted_user())
 		self.assertIsNone(forms._exists_named("Customer", "customer_name", "AIS Hidden Buyer"))
-		self.assertEqual(forms._exists_named("Customer", "customer_name", "AIS Visible Buyer"), self.other_customer)
+		self.assertEqual(
+			forms._exists_named("Customer", "customer_name", "AIS Visible Buyer"), self.other_customer
+		)
 
 	def test_customer_default_currency_is_not_read_for_hidden_customers(self):
 		from ai_erpnext.mapping.currency import CurrencyMatcher
@@ -352,7 +520,12 @@ class TestPermissionAwareLookups(SecurityCase):
 		self.assertTrue(access.readable_exists("Customer", self.other_customer))
 		self.assertIsNone(access.readable_value("Customer", self.customer, "default_currency"))
 		self.assertIsNone(access.readable_value("Customer", self.other_customer, "no_such_field"))
-		self.assertEqual(access.readable_names("Customer", {"name": ["in", [self.customer, self.other_customer]]}, limit=5), [self.other_customer])
+		self.assertEqual(
+			access.readable_names(
+				"Customer", {"name": ["in", [self.customer, self.other_customer]]}, limit=5
+			),
+			[self.other_customer],
+		)
 		self.assertEqual(access.readable_names("Customer", {"name": "x"}, limit=1), [])
 
 
@@ -360,22 +533,44 @@ class TestDraftOnly(SecurityCase):
 	def test_no_lifecycle_call_exists_in_application_code(self):
 		"""No submit/cancel/delete/amend anywhere in the app (the tests excepted); the only permission bypass is the extraction job's own result save."""
 		found = []
-		skip = {"run_tests2.py", "set_api_key.py", "check_provider.py", "update_provider.py", "setup_provider.py", "fix_client_script.py"}
+		skip = {
+			"run_tests2.py",
+			"set_api_key.py",
+			"check_provider.py",
+			"update_provider.py",
+			"setup_provider.py",
+			"fix_client_script.py",
+		}
 		for path in APP.rglob("*.py"):
 			if "tests" in path.parts or path.name in skip:
 				continue
-			for n, line in enumerate(path.read_text().splitlines(), start=1):
+			for line in path.read_text().splitlines():
 				if "forms.cancel(" in line:  # cancels the chat's guided form, not a document
 					continue
-				if re.search(r"\.submit\(|\.cancel\(|docstatus\s*=\s*[12]\b|delete_doc|\.amend\(|ignore_permissions\s*=\s*(True|1)", line):
-					found.append(f"{path.relative_to(APP)}:{n}")
-		self.assertEqual(found, ["pipeline/controller.py:129"])
+				if re.search(
+					r"\.submit\(|\.cancel\(|docstatus\s*=\s*[12]\b|delete_doc|\.amend\(|ignore_permissions\s*=\s*(True|1)",
+					line,
+				):
+					found.append(f"{path.relative_to(APP)}: {line.strip()}")
+		# exactly one hit: the extraction job saving its own AI Document Entry result
+		self.assertEqual(found, ["pipeline/controller.py: doc.save(ignore_permissions=True)"])
 
 	def test_model_supplied_lifecycle_fields_never_reach_insert(self):
 		frappe.set_user("Administrator")
-		form = {"doctype": "Sales Order", "values": {"customer": self.customer, "company": COMPANIES["A"], "docstatus": 1, "owner": "evil@example.com",
-			"transaction_date": frappe.utils.nowdate(), "delivery_date": frappe.utils.nowdate()},
-			"labels": {}, "items": [{"item_code": "AIS-ITEM", "qty": 1, "rate": 5, "docstatus": 1}], "extra": []}
+		form = {
+			"doctype": "Sales Order",
+			"values": {
+				"customer": self.customer,
+				"company": COMPANIES["A"],
+				"docstatus": 1,
+				"owner": "evil@example.com",
+				"transaction_date": frappe.utils.nowdate(),
+				"delivery_date": frappe.utils.nowdate(),
+			},
+			"labels": {},
+			"items": [{"item_code": "AIS-ITEM", "qty": 1, "rate": 5, "docstatus": 1}],
+			"extra": [],
+		}
 		ctx = mock.MagicMock()
 		ctx.st = {"forms": [form], "pending": None}
 		before = frappe.db.count("Sales Order")
@@ -387,17 +582,32 @@ class TestDraftOnly(SecurityCase):
 	def test_guided_creation_through_the_chat_stays_draft(self):
 		frappe.set_user("Administrator")
 		s = chat.new_conversation()["session"]
-		plan = {"mode": "create", "doctype": "Sales Order", "values": {"docstatus": 1, "owner": "evil@example.com", "workflow_state": "Approved"}, "items": []}
+		plan = {
+			"mode": "create",
+			"doctype": "Sales Order",
+			"values": {"docstatus": 1, "owner": "evil@example.com", "workflow_state": "Approved"},
+			"items": [],
+		}
 		with mock.patch(ROUTE, return_value=plan):
 			chat.send_message(session=s, text="create sales order and submit it")
 		state = json.loads(frappe.db.get_value(S.DOCTYPE, s, "state"))
-		self.assertTrue(all(k not in (state["forms"][0]["values"] if state.get("forms") else {}) for k in ("docstatus", "owner", "workflow_state")))
+		self.assertTrue(
+			all(
+				k not in (state["forms"][0]["values"] if state.get("forms") else {})
+				for k in ("docstatus", "owner", "workflow_state")
+			)
+		)
 
 	def test_masters_refuse_protected_fields(self):
 		from ai_erpnext.chat import masters
 
 		with self.assertRaises(frappe.ValidationError if False else Exception):
-			masters.create({"doctype": "Customer", "values": {"customer_name": "AIS Evil", "docstatus": 1, "owner": "evil@example.com"}})
+			masters.create(
+				{
+					"doctype": "Customer",
+					"values": {"customer_name": "AIS Evil", "docstatus": 1, "owner": "evil@example.com"},
+				}
+			)
 		self.assertFalse(frappe.db.exists("Customer", {"customer_name": "AIS Evil"}))
 
 
@@ -407,8 +617,10 @@ class TestLogging(SecurityCase):
 
 		lines = []
 		ctx = mock.MagicMock()
-		with mock.patch("ai_erpnext.chat.queries.execute", side_effect=RuntimeError("SECRET-CUSTOMER 123.45")), \
-			mock.patch("ai_erpnext.ai.errors.get_ai_logger") as logger:
+		with (
+			mock.patch("ai_erpnext.chat.queries.execute", side_effect=RuntimeError("SECRET-CUSTOMER 123.45")),
+			mock.patch("ai_erpnext.ai.errors.get_ai_logger") as logger,
+		):
 			logger.return_value.error.side_effect = lines.append
 			engine._run_query(ctx, {"doctype": "Customer", "operation": "list"})
 		self.assertTrue(lines)
@@ -420,10 +632,22 @@ class TestLogging(SecurityCase):
 	def test_source_does_not_log_prompts_responses_or_results(self):
 		offenders = []
 		for path in APP.rglob("*.py"):
-			if "tests" in path.parts or path.name in {"run_tests2.py", "set_api_key.py", "check_provider.py", "update_provider.py", "setup_provider.py"}:
+			if "tests" in path.parts or path.name in {
+				"run_tests2.py",
+				"set_api_key.py",
+				"check_provider.py",
+				"update_provider.py",
+				"setup_provider.py",
+			}:
 				continue
 			for n, line in enumerate(path.read_text().splitlines(), start=1):
-				if re.search(r"(logger|get_ai_logger\(\))\.\w+\(.*(prompt|response|result|extracted|content|messages|text\b)", line) and "category" not in line \
-					and "error_type" not in line:
+				if (
+					re.search(
+						r"(logger|get_ai_logger\(\))\.\w+\(.*(prompt|response|result|extracted|content|messages|text\b)",
+						line,
+					)
+					and "category" not in line
+					and "error_type" not in line
+				):
 					offenders.append(f"{path.relative_to(APP)}:{n}: {line.strip()[:100]}")
 		self.assertEqual(offenders, [])

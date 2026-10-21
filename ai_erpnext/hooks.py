@@ -187,6 +187,9 @@ permission_query_conditions = {"AI Document Entry": "ai_erpnext.permissions.perm
 # before_tests = "ai_erpnext.install.before_tests"
 before_tests = "ai_erpnext.tests.bootstrap.before_tests"
 
+# Whether the chat launcher is shown (a UI hint only; the chat endpoints check the permission themselves).
+boot_session = "ai_erpnext.boot.boot_session"
+
 # Extend DocType Class
 # ------------------------------
 #
@@ -277,7 +280,12 @@ before_tests = "ai_erpnext.tests.bootstrap.before_tests"
 after_migrate = ["ai_erpnext.setup_doctypes.after_migrate"]
 
 # Close and trim expired assistant conversations (runs when the scheduler is enabled).
-scheduler_events = {"daily": ["ai_erpnext.chat.session.cleanup_expired_sessions"]}
+scheduler_events = {
+	"daily": [
+		"ai_erpnext.chat.session.cleanup_expired_sessions",
+		"ai_erpnext.pipeline.retention.purge_resolved_entries",
+	]
+}
 
 # Other apps may add AI document definitions: list of modules calling
 # ai_erpnext.registry.document_registry.register() on import.

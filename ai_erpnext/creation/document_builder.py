@@ -19,7 +19,9 @@ class BaseDocumentBuilder:
 			if mapped.get(fieldname) not in (None, ""):
 				doc.set(fieldname, mapped[fieldname])
 		for row in mapped.get(d.items_table) or []:
-			doc.append(d.items_table, {f: row[f] for f in d.supported_item_fields if row.get(f) not in (None, "")})
+			doc.append(
+				d.items_table, {f: row[f] for f in d.supported_item_fields if row.get(f) not in (None, "")}
+			)
 		self.prepare(doc, mapped, context)
 		return doc
 

@@ -54,11 +54,29 @@ def field_info(doctype, fieldname):
 	if not doctype_exists(doctype):
 		return None
 	if fieldname in STANDARD:
-		return FieldInfo(fieldname, STANDARD[fieldname], fieldname.replace("_", " ").title() if fieldname != "name" else "ID", None, False, True, False, 0)
+		return FieldInfo(
+			fieldname,
+			STANDARD[fieldname],
+			fieldname.replace("_", " ").title() if fieldname != "name" else "ID",
+			None,
+			False,
+			True,
+			False,
+			0,
+		)
 	df = frappe.get_meta(doctype).get_field(fieldname)
 	if not df:
 		return None
-	return FieldInfo(df.fieldname, df.fieldtype, df.label or df.fieldname, df.options, bool(df.reqd), bool(df.read_only), bool(df.hidden), int(df.permlevel or 0))
+	return FieldInfo(
+		df.fieldname,
+		df.fieldtype,
+		df.label or df.fieldname,
+		df.options,
+		bool(df.reqd),
+		bool(df.read_only),
+		bool(df.hidden),
+		int(df.permlevel or 0),
+	)
 
 
 def is_submittable(doctype):
@@ -85,7 +103,12 @@ def select_options(doctype, fieldname):
 def child_doctype(doctype, table):
 	"""Child DocType behind a Table field of `doctype`, or None."""
 	info = field_info(doctype, table)
-	if info and info.fieldtype in ("Table", "Table MultiSelect") and info.options and doctype_exists(info.options):
+	if (
+		info
+		and info.fieldtype in ("Table", "Table MultiSelect")
+		and info.options
+		and doctype_exists(info.options)
+	):
 		return info.options
 	return None
 

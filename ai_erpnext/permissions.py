@@ -15,7 +15,9 @@ DOCTYPE = "AI Document Entry"
 
 def has_permission(doc, ptype=None, user=None, debug=False):
 	user = user or frappe.session.user
-	if doc.is_new() or ptype == "create":  # the owner is set on insert; role permissions already gated creation
+	if (
+		doc.is_new() or ptype == "create"
+	):  # the owner is set on insert; role permissions already gated creation
 		return True
 	return doc.owner == user
 

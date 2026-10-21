@@ -50,64 +50,64 @@ Editing, standard-report access and workflow actions are **not implemented for a
 
 ## Implemented DocTypes
 
-Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L linked records, S party summary, Cr creation (guided; Draft or saved-immediately), Co company policy, W workflow (none), Ed edit, Rp reports.
+Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L linked records, S party summary, Cr creation (guided; Draft or saved-immediately), Img image to Draft (the document's direction decides the target, see detection/direction.py), Co company policy, W workflow (none), Ed edit, Rp reports.
 
-| Module | DocType | R | D | F | A | C | L | S | Cr | Ed | Rp | W | Company policy | Tests |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Accounting | Account | T | I | I | I | n/a | I | n/a | - | - | - | - | required | data-backed: company, read |
-| Accounting | Cost Center | T | I | I | I | n/a | I | n/a | - | - | - | - | required | data-backed: company, read |
-| Accounting | Dunning | I | I | I | I | n/a | I | n/a | - | - | - | - | required | smoke only |
-| Accounting | GL Entry | T | - | I | T | n/a | I | n/a | - | - | - | - | required | data-backed: aggregate, company, read |
-| Accounting | Journal Entry | I | I | I | I | I | n/a | n/a | - | - | - | - | required | smoke only |
-| Accounting | Payment Entry | I | I | I | I | n/a | n/a | n/a | - | - | - | - | required | smoke only |
-| Accounting | Payment Request | I | I | I | I | n/a | n/a | n/a | - | - | - | - | required | smoke only |
-| Accounting | Purchase Invoice | I | I | I | I | I | I | n/a | PT | - | - | - | required | smoke only |
-| Accounting | Sales Invoice | T | T | T | T | T | T | n/a | PT | - | - | - | required | data-backed: aggregate, child, company, details, filter, link, read |
-| Assets | Asset | I | I | I | I | n/a | I | n/a | - | - | - | - | required | smoke only |
-| Assets | Asset Category | I | I | I | I | n/a | n/a | n/a | - | - | - | - | shared | smoke only |
-| Buying | Purchase Order | I | I | I | I | I | I | n/a | PT | - | - | - | required | smoke only |
-| Buying | Request for Quotation | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Buying | Supplier | T | I | I | I | n/a | I | I | PT | - | - | - | shared | data-backed: read |
-| Buying | Supplier Quotation | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| CRM | Lead | T | I | I | I | n/a | I | n/a | PT | - | - | - | optional | data-backed: company, read |
-| CRM | Opportunity | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| CRM | Prospect | I | I | I | I | n/a | I | n/a | - | - | - | - | required | smoke only |
-| Frappe framework | Contact | I | I | I | I | n/a | n/a | n/a | - | - | - | - | shared | smoke only |
-| Manufacturing | BOM | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Manufacturing | Job Card | I | I | I | I | n/a | I | n/a | - | - | - | - | required | smoke only |
-| Manufacturing | Production Plan | I | I | I | I | I | n/a | n/a | - | - | - | - | required | smoke only |
-| Manufacturing | Work Order | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Projects | Project | T | I | I | I | n/a | I | n/a | - | - | - | - | required | data-backed: company, read |
-| Projects | Task | T | I | I | T | n/a | I | n/a | - | - | - | - | optional | data-backed: aggregate, company, read |
-| Projects | Timesheet | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Selling | Customer | T | T | I | I | n/a | I | T | PT | - | - | - | shared | data-backed: company, details, read, summary |
-| Selling | Quotation | T | T | I | I | T | n/a | n/a | PT | - | - | - | required | data-backed: child, company, details, read |
-| Selling | Sales Order | I | I | I | I | I | I | n/a | PT | - | - | - | required | data-backed: summary |
-| Setup | Brand | I | I | I | I | n/a | n/a | n/a | - | - | - | - | shared | smoke only |
-| Setup | Customer Group | I | I | I | I | n/a | I | n/a | - | - | - | - | shared | smoke only |
-| Setup | Employee | T | I | I | I | n/a | n/a | n/a | - | - | - | - | required | data-backed: read |
-| Setup | Item Group | I | I | I | I | n/a | I | n/a | - | - | - | - | shared | smoke only |
-| Setup | Supplier Group | I | I | I | I | n/a | I | n/a | - | - | - | - | shared | smoke only |
-| Setup | Territory | T | I | I | I | n/a | I | n/a | - | - | - | - | shared | data-backed: company, read |
-| Stock | Batch | I | I | I | I | n/a | I | n/a | - | - | - | - | shared | smoke only |
-| Stock | Bin | T | - | I | T | n/a | I | n/a | - | - | - | - | optional | data-backed: aggregate, company, read |
-| Stock | Delivery Note | I | I | I | I | I | I | n/a | PT | - | - | - | required | smoke only |
-| Stock | Item | T | T | I | I | n/a | I | n/a | PT | - | - | - | shared | data-backed: details, read |
-| Stock | Item Price | I | I | I | I | n/a | I | n/a | - | - | - | - | shared | smoke only |
-| Stock | Material Request | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Stock | Pick List | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Stock | Price List | I | I | I | I | n/a | n/a | n/a | - | - | - | - | shared | smoke only |
-| Stock | Purchase Receipt | I | I | I | I | I | I | n/a | PT | - | - | - | required | smoke only |
-| Stock | Quality Inspection | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Stock | Serial No | I | I | I | I | n/a | I | n/a | - | - | - | - | required | smoke only |
-| Stock | Stock Entry | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Stock | Stock Ledger Entry | T | - | I | I | n/a | I | n/a | - | - | - | - | required | data-backed: read |
-| Stock | Stock Reconciliation | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Stock | Warehouse | T | I | I | I | n/a | I | n/a | - | - | - | - | required | data-backed: company, read |
-| Subcontracting | Subcontracting Order | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Subcontracting | Subcontracting Receipt | I | I | I | I | I | I | n/a | - | - | - | - | required | smoke only |
-| Support | Issue | T | I | I | I | n/a | I | n/a | PT | - | - | - | optional | data-backed: company, read |
-| Support | Warranty Claim | I | I | I | I | n/a | I | n/a | - | - | - | - | required | smoke only |
+| Module | DocType | R | D | F | A | C | L | S | Cr | Img | Ed | Rp | W | Company policy | Tests |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Accounting | Account | T | I | I | I | n/a | I | n/a | - | - | - | - | - | required | data-backed: company, read |
+| Accounting | Cost Center | T | I | I | I | n/a | I | n/a | - | - | - | - | - | required | data-backed: company, read |
+| Accounting | Dunning | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| Accounting | GL Entry | T | - | I | T | n/a | I | n/a | - | - | - | - | - | required | data-backed: aggregate, company, read |
+| Accounting | Journal Entry | T | I | T | I | T | n/a | n/a | - | - | - | - | - | required | data-backed: child, filter, read |
+| Accounting | Payment Entry | T | I | T | T | n/a | n/a | n/a | - | - | - | - | - | required | data-backed: aggregate, filter, read |
+| Accounting | Payment Request | I | I | I | I | n/a | n/a | n/a | - | - | - | - | - | required | smoke only |
+| Accounting | Purchase Invoice | T | T | T | I | I | I | n/a | PT | T | - | - | - | required | data-backed: company, details, filter, read |
+| Accounting | Sales Invoice | T | T | T | T | T | T | n/a | PT | T | - | - | - | required | data-backed: aggregate, child, company, details, filter, link, read |
+| Assets | Asset | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| Assets | Asset Category | I | I | I | I | n/a | n/a | n/a | - | - | - | - | - | shared | smoke only |
+| Buying | Purchase Order | I | I | I | I | I | I | n/a | PT | T | - | - | - | required | smoke only |
+| Buying | Request for Quotation | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| Buying | Supplier | T | I | I | I | n/a | I | T | PT | - | - | - | - | shared | data-backed: read, summary |
+| Buying | Supplier Quotation | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| CRM | Lead | T | I | I | I | n/a | I | n/a | PT | - | - | - | - | optional | data-backed: company, read |
+| CRM | Opportunity | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| CRM | Prospect | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| Frappe framework | Contact | I | I | I | I | n/a | n/a | n/a | - | - | - | - | - | shared | smoke only |
+| Manufacturing | BOM | I | T | I | I | I | I | n/a | - | T | - | - | - | required | data-backed: details |
+| Manufacturing | Job Card | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| Manufacturing | Production Plan | I | I | I | I | I | n/a | n/a | - | - | - | - | - | required | smoke only |
+| Manufacturing | Work Order | T | I | T | I | T | I | n/a | - | - | - | - | - | required | data-backed: child, filter, read |
+| Projects | Project | T | I | I | I | n/a | I | n/a | - | - | - | - | - | required | data-backed: company, read |
+| Projects | Task | T | I | I | T | n/a | I | n/a | - | - | - | - | - | optional | data-backed: aggregate, company, read |
+| Projects | Timesheet | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| Selling | Customer | T | T | I | I | n/a | I | T | PT | - | - | - | - | shared | data-backed: company, details, read, summary |
+| Selling | Quotation | T | T | I | I | T | n/a | n/a | PT | T | - | - | - | required | data-backed: child, company, details, read |
+| Selling | Sales Order | T | I | T | I | I | I | n/a | PT | T | - | - | - | required | data-backed: filter, read, summary |
+| Setup | Brand | I | I | I | I | n/a | n/a | n/a | - | - | - | - | - | shared | smoke only |
+| Setup | Customer Group | I | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
+| Setup | Employee | T | I | T | I | n/a | n/a | n/a | - | - | - | - | - | required | data-backed: filter, read |
+| Setup | Item Group | I | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
+| Setup | Supplier Group | I | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
+| Setup | Territory | T | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | data-backed: company, read |
+| Stock | Batch | I | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
+| Stock | Bin | T | - | T | T | n/a | I | n/a | - | - | - | - | - | optional | data-backed: aggregate, company, filter, read |
+| Stock | Delivery Note | I | I | I | I | I | I | n/a | PT | T | - | - | - | required | smoke only |
+| Stock | Item | T | T | I | I | n/a | I | n/a | PT | - | - | - | - | shared | data-backed: details, read |
+| Stock | Item Price | I | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
+| Stock | Material Request | I | I | I | I | I | I | n/a | PT | T | - | - | - | required | smoke only |
+| Stock | Pick List | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| Stock | Price List | I | I | I | I | n/a | n/a | n/a | - | - | - | - | - | shared | smoke only |
+| Stock | Purchase Receipt | I | I | I | I | I | I | n/a | PT | T | - | - | - | required | smoke only |
+| Stock | Quality Inspection | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| Stock | Serial No | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| Stock | Stock Entry | T | I | T | I | T | I | n/a | PT | - | - | - | - | required | data-backed: child, filter, read |
+| Stock | Stock Ledger Entry | T | - | T | I | n/a | I | n/a | - | - | - | - | - | required | data-backed: filter, read |
+| Stock | Stock Reconciliation | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| Stock | Warehouse | T | I | I | I | n/a | I | n/a | - | - | - | - | - | required | data-backed: company, read |
+| Subcontracting | Subcontracting Order | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| Subcontracting | Subcontracting Receipt | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| Support | Issue | T | I | I | I | n/a | I | n/a | PT | - | - | - | - | optional | data-backed: company, read |
+| Support | Warranty Claim | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
 
 ## Not implemented, blocked or not applicable
 
