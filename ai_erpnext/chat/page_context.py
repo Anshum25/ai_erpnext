@@ -385,13 +385,42 @@ def _report(ctx, raw):
 # --------------------------------------------------------------------------------------------
 # Questions about the page
 # --------------------------------------------------------------------------------------------
-_END = r"\s*[?.!]*\s*$"
+_END = r"\s*(?:please|pls)?\s*[?.!]*\s*$"
 _THIS = r"(?:this|the\s+current|the\s+open|current)"
-_VERB_EXPLAIN = r"(?:explain|summari[sz]e|describe|walk\s+me\s+through|tell\s+me\s+about|give\s+me\s+(?:an?\s+)?(?:summary|overview)\s+of|what(?:'s|\s+is)\s+(?:in|on))"
+# The open form's record: “this”, “the opened”, “my current”, “the currently open” (one determiner, then current/open words).
+_THIS_FORM = r"(?:(?:this|that|the|my)(?:\s+(?:currently\s+)?(?:current|open(?:ed)?))?|current(?:ly\s+open(?:ed)?)?|open(?:ed)?)"
+_POLITE = r"^\s*(?:(?:please|pls|kindly|can\s+you|could\s+you|would\s+you|hey|hi|ok(?:ay)?)[\s,]+)*"
+_ASK_NOUN = r"(?:summary|overview|details?|breakdown|explanation|description|rundown|recap)"
+_VERB_EXPLAIN = (
+	r"(?:explain(?:\s+(?:me|to\s+me))?|summari[sz]e|describe|walk\s+me\s+through|tell\s+me\s+(?:more\s+)?about|"
+	r"(?:(?:give|show|send|get)\s+me\s+|i\s+(?:want|need)\s+|let\s+me\s+see\s+)?(?:an?\s+|the\s+)?(?:quick\s+|short\s+|brief\s+|full\s+|complete\s+)?"
+	+ _ASK_NOUN
+	+ r"\s+(?:of|for|about|on)|what(?:'s|\s+is)\s+(?:in|on)|show\s+me|what(?:'s|\s+is))"
+)
 EXPLAIN_RE = re.compile(
-	r"^\s*(?:please\s+)?" + _VERB_EXPLAIN + r"\s+" + _THIS + r"(?:\s+(?P<noun>[a-z][a-z ]{0,30}?))?" + _END,
+	_POLITE + _VERB_EXPLAIN + r"\s+" + _THIS_FORM + r"(?:\s+(?P<noun>[a-z][a-z ]{0,30}?))?" + _END,
 	re.I,
 )
+# “this sales invoice summary”, “summary of this invoice” is EXPLAIN_RE; “open invoice details please”
+EXPLAIN_NOUN_FIRST_RE = re.compile(
+	_POLITE + _THIS_FORM + r"\s+(?P<noun>[a-z][a-z ]{0,30}?)(?:'s)?\s+" + _ASK_NOUN + _END, re.I
+)
+# Misspellings people type often (“summery”, “sumary”, “summerize”), made exact before any pattern is tried.
+_TYPOS = (
+	(re.compile(r"\bsumm?(?:[ae]r+|r)y\b", re.I), "summary"),
+	(re.compile(r"\bsumm?[ae]r+i([sz])e\b", re.I), r"summari\1e"),
+	(re.compile(r"\bover\s?veiw\b", re.I), "overview"),
+	(re.compile(r"\bdet(?:ail|ial)s?\b", re.I), "details"),
+	(re.compile(r"\bexpla(?:in|ine|n|ne)\b", re.I), "explain"),
+)
+
+
+def normalise(text):
+	for pattern, fixed in _TYPOS:
+		text = pattern.sub(fixed, text)
+	return text
+
+
 ITEMS_RE = re.compile(
 	r"^\s*(?:please\s+)?(?:explain|describe|summari[sz]e|show|list|what\s+are)\s+(?:these|the|this)\s+(?:\w+\s+)?(?P<table>items?|item\s+rows?|rows|lines?|line\s+items?|taxes|tax\s+rows?)"
 	r"(?:\s+(?:on|in|of)\s+" + _THIS + r"\s+[a-z ]{1,30})?" + _END,
@@ -460,7 +489,7 @@ ABOUT_RE = re.compile(
 LOOSE_ABOUT_RE = re.compile(r"\b(page|screen)\b", re.I)
 # “what does this page show(s)”, “what is on this screen”, “tell me about this dashboard”: any short question about the page itself
 PAGE_QUESTION_RE = re.compile(
-	r"^\s*(?:please\s+)?(?:what|which|explain|describe|tell|show|summari[sz]e|where|can\s+you\s+(?:explain|describe|tell))\b.*?\b(?:this|current|the\s+current|the\s+open)\s+"
+	r"^\s*(?:please\s+)?(?:what|which|explain|describe|tell|show|give|summari[sz]e|summary|overview|where|can\s+you\s+(?:explain|describe|tell|give))\b.*?\b(?:this|current|the\s+current|the\s+open(?:ed)?)\s+"
 	r"(?:page|screen|dashboard|workspace|view)\b",
 	re.I,
 )
@@ -480,6 +509,7 @@ def classify(text, page):
 	"""(intent, detail) for a message that is about the open page, else None (ordinary routing handles it)."""
 	if not text or len(text.split()) > MAX_WORDS or len(text) > 200:
 		return None
+	text = normalise(text)
 	if _is_about(text):
 		return ("about", None)
 	if page.kind == "other":
@@ -521,18 +551,76 @@ def classify(text, page):
 		return ("rows", "taxes" if m.group("table").lower().startswith(("tax",)) else "items")
 	if FIELDS_RE.match(text):
 		return ("fields", None)
-	m = EXPLAIN_RE.match(text)
+	m = EXPLAIN_RE.match(text) or EXPLAIN_NOUN_FIRST_RE.match(text)
 	if m:
-		noun = (m.group("noun") or "").strip().lower()
-		if re.search(r"\b(list|report|view|filters?)\b", noun):
-			return None
-		if noun and noun not in GENERIC_NOUNS and not all(w in page.doctype.lower() for w in noun.split()):
-			return None  # “explain this customer” while an invoice is open: let the normal routing resolve it
-		return ("explain", None)
+		return ("explain", None) if _names_open_record(m.group("noun"), page) else None
 	return None
 
 
 GENERIC_NOUNS = {"record", "document", "doc", "form", "page", "screen", "one", "entry", "transaction"}
+# Words around the DocType's name that still mean the open record: “this submitted sales invoice”, “the invoice here”.
+_NOUN_FILLER = {
+	"open",
+	"opened",
+	"current",
+	"currently",
+	"here",
+	"now",
+	"one",
+	"please",
+	"pls",
+	"submitted",
+	"draft",
+	"saved",
+}
+
+
+def _names_open_record(noun, page):
+	"""True if the noun after “this” means the open form's record: nothing, a generic word, (part of) its DocType's name
+	(“invoice”, “sales invoice”) or its initials (“SI”)."""
+	words = [w for w in (noun or "").lower().split() if w not in _NOUN_FILLER]
+	if not words:
+		return True
+	if " ".join(words) in GENERIC_NOUNS:
+		return True
+	# “explain this customer” while an invoice is open: let the normal routing resolve it
+	names = page.doctype.lower().split()
+	return words == ["".join(n[0] for n in names)] or all(
+		w in names or w.removesuffix("s") in names for w in words
+	)
+
+
+# A request for the open record's contents that the router answered as general chat (“give me an overview of this sales invoice
+# with all the details you have”): too long or too loose for the patterns above, but clearly about the open record.
+# a lookahead, so “the details on this invoice” finds “this invoice” too
+_OPEN_REF_RE = re.compile(r"(?=\b" + _THIS_FORM + r"\s+(?P<noun>[a-z]+(?:\s+[a-z]+){0,2})\b)", re.I)
+_CONTENT_RE = re.compile(
+	r"\b(?:summary|summari[sz]e|overview|explain|describe|details|breakdown|walk\s+me\s+through|tell\s+me\s+about|what(?:'s|\s+is)\s+(?:in|on))\b",
+	re.I,
+)
+_HOWTO_RE = re.compile(r"^\s*(?:how|why|when|where|can\s+i|should|could\s+i|is\s+it|do\s+i)\b", re.I)
+
+
+def asks_for_open_record(text, page):
+	"""True if a message asks what the open saved form contains, so a general-chat answer (“I can't see that form”) is replaced
+	by the record's saved data. How-to questions (“how do I cancel this invoice?”) stay with the router's answer."""
+	if not page or page.kind != "form" or not page.view or page.doctype not in P.REGISTRY:
+		return False
+	text = normalise(text or "")
+	if len(text) > 300 or _HOWTO_RE.match(text) or not _CONTENT_RE.search(text):
+		return False
+	last = page.doctype.lower().split()[
+		-1
+	]  # “invoice”, “order”, “customer”: a bare “the sales” is not the record
+	for m in _OPEN_REF_RE.finditer(text):
+		words = [w for w in m.group("noun").lower().split() if w not in _NOUN_FILLER]
+		for n in range(len(words), 0, -1):  # “this sales invoice with all details” -> “sales invoice”
+			head = words[:n]
+			if _names_open_record(" ".join(head), page) and (
+				" ".join(head) in GENERIC_NOUNS or last in head or len(head[0]) <= 3
+			):
+				return True
+	return False
 
 
 def answer(ctx, text, loose=False):
@@ -547,6 +635,16 @@ def answer(ctx, text, loose=False):
 	if not found:
 		return False
 	intent, detail = found
+	_handle(ctx, page, intent, detail)
+	return True
+
+
+def explain_open_record(ctx):
+	"""Answer with the open form's saved record (asks_for_open_record() was True)."""
+	_handle(ctx, ctx.page, "explain", None)
+
+
+def _handle(ctx, page, intent, detail):
 	handler = {
 		"about": _about,
 		"card": _card_answer,
@@ -566,7 +664,6 @@ def answer(ctx, text, loose=False):
 	except frappe.PermissionError:
 		frappe.local.message_log = []
 		ctx.say("You don't have permission to view that.")
-	return True
 
 
 STATUS_HELP = {

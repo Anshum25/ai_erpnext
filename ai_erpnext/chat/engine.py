@@ -582,6 +582,9 @@ def _general(ctx, text):
 			return
 	mode = plan["mode"]
 	_count_route(ctx, via, mode)
+	if mode == "chat" and via == "model" and page_context.asks_for_open_record(text, ctx.page):
+		# The model can't see the open form and says so; the record's saved data is the answer the user asked for.
+		return page_context.explain_open_record(ctx)
 	if mode == "chat":
 		reply = plan.get("reply") or "How can I help?"
 		if via == "model":

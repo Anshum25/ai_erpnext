@@ -461,6 +461,43 @@ class TestFormAnswers(PageCase):
 		)  # the existing route-based field question
 		self.assertIn("status", self.texts(r).lower())
 
+	def test_summary_requests_with_typos_and_filler_words_are_answered_from_the_record(self):
+		self.chat_as(self.u_a)
+		for text in (
+			"give me summery of this sales invoice",
+			"Give me a summary of the opened sales invoice",
+			"can you give me details of this invoice please",
+			"this sales invoice summary",
+			"show me this invoice",
+			"summerize this SI",
+		):
+			r = self.say(text, self.form_ctx())
+			card = next(
+				(m["card"] for m in self.last(r) if (m.get("card") or {}).get("type") == "record"), None
+			)
+			self.assertEqual((card or {}).get("name"), self.inv["A"], text)
+		self.route.assert_not_called()
+
+	def test_a_general_reply_to_a_request_for_the_open_record_is_replaced_by_its_data(self):
+		self.chat_as(self.u_a)
+		self.route.return_value = {
+			"mode": "chat",
+			"reply": "I can't see the contents of the form you have open.",
+		}
+		r = self.say(
+			"give me an overview of this sales invoice with all the details you have", self.form_ctx()
+		)
+		self.route.assert_called_once()
+		self.assertNotIn("can't see", self.texts(r))
+		card = next(m["card"] for m in self.last(r) if (m.get("card") or {}).get("type") == "record")
+		self.assertEqual(card["name"], self.inv["A"])
+		# how-to questions keep the model's answer
+		self.route.return_value = {"mode": "chat", "reply": "general answer"}
+		self.assertIn(
+			"general answer", self.texts(self.say("how do I cancel this sales invoice?", self.form_ctx()))
+		)
+		self.assertIn('"ref":"open_record"', llm.SYSTEM.replace("{{", "{").replace("}}", "}"))
+
 	def test_explain_names_a_mismatching_noun_by_falling_back(self):
 		self.chat_as(self.u_a)
 		self.say("explain this customer", self.form_ctx())  # an invoice is open: not this request
