@@ -3,6 +3,8 @@
 Run: bench --site <site> run-tests --module ai_erpnext.tests.test_capability
 """
 
+from unittest import mock
+
 import frappe
 from frappe.tests import IntegrationTestCase
 
@@ -29,6 +31,19 @@ def info(fieldtype, fieldname="x", **kw):
 	return M.FieldInfo(fieldname, fieldtype, fieldname, kw.get("options"), False, False, False, 0)
 
 
+BECAME_CREATABLE = (
+	"Quotation",
+	"Lead",
+	"Issue",
+	"Material Request",
+	"Supplier Quotation",
+	"Opportunity",
+	"Journal Entry",
+	"Project",
+	"Task",
+	"Work Order",
+	"Timesheet",
+)
 BATCH_2 = (
 	"Account",
 	"Cost Center",
@@ -108,7 +123,13 @@ class TestCapabilityPolicy(IntegrationTestCase):
 
 	# ---- policy matches the installed metadata ---------------------------------------------
 	def test_every_listed_field_exists_in_the_installed_metadata(self):
-		for dt, spec in P.REGISTRY.items():
+		for (
+			dt
+		) in P.REGISTRY:  # only an optional app that isn't installed (HRMS) may leave a DocType unqueryable
+			if not C.is_queryable(dt):
+				self.assertTrue(C.missing_app(dt), f"{dt} is in the policy but not queryable")
+		for dt in C.queryable_doctypes():
+			spec = P.REGISTRY[dt]
 			self.assertTrue(M.doctype_exists(dt), dt)
 			for f in set(spec.list_fields) | set(spec.detail_fields):
 				self.assertIsNotNone(
@@ -139,7 +160,7 @@ class TestCapabilityPolicy(IntegrationTestCase):
 					self.assertIsNotNone(M.field_info(child, f), f"{child}.{f}")
 
 	def test_no_listed_field_is_a_secret(self):
-		for dt in P.REGISTRY:
+		for dt in C.queryable_doctypes():
 			for f in C.allowed_fields(dt, permitted_only=False):
 				self.assertFalse(C.is_prohibited_field(M.field_info(dt, f)), f"{dt}.{f}")
 
@@ -205,8 +226,9 @@ class TestCapabilityPolicy(IntegrationTestCase):
 	def test_query_capability_is_separate_from_creation(self):
 		for dt in NEW_QUERY_ONLY:
 			self.assertTrue(C.is_queryable(dt), dt)
-			# Lead and Issue became creatable in batch 2; Material Request (a Draft) in the 2026-10-21 phase
-			if dt not in ("Quotation", "Lead", "Issue", "Material Request"):
+			# Lead and Issue became creatable in batch 2; Material Request (a Draft) in the 2026-10-21 phase; Supplier Quotation,
+			# Opportunity, Project, Task and the restricted Journal Entry Draft (approved design) on 2026-10-22
+			if dt not in BECAME_CREATABLE:
 				self.assertFalse(C.is_creatable(dt), f"{dt} must stay query-only")
 		self.assertTrue(
 			C.is_creatable("Quotation") and C.is_creatable("Sales Invoice") and C.is_creatable("Item")
@@ -217,11 +239,9 @@ class TestCapabilityPolicy(IntegrationTestCase):
 		self.assertEqual(set(C.creatable_doctypes()), set(forms.CREATABLE))
 		for dt in (
 			"Payment Entry",
-			"Journal Entry",
 			"Contact",
 			"Warehouse",
-			"Employee",
-		):  # payments excluded, journals deferred
+		):  # payments excluded; contacts and warehouses not designed
 			self.assertTrue(C.is_queryable(dt) and not C.is_creatable(dt), dt)
 		with self.assertRaises(C.CapabilityError):
 			C.creation_fields("Bin")
@@ -375,7 +395,7 @@ class TestCapabilityPolicy(IntegrationTestCase):
 		self.assertEqual(C.currency_source("Journal Entry", "total_debit"), ("company", None))
 		self.assertEqual(C.currency_source("Stock Entry", "total_outgoing_value"), ("company", None))
 		self.assertIsNone(C.currency_source("Bin", "actual_qty"))
-		for dt in P.REGISTRY:
+		for dt in C.queryable_doctypes():
 			for f in C.measure_fields(dt):
 				if M.field_info(dt, f).fieldtype == "Currency":
 					self.assertNotEqual(
@@ -496,7 +516,8 @@ class TestCapabilityPolicy(IntegrationTestCase):
 		self.assertNotIn("docstatus", C.creation_fields("Sales Invoice"))
 
 	def test_every_queryable_doctype_has_a_deliberate_company_policy(self):
-		for dt, spec in P.REGISTRY.items():
+		for dt in C.queryable_doctypes():
+			spec = P.REGISTRY[dt]
 			mode = C.company_mode(dt)
 			self.assertIn(mode, ("required", "optional", "shared"), dt)
 			if not M.has_company_field(dt):
@@ -521,7 +542,8 @@ class TestCapabilityPolicy(IntegrationTestCase):
 	def test_batch_2_doctypes_are_read_only_and_not_creatable(self):
 		for dt in BATCH_2:
 			self.assertIn(dt, P.REGISTRY, dt)
-			self.assertFalse(C.is_creatable(dt), dt)
+			if dt not in BECAME_CREATABLE:
+				self.assertFalse(C.is_creatable(dt), dt)
 			self.assertFalse(set(P.REGISTRY[dt].operations) & P.PROHIBITED_QUERY_OPERATIONS, dt)
 
 	def test_ledger_style_doctypes_exclude_cancelled_rows_and_valuation(self):
@@ -548,3 +570,45 @@ class TestCapabilityPolicy(IntegrationTestCase):
 			set(C.creation_fields("Lead")), {"first_name", "company_name", "email_id", "mobile_no"}
 		)
 		self.assertEqual(set(C.creation_fields("Issue")), {"subject", "customer", "description"})
+
+
+class TestWithoutOptionalApps(IntegrationTestCase):
+	"""A site without HRMS (as in CI), simulated on any site: every HRMS DocType disappears from queries, prompts, help,
+	forms and the inventory, and asking for one says which app is missing instead of failing or guessing."""
+
+	def setUp(self):
+		frappe.set_user("Administrator")
+		patcher = mock.patch("ai_erpnext.chat.hr.installed", return_value=False)
+		patcher.start()
+		self.addCleanup(patcher.stop)
+
+	def hrms_doctypes(self):
+		return [dt for dt, spec in P.REGISTRY.items() if spec.app == "hrms"]
+
+	def test_hrms_doctypes_are_not_queryable_and_say_why(self):
+		self.assertTrue(self.hrms_doctypes())
+		for dt in self.hrms_doctypes():
+			self.assertNotIn(dt, C.queryable_doctypes())
+			self.assertEqual(C.missing_app(dt), "hrms")
+			with self.assertRaises(queries.QueryError) as e:
+				queries.validate({"doctype": dt, "operation": "list"})
+			self.assertIn("HRMS app, which isn't installed", str(e.exception))
+
+	def test_prompts_help_and_forms_leave_them_out(self):
+		from ai_erpnext.chat import capabilities, llm
+
+		system, _detailed = llm.build_system("show leave applications and expense claims")
+		summary = capabilities.capability_summary()
+		for dt in self.hrms_doctypes():
+			self.assertNotIn(dt, system, dt)
+			self.assertNotIn(dt, summary, dt)
+		for dt in ("Leave Application", "Expense Claim"):
+			self.assertNotIn(dt, forms.creatable())
+			self.assertIsNone(capabilities.describe(dt)["create"])
+		self.assertNotIn("Expense Claim", capabilities.creation_sentence())
+
+	def test_the_inventory_still_builds(self):
+		from ai_erpnext.capability import inventory
+
+		data = inventory.build()
+		self.assertTrue(data["entries"])

@@ -31,7 +31,8 @@ class CapabilityError(Exception):
 # Query capability
 # --------------------------------------------------------------------------------------------
 def queryable_doctypes():
-	return list(P.REGISTRY)
+	"""The policy's DocTypes that can be queried on this site (their app is installed)."""
+	return [dt for dt in P.REGISTRY if is_queryable(dt)]
 
 
 def is_queryable(doctype):
@@ -39,13 +40,52 @@ def is_queryable(doctype):
 	companies apply) or an explicit 'shared' decision. A missing company field never means 'visible to everyone'."""
 	if not (isinstance(doctype, str) and doctype in P.REGISTRY and M.doctype_exists(doctype)):
 		return False
-	return M.has_company_field(doctype) or P.REGISTRY[doctype].shared
+	spec = P.REGISTRY[doctype]
+	if spec.app and not M.app_installed(spec.app):
+		return False
+	return M.has_company_field(doctype) or spec.shared
+
+
+def missing_app(doctype):
+	"""The app a policy DocType needs that this site doesn't have, or None."""
+	spec = P.REGISTRY.get(doctype)
+	if spec and spec.app and not M.app_installed(spec.app):
+		return spec.app
+	return None
+
+
+def unavailable_reason(doctype):
+	"""Why a policy DocType can't be queried here (shown to the user), or None when it can."""
+	app = missing_app(doctype)
+	if app:
+		return f"{doctype} records come from the {app.upper()} app, which isn't installed on this site."
+	return None if is_queryable(doctype) else f"I can't look up {doctype} records."
 
 
 def query_spec(doctype):
 	if not is_queryable(doctype):
-		raise CapabilityError("I can't look that up.")
+		raise CapabilityError(unavailable_reason(doctype) or "I can't look that up.")
 	return P.REGISTRY[doctype]
+
+
+def sees_all_employees():
+	return frappe.session.user == "Administrator" or bool(P.HR_WIDE_ROLES & set(frappe.get_roles()))
+
+
+def employee_scope(doctype):
+	"""AND filters that limit an employee-record DocType to what this user may see in the chat (Spec.employee_field):
+	their own employees and those whose approver they are, unless they have an HR role. [] when no scope applies.
+
+	The employee names are looked up with get_all on purpose (an approver may not be allowed to read Employee): they are
+	only used as a filter, never shown, and the query itself still applies every ERPNext permission."""
+	spec = P.REGISTRY.get(doctype)
+	if not spec or not spec.employee_field or sees_all_employees():
+		return []
+	user = frappe.session.user
+	allowed = set(frappe.get_all("Employee", filters={"user_id": user}, pluck="name"))
+	if spec.approver_field and frappe.get_meta("Employee").has_field(spec.approver_field):
+		allowed |= set(frappe.get_all("Employee", filters={spec.approver_field: user}, pluck="name"))
+	return [[spec.employee_field, "in", sorted(allowed) or [""]]]
 
 
 def is_prohibited_field(info):
@@ -515,7 +555,10 @@ def reject_protected(doc):
 def assert_creation_safe(doctype, doc, extra=()):
 	"""Fail closed before insert(): only creatable DocTypes, only allowlisted fields, never lifecycle or
 	ownership fields (docstatus, owner, workflow_state ...). A model-supplied value cannot authorise anything."""
-	allowed = set(creation_fields(doctype, extra)) | DOC_KEYS
+	from ai_erpnext.chat import forms
+
+	rows = forms.SPECS[doctype].get("rows") if doctype in forms.SPECS else None
+	allowed = set(creation_fields(doctype, extra)) | DOC_KEYS | ({rows["table"]} if rows else set())
 	for key in doc:
 		if (key in P.PROTECTED_CREATE_FIELDS and key != "doctype") or key not in allowed:
 			raise CapabilityError("I can't set that field when creating a record.")
@@ -524,4 +567,8 @@ def assert_creation_safe(doctype, doc, extra=()):
 	for row in doc.get("items") or []:
 		if not isinstance(row, dict) or set(row) - ROW_FIELDS:
 			raise CapabilityError("I can't set that field on an item row.")
+	for row in doc.get(rows["table"]) or [] if rows else []:
+		# the spec's declared row keys only (e.g. a Journal Entry line: account, debit, credit; never party or bank fields)
+		if not isinstance(row, dict) or set(row) - set(rows["out"]):
+			raise CapabilityError("I can't set that field on a row.")
 	return True

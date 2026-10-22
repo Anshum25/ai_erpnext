@@ -1,7 +1,8 @@
 """What the assistant can explain, look up and create, per ERPNext module and DocType.
 
-Look-ups come from chat.queries.REGISTRY and creation from chat.forms.CREATABLE, so this
-never claims an action the chat can't perform. The short explanations are general ERPNext
+describe()/catalog() are the one description of the chat's capabilities, built from the live policy objects (the query
+policy, the guided forms, the HR operations and the image registry) on the current site. Help text, the router prompt,
+refusals and the coverage inventory all read them, so nothing is advertised without an implementation behind it. The short explanations are general ERPNext
 guidance (standard ERPNext v16 behaviour), never data from the user's site; they are used:
 - to tell the router model what the assistant can do (capability_summary), so its general
   answers don't promise unsupported actions;
@@ -320,14 +321,94 @@ MODULE_RE = re.compile(
 )
 
 
+# What the chat never does, whatever the DocType (no code path exists for these).
+NEVER = ("submit", "cancel", "amend", "delete", "pay", "approve or reject", "edit existing records")
+
+
+def describe(doctype):
+	"""Everything the chat can do with `doctype` on this site, or None when it can do nothing with it:
+	{"doctype", "query": {...} | None, "create": {...} | None, "image": bool, "modifies_data": bool, "unavailable": reason | None,
+	"permission": str, "never": tuple}. Every operation also runs with the user's own ERPNext permissions."""
+	from ai_erpnext.capability import metadata as M
+	from ai_erpnext.capability import service as C
+	from ai_erpnext.capability.policy import REGISTRY
+	from ai_erpnext.chat import forms, hr
+	from ai_erpnext.registry.document_registry import supported_doctypes
+
+	spec = REGISTRY.get(doctype)
+	if not (spec or doctype in forms.SPECS or doctype in supported_doctypes()):
+		return None
+	query = None
+	if spec and C.is_queryable(doctype):
+		query = {
+			"operations": [o for o in spec.operations if o not in hr.OPERATIONS or hr.installed()],
+			"fields": list(dict.fromkeys(spec.list_fields + spec.detail_fields)),
+			"filters": C.filterable_fields(doctype),
+			"company": C.company_mode(doctype),
+			"employee_scope": bool(spec.employee_field),
+			"read_only": True,
+		}
+	create = None
+	if doctype in forms.creatable():
+		form = forms.SPECS[doctype]
+		create = {
+			"result": "saved" if doctype in forms.MASTERS else "draft",
+			"required": [f["label"] for f in form["header"] if f["required"] and not f.get("when")],
+			"rows": form.get("items") or form.get("rows"),
+			"confirmation": True,  # a preview is always confirmed before anything is written
+			"read_only": False,
+		}
+	image = doctype in supported_doctypes()
+	reason = None
+	if not (query or create or image):
+		reason = (C.unavailable_reason(doctype) if spec else None) or (
+			hr.NOT_INSTALLED if doctype in hr.DOCTYPES and not hr.installed() else None
+		)
+	return {
+		"doctype": doctype,
+		"installed": M.doctype_exists(doctype),
+		"query": query,
+		"create": create,
+		"image": image,
+		"modifies_data": bool(create or image),
+		"unavailable": reason,
+		"permission": "the user's own ERPNext role permissions, User Permissions and companies, checked on every request",
+		"never": NEVER,
+	}
+
+
+def catalog():
+	"""describe() for every DocType the chat has any policy for: {doctype: description}."""
+	from ai_erpnext.capability.policy import REGISTRY
+	from ai_erpnext.chat import forms
+	from ai_erpnext.registry.document_registry import supported_doctypes
+
+	names = dict.fromkeys([*REGISTRY, *forms.SPECS, *supported_doctypes()])
+	return {dt: d for dt in names if (d := describe(dt))}
+
+
+def creatable_by_result():
+	"""(Drafts, records saved immediately) the chat can create on this site, in registry order."""
+	from ai_erpnext.chat import forms
+
+	names = forms.creatable()
+	return [dt for dt in names if dt not in forms.MASTERS], [dt for dt in names if dt in forms.MASTERS]
+
+
+def creation_sentence():
+	"""One accurate sentence on what can be created, for the help text and refusals."""
+	drafts, saved = creatable_by_result()
+	return f"I can create Drafts of {', '.join(drafts)}, and new {', '.join(saved)} records (saved when you confirm)."
+
+
 def abilities(doctype):
 	"""What the chat can do with `doctype`: {"query": bool, "create": bool, "masters": bool, "hr": bool}."""
+	from ai_erpnext.capability import service as C
 	from ai_erpnext.chat import hr
 	from ai_erpnext.chat.forms import MASTERS, creatable
-	from ai_erpnext.chat.queries import REGISTRY
 
 	return {
-		"query": doctype in REGISTRY,
+		"query": C.is_queryable(doctype),
 		"create": doctype in creatable(),
 		"master": doctype in MASTERS,
 		"hr": doctype in HR_LOOKUPS and hr.installed(),
@@ -412,15 +493,15 @@ def _module_abilities(doctypes):
 
 def capability_summary():
 	"""For the router prompt: what the assistant itself can and cannot do."""
+	from ai_erpnext.capability import service as C
 	from ai_erpnext.chat import hr
-	from ai_erpnext.chat.forms import creatable
-	from ai_erpnext.chat.queries import REGISTRY
 
+	drafts, saved = creatable_by_result()
 	return (
-		f"The assistant can look up (read-only): {', '.join(REGISTRY)}"
+		f"The assistant can look up (read-only): {', '.join(C.queryable_doctypes())}"
 		+ ("; for one employee at a time also leave balances and attendance (HRMS)" if hr.installed() else "")
-		+ ". It can create, after the user confirms a preview: "
-		f"{', '.join(creatable())} (transactions only as Drafts). It cannot submit, cancel, amend, delete, pay or create anything else "
-		"(no new Stock Entries, Payment Entries or Journal Entries); say so instead of offering it. For the looked-up types it can also filter by "
+		+ ". After the user confirms a preview it can create Drafts of "
+		f"{', '.join(drafts)}, and new {', '.join(saved)} records. It cannot {', '.join(NEVER)}, and it cannot create any "
+		"other record type (for example no Payment Entries); say so instead of offering it. For the looked-up types it can also filter by "
 		"field values, count, total/average/min/max (never mixing currencies), group results, look into item/tax rows and show one related record per row."
 	)

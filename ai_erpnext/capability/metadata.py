@@ -79,6 +79,16 @@ def field_info(doctype, fieldname):
 	)
 
 
+def app_installed(app):
+	"""Whether `app` is installed on this site. The one check for optional apps (HRMS), so a test can simulate a site without
+	one by patching chat.hr.installed (which uses this) consistently for queries, forms and help text."""
+	if app == "hrms":
+		from ai_erpnext.chat import hr
+
+		return hr.installed()
+	return app in frappe.get_installed_apps()
+
+
 def is_submittable(doctype):
 	return bool(doctype_exists(doctype) and frappe.get_meta(doctype).is_submittable)
 

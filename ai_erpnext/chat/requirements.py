@@ -149,6 +149,19 @@ def explain(exc, doctype):
 	message = strip_html(str(exc) or "").strip()
 	shown = [strip_html(_message_text(m)).strip() for m in (frappe.local.message_log or [])]
 	frappe.local.message_log = []
+	if type(exc).__module__ == "builtins":
+		# A programming error (AttributeError, TypeError...), not ERPNext refusing the document: its text is internal and
+		# means nothing to the user. Only the type is logged (no message: it may hold document values).
+		from ai_erpnext.ai.errors import get_ai_logger
+
+		get_ai_logger().error(f"AI-CHAT form_check_failed doctype={doctype} error_type={type(exc).__name__}")
+		return {
+			"kind": "other",
+			"fields": [],
+			"rows": [],
+			"items": [],
+			"message": "an unexpected error occurred while checking it (logged for your administrator)",
+		}
 	if isinstance(exc, frappe.MandatoryError):
 		fields = [f.strip() for f in message.split(":", 1)[-1].split(",") if f.strip()]
 		rows = sorted({int(r) for m in shown for r in re.findall(r"Row #(\d+)", m)})

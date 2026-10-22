@@ -1,11 +1,93 @@
 # ERPNext AI Chatbot: Implementation and Coverage Report
 
-This document has two parts.
+This document has three parts.
 
-- **Part I (current)** is the state after the implementation phase of 2026-10-21 (branch `ai-implementation-phase`, based on
+- **Part 0 (current)** is the capability-expansion phase of 2026-10-22: opt-in access for non-administrators, the
+  capability catalog, new creation and query capabilities, HR self-service scoping and single-page PDFs.
+- **Part I** is the state after the implementation phase of 2026-10-21 (branch `ai-implementation-phase`, based on
   `ab0a09f`). It holds the changelog, the current coverage per interaction mode, the test evidence and what remains.
 - **Part II (baseline)** is the original audit at commit `085bf0f`, kept unchanged for reference. Its statuses and line
   numbers describe the code *before* this phase.
+
+---
+
+# Part 0: Capability expansion 2026-10-22
+
+Branch `ai-implementation-phase` (fast-forwarded to `version-16` @ `794da7d`; it was three commits behind). The changes
+are **not committed**. Deployment, rollback and recovery are in `OPERATIONS_AND_RELEASE.md`.
+
+## 0.1 Decisions taken with the owner
+
+| Question | Decision |
+| --- | --- |
+| Access for non-System Managers | A new opt-in role **AI Assistant User**. Every operation still uses the user's own ERPNext permissions. |
+| Journal Entry creation | Restricted Drafts: existing non-group ledger accounts of the company in its currency; no bank, cash, receivable, payable or stock accounts; debits equal to credits; never submitted |
+| Editing existing Drafts | Not in this round |
+| HRMS on the test site | Installed on `ci-test.local` and kept. HRMS-less behaviour is covered by CI and by a simulation test. |
+
+## 0.2 Findings fixed
+
+| Finding | Severity | Fix |
+| --- | --- | --- |
+| The router prompt said "no new Stock Entries" although Stock Entry creation existed: the model was told to refuse a supported action | High (wrong behaviour) | `capabilities.capability_summary()` is built from the forms and the policy; no hand-written exceptions |
+| The help text listed creatable types by hand and missed Material Request and Stock Entry | Medium | Built from the registry (`capabilities.creation_sentence()`) |
+| "my" was a filler word: "show my sales orders" listed everyone's | High (silent remapping) | `filters.mine` (assigned to me / created by me / my employee records); the shortcut keeps it |
+| A status the DocType doesn't have was dropped silently, so "open sales invoices" listed every invoice | High (silent remapping) | Refused with the real statuses; "open" means the not-yet-finished statuses (`policy.OPEN_STATUSES`) |
+| HRMS gives the Employee role read access to every employee's leave, attendance, expense claims and appraisals unless User Permissions are set (the development site's employee is linked without them) | High once non-admins use the chat | Employee scope (`service.employee_scope`): without HR User/HR Manager only own records, plus those of employees one approves; HR forms only for one's own employee |
+| `session.history()` listed conversation titles to a user who had lost access | Low | Returns nothing without the role (as every other session path) |
+| ERPNext's internal Python errors (e.g. `'NoneType' object has no attribute …`) were shown to the user | Low (information) | A plain message; only the error type is logged (`requirements.explain`) |
+| The Leave Application form guidance was in the router prompt on sites without HRMS | Low | Only added when HRMS is installed |
+
+## 0.3 What was added
+
+| Area | Added | Tests |
+| --- | --- | --- |
+| Access | Role *AI Assistant User* (owner-only on the chat DocTypes; no delete on extraction entries; provider settings stay System Manager only) | `test_assistant_role` (8) |
+| Catalog | `capabilities.describe()` / `catalog()`: one description per DocType (query operations, fields, filters, company and employee scope, creation result, required fields, confirmation, what is never done), built from the live policy objects; help, router summary and refusals use it | `test_chat_new_forms.test_the_catalog…`, `test_capability.TestWithoutOptionalApps` |
+| Creation, saved when confirmed | Employee, Opportunity (for a customer), Project, Task | `test_chat_new_forms` |
+| Creation, Drafts | Supplier Quotation, Work Order (default BOM; ERPNext's own BOM explosion), Timesheet, restricted Journal Entry, Expense Claim (HRMS) | `test_chat_new_forms`, `test_chat_hr_forms` |
+| Generic line rows | Line-based documents are collected line by line with the same validation as header fields; corrections "row 2 amount 300", "remove row 1", "add line"; only declared row keys can reach the document | same |
+| Pre-confirmation check | ERPNext's `validate()` on an unsaved copy (savepoint, always rolled back) for Employee, Work Order, Expense Claim, Timesheet and Journal Entry; its figures are shown in the preview | same |
+| Query DocTypes (22 new, 74 in total, 66 without HRMS) | Leave Application, Leave Allocation, Attendance, Expense Claim, Employee Advance, Shift Assignment, Appraisal (no scores), Training Event, Holiday List, Address, Campaign, Activity Type, Workstation, Routing, Asset Movement, Asset Repair, Asset Maintenance, Maintenance Schedule, Quality Goal, Quality Procedure | `test_coverage_batch` (smoke for all), `test_chat_hr_forms` (Expense Claim data-backed) |
+| Deliberately excluded | Payroll, Employee Checkin (geolocation, no company field), Job Applicant and Interview (candidate data, no company field) | `inventory.BLOCKED_REASONS` |
+| Queries | "my …", strict and "open" statuses, items at or below their re-order level (as ERPNext's auto re-order compares; group levels not guessed), comparison of two periods per company and currency | `test_chat_query_extras` |
+| Optional apps | `Spec.app`: an HRMS DocType is unavailable, with the reason, where HRMS isn't installed | `test_capability.TestWithoutOptionalApps` |
+| PDF | One-page PDFs are rendered (PDFium, already installed with ERPNext) and read as an image; multi-page, encrypted, fake or oversized PDFs are refused | `test_pdf_documents` |
+
+## 0.4 Test evidence
+
+| Run | Site | Result |
+| --- | --- | --- |
+| Baseline, before this phase | `ci-test.local`, no HRMS | 575 ran, OK (one HR class skipped itself) |
+| Final | `ci-test.local`, HRMS installed | **643 ran, OK, 0 failures** (243 s) |
+| Without HRMS | simulated (`TestWithoutOptionalApps`) | passes; a real HRMS-less run is CI, not done |
+| Lint | ruff 0.14.10 (pinned) | `check` and `format --check` clean |
+| Working site | `ai-erpnext.local`, read-only smoke as Administrator | queries, help, catalog, statuses, comparison and re-order behave as intended; nothing written |
+
+Network was blocked during the tests (proxy variables plus `tests/network_guard.py`) and every AI provider was mocked:
+no result above comes from a live model.
+
+Changed tests, each because the behaviour changed on purpose:
+- refusal wording in `test_chat_agent`, `test_chat_queries` and `test_chat_forms`;
+- the creatable sets in `test_capability` (Employee, Journal Entry and others are now creatable);
+- the full-schema size check in `test_router_prompt` is now per DocType (the full schema is never sent);
+- registry-wide loops now cover only DocTypes queryable on the site;
+- the smoke-test roles gained HR User, HR Manager, Expense Approver and Maintenance Manager, so that the new DocTypes are
+  really exercised.
+
+## 0.5 Still open
+
+| Item | Why |
+| --- | --- |
+| Commit, CI on the newest v16 (no HRMS), Semgrep | Not done in this phase; required before release |
+| Editing existing Drafts, workflow actions | Out of scope by decision |
+| Report results | Still excluded (`REPORT_RESULTS_ENABLED = False`) |
+| Contact, Address and RFQ creation | Child tables (emails, links, suppliers) need their own design |
+| Most new HR and asset query DocTypes are smoke-tested only | Data-backed tests per DocType |
+| Multi-page PDFs | Needs multi-image extraction and a measured evaluation |
+| Live router behaviour for the new phrasings | Mock-tested only; the deterministic phrasings don't need the model |
+| `ai-erpnext.local` | Not migrated (the role is created on the next `bench migrate`) |
+| Production | No production environment was reachable; see `OPERATIONS_AND_RELEASE.md` |
 
 ---
 

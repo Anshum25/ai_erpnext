@@ -72,10 +72,29 @@ _DOCTYPE_ALT = "|".join(
 )
 _DOCTYPES = {n: dt for dt in REGISTRY for n in (dt.lower(), _PLURALS[dt])}
 
+# "my" is a filter (chat.queries._mine), never a filler word: "my tasks" are not all tasks.
 LIST_RE = re.compile(
-	r"^\s*(?:please\s+)?(?:(?:show|list|display|get|give)(?:\s+me)?\s+)?(?:(?:the|my|all|all\s+the)\s+)?"
+	r"^\s*(?:please\s+)?(?:(?:show|list|display|get|give)(?:\s+me)?\s+)?(?:(?P<mine>my)\s+|(?:the|all|all\s+the)\s+)?"
 	r"(?:(?P<sort>last|latest|recent|newest|oldest|first)\s+)?(?P<limit>\d{1,2}\s+)?"
-	r"(?:(?P<state>draft|submitted|cancelled|overdue|unpaid)\s+)?(?P<dt>" + _DOCTYPE_ALT + ")" + _END,
+	r"(?:(?P<state>draft|submitted|cancelled|overdue|unpaid)\s+)?"
+	r"(?:(?P<status>open|pending|completed|closed|active|approved|rejected)\s+)?(?P<dt>"
+	+ _DOCTYPE_ALT
+	+ ")"
+	+ _END,
+	re.I,
+)
+REORDER_RE = re.compile(
+	r"\bitems?\b.*\b(?:below|under|beneath|at\s+or\s+below|reached|hit)\b.*\bre-?order(?:\s+(?:level|point)s?)?\b"
+	r"|\bitems?\b.*\bneed(?:s|ing)?\s+(?:re-?order(?:ing)?|to\s+be\s+re-?ordered)\b",
+	re.I,
+)
+_PERIOD = r"this\s+month|last\s+month|this\s+year|last\s+year|this\s+quarter|last\s+quarter|this\s+week|last\s+week|today|yesterday|last\s+7\s+days|last\s+30\s+days"
+COMPARE_RE = re.compile(
+	r"^\s*(?:please\s+)?(?:compare\s+)?(?:the\s+|our\s+)?(?P<what>sales|purchases|purchasing|sales\s+invoices|purchase\s+invoices)"
+	r"\s+(?:of\s+|for\s+|in\s+)?(?P<a>"
+	+ _PERIOD
+	+ r")\s+(?:with|to|vs\.?|versus|and|against|compared\s+(?:with|to))\s+"
+	r"(?P<b>" + _PERIOD + r")" + _END,
 	re.I,
 )
 COUNT_RE = re.compile(
@@ -274,6 +293,20 @@ def match(text, last_query=None):
 	m = RETURNS_RE.match(text)
 	if m:
 		return _returns(m)
+	m = COMPARE_RE.match(text)
+	if m:
+		doctype = "Sales Invoice" if m.group("what").lower().startswith("sales") else "Purchase Invoice"
+		return {
+			"mode": "query",
+			"query": {
+				"doctype": doctype,
+				"operation": "compare",
+				"date": {"preset": re.sub(r"\s+", "_", m.group("a").lower())},
+				"compare_to": {"preset": re.sub(r"\s+", "_", m.group("b").lower())},
+			},
+		}
+	if REORDER_RE.search(text) and len(text) <= 200:
+		return {"mode": "query", "query": {"doctype": "Bin", "operation": "below_reorder"}}
 	m = COUNT_RE.match(text)
 	if m:
 		return _query(m, "count")
@@ -360,6 +393,10 @@ def _query(m, operation):
 		query["operation"] = state
 	elif state:
 		query["filters"]["docstatus"] = state
+	if m.groupdict().get("mine"):
+		query["filters"]["mine"] = True
+	if m.groupdict().get("status"):
+		query["filters"]["status"] = m.group("status").lower()
 	if operation == "list":
 		sort = (m.groupdict().get("sort") or "").lower()
 		query["sort"] = "oldest" if sort in ("oldest", "first") else "newest"

@@ -268,7 +268,7 @@ class TestChatForms(IntegrationTestCase):
 		self.say("cancel")
 		self.route.side_effect = None
 		self.say("create a payment entry", create_plan("Payment Entry"))
-		self.assertIn("can't create that", self.last_text())
+		self.assertIn("can't create Payment Entry records", self.last_text())
 		self.say("submit all drafts", {"mode": "unsupported", "reply": "I can't submit documents."})
 		self.assertIn("never submit", self.last_text())
 

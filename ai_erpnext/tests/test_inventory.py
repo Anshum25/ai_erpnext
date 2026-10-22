@@ -12,6 +12,7 @@ from frappe.tests import IntegrationTestCase
 
 from ai_erpnext.capability import inventory as I
 from ai_erpnext.capability import policy as P
+from ai_erpnext.capability import service as C
 from ai_erpnext.chat import forms
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
@@ -28,7 +29,7 @@ class TestInventory(IntegrationTestCase):
 			cls.by_name.setdefault(e["doctype"], []).append(e)
 
 	def test_every_registered_doctype_appears_exactly_once_with_capabilities(self):
-		for dt in P.REGISTRY:
+		for dt in C.queryable_doctypes():  # the site's metadata: an uninstalled app's DocTypes don't exist
 			entries = self.by_name.get(dt)
 			self.assertEqual(len(entries or []), 1, dt)
 			self.assertIn("caps", entries[0], dt)
@@ -89,7 +90,7 @@ class TestInventory(IntegrationTestCase):
 
 	def test_markdown_is_complete_and_states_the_blockers(self):
 		text = I.render_markdown(self.data)
-		for dt in P.REGISTRY:
+		for dt in C.queryable_doctypes():
 			self.assertIn(f"| {dt} |", text, dt)
 		for needle in (
 			"Legend",

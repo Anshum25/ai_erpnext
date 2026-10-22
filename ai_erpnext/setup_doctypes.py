@@ -193,6 +193,39 @@ def ensure_schema():
 	_create_if_missing(AI_PROVIDER_SETTINGS)
 	ensure_ai_provider_settings_schema()
 	ensure_ai_chat_session_doctype()
+	ensure_assistant_role()
+
+
+# Opt-in access for users who are not System Managers: an administrator assigns this role to the users who may use the
+# assistant. It only opens the chat (own conversations and own uploaded documents); every lookup and creation still runs
+# with that user's own ERPNext roles, User Permissions and company restrictions. AI Provider Settings stays System Manager only.
+ASSISTANT_ROLE = "AI Assistant User"
+ASSISTANT_PERMISSIONS = {
+	"AI Chat Session": {"read": 1, "write": 1, "create": 1, "delete": 1, "if_owner": 1},
+	"AI Document Entry": {
+		"read": 1,
+		"write": 1,
+		"create": 1,
+		"delete": 0,
+		"if_owner": 1,
+	},  # entries are the audit trail
+}
+
+
+def ensure_assistant_role():
+	"""Create the role and its permission rows once. The rows are only added together with a new role, so an
+	administrator's later changes (Role Permission Manager) are never undone by a migrate."""
+	if frappe.db.exists("Role", ASSISTANT_ROLE):
+		return
+	frappe.get_doc({"doctype": "Role", "role_name": ASSISTANT_ROLE, "desk_access": 1}).insert()
+	for doctype, rights in ASSISTANT_PERMISSIONS.items():
+		if not frappe.db.exists("DocType", doctype):
+			continue
+		doc = frappe.get_doc("DocType", doctype)
+		if not doc.custom or any(p.role == ASSISTANT_ROLE for p in doc.permissions):
+			continue
+		doc.append("permissions", {"role": ASSISTANT_ROLE, **rights})
+		doc.save()
 
 
 def create_doctypes():

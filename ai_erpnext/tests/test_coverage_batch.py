@@ -30,6 +30,10 @@ ROLES = [
 	"Manufacturing User",
 	"Quality Manager",
 	"Item Manager",
+	"HR User",  # the HRMS DocTypes (when installed)
+	"HR Manager",  # Holiday List
+	"Expense Approver",  # Employee Advance
+	"Maintenance Manager",
 ]
 ROUTE = "ai_erpnext.chat.llm.route"
 
@@ -183,7 +187,8 @@ class TestCoverageBatch(IntegrationTestCase):
 	def test_every_registered_doctype_lists_counts_and_aggregates_without_error(self):
 		frappe.set_user(self.users["AB"])
 		ran = 0
-		for dt, spec in P.REGISTRY.items():
+		for dt in queries.capability.queryable_doctypes():
+			spec = P.REGISTRY[dt]
 			try:
 				queries.validate({"doctype": dt, "operation": "list"})
 			except queries.QueryError as e:
@@ -208,13 +213,14 @@ class TestCoverageBatch(IntegrationTestCase):
 
 	def test_the_smoke_test_covers_nearly_all_doctypes(self):
 		frappe.set_user(self.users["AB"])
-		readable = [dt for dt in P.REGISTRY if frappe.has_permission(dt, "read")]
-		self.assertGreaterEqual(len(readable), len(P.REGISTRY) - 4)
+		queryable = queries.capability.queryable_doctypes()
+		readable = [dt for dt in queryable if frappe.has_permission(dt, "read")]
+		self.assertGreaterEqual(len(readable), len(queryable) - 4)
 
 	def test_a_user_without_access_gets_a_clear_refusal_for_every_doctype(self):
 		frappe.set_user(self.users["NOROLES"])
 		refused = 0
-		for dt in P.REGISTRY:
+		for dt in queries.capability.queryable_doctypes():
 			try:
 				result = run({"doctype": dt, "operation": "count"})
 			except queries.QueryError as e:

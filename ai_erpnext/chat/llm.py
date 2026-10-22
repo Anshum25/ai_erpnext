@@ -145,7 +145,7 @@ def select_doctypes(text, last_query=None, page=None):
 
 	def add(*doctypes):
 		for dt in doctypes:
-			if dt in REGISTRY and dt not in chosen:
+			if capability.is_queryable(dt) and dt not in chosen:
 				chosen.append(dt)
 
 	if isinstance(page, dict) and page.get("doctype"):
@@ -197,7 +197,9 @@ def _schema_line(dt):
 def _schema(doctypes=None):
 	"""Schema lines for `doctypes` (all queryable DocTypes when None)."""
 	return "\n".join(
-		_schema_line(dt) for dt in (REGISTRY if doctypes is None else doctypes) if dt in REGISTRY
+		_schema_line(dt)
+		for dt in (capability.queryable_doctypes() if doctypes is None else doctypes)
+		if capability.is_queryable(dt)
 	)
 
 
@@ -205,9 +207,10 @@ SYSTEM = """You route messages for an assistant inside ERPNext. Today is {today}
 chat: greetings, ERPNext concepts and how-to, an error shown earlier, summarising the conversation. {{"mode":"chat","reply":"<at most 150 words>"}}
   Never state this company's data in a reply (IDs, counts, totals, balances, names); use query for that. Never say you created, changed, submitted, paid or ran anything: only the server does that and reports it.
 query: live ERPNext data; never answer with data yourself.
-  {{"mode":"query","query":{{"doctype":"","operation":"","filters":{{"company":"","party":"","status":"","search":"","name":"","docstatus":"draft|submitted|cancelled","payment":"unpaid|overdue"}},"date":{{"preset":"{presets}","from":"YYYY-MM-DD","to":"YYYY-MM-DD","field":"document_date|created"}},"fields":[],"sort":"{sorts}","limit":10}}}}
+  {{"mode":"query","query":{{"doctype":"","operation":"","filters":{{"company":"","party":"","status":"","search":"","name":"","docstatus":"draft|submitted|cancelled","payment":"unpaid|overdue","mine":true}},"date":{{"preset":"{presets}","from":"YYYY-MM-DD","to":"YYYY-MM-DD","field":"document_date|created"}},"fields":[],"sort":"{sorts}","limit":10}}}}
   Omit unused keys. filters.company only when a company is named; date.field is document_date unless the user says created. "last/latest N X" = sort newest, limit N, no date.
-  operation: list | count | details (one record: filters.name or filters.search exactly as written; "fields" = what was asked in plain words, e.g. ["mobile"], ["items"], ["taxes"], ["outstanding"], ["status"]) | aggregate | child_rows | summary (a customer's or supplier's orders and invoices; filters.search) | overdue | unpaid | sales_summary (sales totals for a period) | outstanding_by_customer | outstanding_by_supplier | leave_balance | attendance. doctype "auto" = a person or company of unknown type.
+  operation: list | count | details (one record: filters.name or filters.search exactly as written; "fields" = what was asked in plain words, e.g. ["mobile"], ["items"], ["taxes"], ["outstanding"], ["status"]) | aggregate | child_rows | summary (a customer's or supplier's orders and invoices; filters.search) | overdue | unpaid | sales_summary (sales totals for a period) | outstanding_by_customer | outstanding_by_supplier | leave_balance | attendance | compare (Sales/Purchase Invoice totals of two periods: "date" and "compare_to", both {{"preset"}} or {{"from","to"}}) | below_reorder (doctype Bin: items at or below their re-order level). doctype "auto" = a person or company of unknown type.
+  "my X" = filters.mine true (never drop it); status "open" = not yet finished.
   Employees: doctype Employee; filters.self=true for the user's own ("my") record, else filters.search = the employee as written. leave_balance (+filters.leave_type if named; date only if a period is named) and attendance (date = the period) are about one employee.
   "this customer/item/order" with a form open: "ref":"open_record" in the query (never a name); it may target the open record or a record linked to it (e.g. Bin for the open Item).
   Optional parts, only with the fields, tables and links listed below, never SQL:
@@ -219,8 +222,7 @@ clarify: an essential detail is missing (which customer, which period) {{"mode":
 create: a NEW record of: {creatable}. {{"mode":"create","doctype":"","values":{{"party":"","posting_date":"YYYY-MM-DD"}},"items":[{{"item":"","qty":0,"rate":0}}]}}
   "for this customer/supplier" with a form open: "party":"open_record"; "these items" with list rows selected: "items":[{{"item":"selected_records"}}].
   Only values the user stated; never invent names, items, quantities, prices or dates. PO, SO, PI, SI, DN, PR/GRN = Purchase Order, Sales Order, Purchase Invoice, Sales Invoice, Delivery Note, Purchase Receipt.
-  Leave Application values: employee (omit for the user), leave_type, from_date, to_date (YYYY-MM-DD; work out "tomorrow", "next Monday" from today), days (a stated duration), description.
-unsupported: submit, cancel, amend, delete, pay, edit, or creating any other type. {{"mode":"unsupported","reply":""}}
+{hr_create}unsupported: submit, cancel, amend, delete, pay, edit, or creating any other type. {{"mode":"unsupported","reply":""}}
 "open_page" in the context is only the kind of page the user has open: you never see page contents, so never describe, guess or invent what a page, screen or dashboard contains.
   With a form open ("page":"form"), a summary, explanation, overview or the details of "this/the open record" (or of this page) is a query: {{"mode":"query","query":{{"doctype":"<open_page doctype>","operation":"details","ref":"open_record"}}}}; the server fills in the record.
   Any other page, if asked what it contains: reply chat: "I can't see that page. Open a record, list or report and ask again, or tell me what you want to look up."
@@ -279,17 +281,22 @@ def route(msgs, text, last_query=None, page=None):
 	return plan
 
 
+# Form guidance for HR creation, only on sites with HRMS (a site without it must not be offered a Leave Application).
+HR_CREATE = '  Leave Application values: employee (omit for the user), leave_type, from_date, to_date (YYYY-MM-DD; work out "tomorrow", "next Monday" from today), days (a stated duration), description.\n'
+
+
 def build_system(text, last_query=None, page=None):
 	"""(system prompt, DocTypes described in full) for one message."""
 	from ai_erpnext.chat.forms import creatable
 
 	detailed = select_doctypes(text, last_query, page)
-	others = ", ".join(dt for dt in REGISTRY if dt not in detailed)
+	others = ", ".join(dt for dt in capability.queryable_doctypes() if dt not in detailed)
 	system = SYSTEM.format(
 		today=nowdate(),
 		presets="|".join(DATE_PRESETS),
 		sorts="|".join(SORTS),
 		creatable=", ".join(creatable()),
+		hr_create=HR_CREATE if hr.installed() else "",
 		schema=_schema(detailed) if detailed else "(none needed for this message)",
 		others=others or "-",
 	)

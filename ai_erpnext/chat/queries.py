@@ -30,6 +30,7 @@ from frappe.utils import add_days, add_months, flt, get_first_day, get_last_day,
 from ai_erpnext.capability import metadata as meta_
 from ai_erpnext.capability import service as capability
 from ai_erpnext.capability.policy import (  # re-exported: existing callers import them from here
+	OPEN_STATUSES,
 	REGISTRY,
 	TAX_FIELDS,
 	TXN_ITEMS,
@@ -175,8 +176,12 @@ def validate(plan):
 	)
 	if not doctype and not auto:
 		raise QueryError(
-			f"I can't look up “{raw_doctype or 'that'}” yet. I can search: {', '.join(REGISTRY)}."
+			f"I can't look up “{raw_doctype or 'that'}” yet. I can search: {', '.join(capability.queryable_doctypes())}."
 		)
+	if doctype and not capability.is_queryable(doctype):
+		raise QueryError(
+			capability.unavailable_reason(doctype)
+		)  # e.g. an HRMS DocType on a site without HRMS
 	if doctype and not frappe.has_permission(doctype, "read"):
 		raise QueryError(f"You don't have permission to view {doctype} records.")
 	spec = REGISTRY.get(doctype)
@@ -203,6 +208,8 @@ def validate(plan):
 		"want": None,
 		# "my employee details": the logged-in user's own Employee, resolved when the query runs (never stored as a name)
 		"self": doctype == "Employee" and filters.get("self") is True,
+		# "my ...": the user's own records (see Spec.mine_field), resolved from the session when the query runs
+		"mine": filters.get("mine") is True,
 	}
 	if not q["search"]:
 		# A name given as "party" (or as a title field) of a record that has no party field is the
@@ -245,6 +252,14 @@ def validate(plan):
 	if date and spec:
 		q["date"] = _resolve_dates(date, spec)
 	_generic_parts(q, plan)
+	if op == "compare":
+		other = plan.get("compare_to") if isinstance(plan.get("compare_to"), dict) else None
+		if not q["date"] or not other:
+			raise QueryClarify(
+				"Which two periods should I compare? For example “this month with last month” or “2026-09-01 to "
+				"2026-09-30 with 2026-08-01 to 2026-08-31”."
+			)
+		q["compare_to"] = _resolve_dates(other, spec)
 	if op == "sales_summary" and not q["date"]:
 		raise QueryClarify(
 			"For which period should I total the sales?",
@@ -504,15 +519,37 @@ def _company_filter(q):
 	return [["company", "in", allowed or [""]]], None
 
 
+def _status_options(doctype):
+	spec = REGISTRY[doctype]
+	field = frappe.get_meta(doctype).get_field(spec.status_field) if spec.status_field else None
+	return [o for o in ((field.options if field else "") or "").split("\n") if o]
+
+
 def _match_status(doctype, value):
+	"""The status value(s) a word means for `doctype`: one option, or for "open" (and "pending") the not-yet-finished
+	statuses (OPEN_STATUSES). None when no status was asked for. A word that is no status of the DocType is refused with
+	the real statuses, never silently dropped (that would list every record instead)."""
 	value = clean_text(value, 40)
 	spec = REGISTRY[doctype]
-	if not value or not spec.status_field:
+	if not value:
 		return None
-	options = [
-		o for o in (frappe.get_meta(doctype).get_field(spec.status_field).options or "").split("\n") if o
-	]
-	return next((o for o in options if o.lower() == value.lower()), None)
+	options = _status_options(doctype)
+	if not spec.status_field or not options:
+		raise QueryError(f"{doctype} records have no status to filter on.")
+	exact = next((o for o in options if o.lower() == value.lower()), None)
+	if exact:
+		return exact
+	if value.lower() in ("open", "pending", "active", "outstanding"):
+		if "Open" in options and value.lower() != "active":
+			return "Open"
+		if value.lower() == "active" and "Active" in options:
+			return "Active"
+		open_values = [o for o in OPEN_STATUSES.get(doctype, ()) if o in options]
+		if open_values:
+			return open_values
+	raise QueryError(
+		f"“{value}” isn't a status of {doctype} records. Their statuses are: {', '.join(options)}."
+	)
 
 
 def preset_dates(doctype, preset):
@@ -612,6 +649,7 @@ def _recheck(q):
 		q["fields"] = [f for f in q.get("fields") or [] if f in allowed] or None
 	q["limit"] = max(1, min(MAX_PAGE, int(flt(q.get("limit")) or PAGE_SIZE)))
 	q["offset"] = max(0, min(MAX_OFFSET, int(flt(q.get("offset")))))
+	q["mine"] = q.get("mine") is True
 	return q
 
 
@@ -634,6 +672,10 @@ def execute(q):
 		return _outstanding_by_party(q, "Sales Invoice", "Customer")
 	if op == "outstanding_by_supplier":
 		return _outstanding_by_party(q, "Purchase Invoice", "Supplier")
+	if op == "compare":
+		return _compare(q)
+	if op == "below_reorder":
+		return _below_reorder(q)
 	if op in hr.OPERATIONS:
 		if not hr.installed():
 			raise QueryError(hr.NOT_INSTALLED)
@@ -672,9 +714,21 @@ def _base_filters(q):
 	filters += company_filters
 	if company_note:
 		notes.append(company_note)
+	employee_filters = capability.employee_scope(q["doctype"])
+	if employee_filters:
+		filters += employee_filters
+		notes.append("only your own employee records and those you approve")
 	if q["status"]:
-		filters.append([spec.status_field, "=", q["status"]])
-		notes.append(f"status {q['status']}")
+		if isinstance(q["status"], list):
+			filters.append([spec.status_field, "in", q["status"]])
+			notes.append(f"open (status {', '.join(q['status'])})")
+		else:
+			filters.append([spec.status_field, "=", q["status"]])
+			notes.append(f"status {q['status']}")
+	if q.get("mine"):
+		mine_filters, mine_note = _mine(q["doctype"])
+		filters += mine_filters
+		notes.append(mine_note)
 	if q["party"]:
 		or_filters += [[spec.party_field, "like", f"%{q['party']}%"]] + (
 			[[spec.party_title_field, "like", f"%{q['party']}%"]] if spec.party_title_field else []
@@ -1225,8 +1279,26 @@ def resolve_record(doctype, term, scope=None, exact_name=False):
 	return rows_of(prefix[: MAX_CHOICES + 1]), False
 
 
+def _like_value(text):
+	"""`text` matched literally inside a LIKE pattern (an e-mail address may contain _ or %)."""
+	return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _mine(doctype):
+	"""Filters and a note for “my <records>” (Spec.mine_field): assigned to, created by, or about the user's own employees."""
+	spec, user = REGISTRY[doctype], frappe.session.user
+	field = spec.employee_field or spec.mine_field
+	if field == "_assign":
+		return [["_assign", "like", f'%"{_like_value(user)}"%']], "assigned to you"
+	if field == "owner":
+		return [["owner", "=", user]], "created by you"
+	own = frappe.get_all("Employee", filters={"user_id": user}, pluck="name")
+	return [[field, "in", own or [""]]], "your own employee records"
+
+
 def _scope(doctype, company=None):
-	return _company_filter({"doctype": doctype, "company": company})[0]
+	"""Filters every lookup of a record of `doctype` applies: the user's companies and, for employee records, their employees."""
+	return _company_filter({"doctype": doctype, "company": company})[0] + capability.employee_scope(doctype)
 
 
 def _choice(doctype, row, with_doctype=False):
@@ -1663,6 +1735,190 @@ def _taxes_text(doctype, doc, subject, extra):
 		f"Total taxes and charges: {flt(doc.get('total_taxes_and_charges'), 2)} {currency}; grand total {flt(doc.get('grand_total'), 2)} {currency}."
 	)
 	return "\n".join(lines)
+
+
+MAX_REORDER_ROWS = 200
+
+
+def _period_totals(q, date):
+	"""{(company, currency): (count, total)} of submitted records of q's DocType in one period, after every usual filter."""
+	spec = REGISTRY[q["doctype"]]
+	filters, or_filters, _notes = _base_filters(dict(q, date=date, docstatus=q["docstatus"] or "submitted"))
+	rows = frappe.get_list(
+		q["doctype"],
+		filters=filters,
+		or_filters=or_filters or None,
+		fields=[
+			"company",
+			spec.currency_field,
+			{"SUM": spec.amount_field, "as": "total"},
+			{"COUNT": "*", "as": "n"},
+		],
+		group_by=f"company, {spec.currency_field}",
+		order_by="company asc",
+	)
+	return {(r["company"], r[spec.currency_field]): (r["n"], flt(r["total"], 2)) for r in rows}
+
+
+def _compare(q):
+	"""Totals of two periods side by side, per company and currency (amounts in different currencies are never added).
+	Every figure is summed by the database from the user's permitted, submitted records; the change is plain arithmetic."""
+	a, b = q["date"], q["compare_to"]
+	first, second = _period_totals(q, a), _period_totals(q, b)
+	label_a = a["label"] or f"{a['from']} to {a['to']}"
+	label_b = b["label"] or f"{b['from']} to {b['to']}"
+	_f, _o, notes = _base_filters(dict(q, date=None, docstatus=q["docstatus"] or "submitted"))
+	plural = _plural_label(q["doctype"])
+	if not first and not second:
+		return {
+			"text": f"I found no {plural} ({'; '.join(notes)}) in {label_a} or in {label_b}.",
+			"names": [],
+			"titles": [],
+		}
+	rows = []
+	for key in sorted(set(first) | set(second)):
+		(n_a, t_a), (n_b, t_b) = first.get(key, (0, 0.0)), second.get(key, (0, 0.0))
+		change = flt(t_a - t_b, 2)
+		rows.append(
+			{
+				"company": key[0],
+				"currency": key[1],
+				"a": f"{t_a} ({n_a})",
+				"b": f"{t_b} ({n_b})",
+				"change": f"{'+' if change > 0 else ''}{change}"
+				+ (f" ({'+' if change > 0 else ''}{flt(change / t_b * 100, 1)}%)" if t_b else ""),
+			}
+		)
+	card = {
+		"type": "table",
+		"title": f"{plural.capitalize()}: {label_a} vs {label_b}",
+		"doctype": None,
+		"columns": [
+			{"key": "company", "label": "Company"},
+			{"key": "currency", "label": "Currency"},
+			{"key": "a", "label": f"{label_a.capitalize()} (count)"},
+			{"key": "b", "label": f"{label_b.capitalize()} (count)"},
+			{"key": "change", "label": "Change"},
+		],
+		"rows": rows,
+	}
+	text = (
+		f"{plural.capitalize()} ({'; '.join(notes)}), {label_a} ({a['from']} to {a['to']}) compared with {label_b} "
+		f"({b['from']} to {b['to']}), totalled per company and currency from your ERPNext data."
+	)
+	if q["doctype"] in ("Sales Invoice", "Purchase Invoice"):
+		text += " " + _RETURN_NOTE
+	return {"text": text, "names": [], "titles": [], "card": card}
+
+
+def _plural_label(doctype):
+	return doctype.lower()[:-1] + "ies" if doctype.endswith("y") else doctype.lower() + "s"
+
+
+def _below_reorder(q):
+	"""Item/warehouse pairs whose projected quantity is at or below the warehouse's re-order level (Item > Auto Re-order).
+	Projected quantity is what ERPNext's own automatic re-order compares. Items and bins are read with the user's permissions
+	(and warehouses of their companies only); nothing is estimated."""
+	levels = frappe.get_list(
+		"Item",
+		filters=[["disabled", "=", 0], ["Item Reorder", "warehouse_reorder_level", ">", 0]],
+		fields=[
+			"name",
+			"item_name",
+			"stock_uom",
+			"reorder_levels.warehouse as warehouse",
+			"reorder_levels.warehouse_group as warehouse_group",
+			"reorder_levels.warehouse_reorder_level as level",
+			"reorder_levels.warehouse_reorder_qty as reorder_qty",
+		],
+		limit=MAX_REORDER_ROWS + 1,
+		order_by="name asc",
+	)
+	truncated = len(levels) > MAX_REORDER_ROWS
+	levels = levels[:MAX_REORDER_ROWS]
+	# A level set for a warehouse group is compared by ERPNext with the whole group's projected quantity: not checked here.
+	# (ERPNext stores the warehouse itself as the "group" when none was chosen.)
+	in_group = [r for r in levels if r.get("warehouse_group") and r["warehouse_group"] != r["warehouse"]]
+	grouped = len(in_group)
+	levels = [r for r in levels if r not in in_group]
+	warehouses = {r["warehouse"] for r in levels if r["warehouse"]}
+	usable = set(
+		frappe.get_list(
+			"Warehouse",
+			filters=[["name", "in", list(warehouses) or [""]], *_scope("Warehouse")],
+			pluck="name",
+			limit=0,
+		)
+	)
+	levels = [r for r in levels if r["warehouse"] in usable]
+	if q.get("search"):
+		term = q["search"].lower()
+		levels = [r for r in levels if term in r["name"].lower() or term in (r["item_name"] or "").lower()]
+	bins = {
+		(b["item_code"], b["warehouse"]): b
+		for b in frappe.get_list(
+			"Bin",
+			filters=[
+				["item_code", "in", list({r["name"] for r in levels}) or [""]],
+				["warehouse", "in", list(usable) or [""]],
+			],
+			fields=["item_code", "warehouse", "actual_qty", "projected_qty"],
+			limit=0,
+		)
+	}
+	rows = []
+	for r in levels:
+		b = bins.get((r["name"], r["warehouse"])) or {}
+		projected = flt(b.get("projected_qty"))
+		if projected <= flt(r["level"]):
+			rows.append(
+				{
+					"item": f"{r['item_name']} ({r['name']})"
+					if r["item_name"] and r["item_name"] != r["name"]
+					else r["name"],
+					"warehouse": r["warehouse"],
+					"projected_qty": flt(projected, 3),
+					"actual_qty": flt(b.get("actual_qty"), 3),
+					"level": flt(r["level"], 3),
+					"reorder_qty": flt(r["reorder_qty"], 3),
+					"uom": r["stock_uom"],
+				}
+			)
+	scope = f" matching “{q['search']}”" if q.get("search") else ""
+	if not rows:
+		return {
+			"text": f"No item{scope} is at or below its re-order level in the warehouses you can access "
+			f"({len(levels)} item/warehouse re-order level{'s' if len(levels) != 1 else ''} checked"
+			+ (f"; {grouped} set for a warehouse group not checked" if grouped else "")
+			+ "). From your ERPNext data.",
+			"names": [],
+			"titles": [],
+		}
+	card = {
+		"type": "table",
+		"title": "Items at or below their re-order level",
+		"doctype": None,
+		"columns": [
+			{"key": "item", "label": "Item"},
+			{"key": "warehouse", "label": "Warehouse"},
+			{"key": "projected_qty", "label": "Projected qty"},
+			{"key": "actual_qty", "label": "Actual qty"},
+			{"key": "level", "label": "Re-order level"},
+			{"key": "reorder_qty", "label": "Re-order qty"},
+			{"key": "uom", "label": "UOM"},
+		],
+		"rows": rows,
+	}
+	text = (
+		f"{len(rows)} item/warehouse pair{'s are' if len(rows) != 1 else ' is'}{scope} at or below the re-order level set on the "
+		"item, comparing ERPNext's projected quantity as its automatic re-order does (a warehouse without stock counts as 0). "
+		"From your ERPNext data."
+	)
+	if grouped:
+		text += f" {grouped} re-order level{'s' if grouped != 1 else ''} set for a warehouse group {'were' if grouped != 1 else 'was'} not checked."
+	if truncated:
+		text += f" Only the first {MAX_REORDER_ROWS} re-order levels were checked."
+	return {"text": text, "names": [], "titles": [], "card": card}
 
 
 def _sales_summary(q):

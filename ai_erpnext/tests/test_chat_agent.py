@@ -160,7 +160,7 @@ class TestChatAgent(IntegrationTestCase):
 		self.assertIn("create records", r["messages"][0]["text"])
 		self.route.return_value = {"mode": "unsupported", "reply": "I can't delete records."}
 		self.assertIn(
-			"never submit, cancel, delete or pay", self.texts(self.send(text="Delete all invoices"))
+			"I never submit, cancel, amend, delete, pay", self.texts(self.send(text="Delete all invoices"))
 		)
 		self.route.return_value = {"mode": "create", "doctype": "Purchase Invoice", "values": {}, "items": []}
 		self.assertIn(
@@ -380,8 +380,11 @@ class TestChatAgent(IntegrationTestCase):
 
 	def test_attachment_validation(self):
 		self.assertIn("couldn't access", self.texts(self.send(file_url="/private/files/not-mine.png")))
-		self.assertIn("PDF files aren't supported", self.texts(self.send(file_url=test_file("pdf"))))
 		self.enqueue.assert_not_called()
+		# a one-page PDF is accepted and read as a PNG of its page (tests/test_pdf_documents.py has the details)
+		self.send(file_url=test_file("pdf"))
+		self.assertEqual(self.enqueue.call_count, 1)
+		self.assertTrue(self.entry().file.endswith("-page-1.png"))
 
 	def test_document_text_cannot_issue_instructions(self):
 		before = frappe.db.count("Sales Invoice")

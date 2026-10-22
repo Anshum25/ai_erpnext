@@ -34,7 +34,7 @@ from ai_erpnext.capability import metadata as M
 from ai_erpnext.mapping.normalize import clean_text, normalize_name, parse_date
 
 OPERATIONS = ("leave_balance", "attendance")
-DOCTYPES = ("Leave Application",)  # creatable HR DocTypes (they need HRMS)
+DOCTYPES = ("Leave Application", "Expense Claim")  # creatable HR DocTypes (they need HRMS)
 NOT_INSTALLED = "Leave and attendance data come from the HRMS app, which isn't installed on this site."
 NO_EMPLOYEE = (
 	"Your user account isn't linked to an Employee record that you can access, so I don't know who “my” is. "

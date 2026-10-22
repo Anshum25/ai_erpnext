@@ -2,7 +2,7 @@
 
 Generated from the installed apps and DocType metadata of site `ci-test.local` and from the real capability policy. Do not edit by hand: regenerate with `bench --site <test-site> execute ai_erpnext.capability.inventory.write_inventory`.
 
-Installed apps: frappe, erpnext, ai_erpnext, proposals. HRMS installed: **no** (no HR DocTypes beyond ERPNext's Employee exist; Employee exposes organisational fields only).
+Installed apps: frappe, erpnext, ai_erpnext, proposals, hrms. HRMS installed: **yes**.
 
 A DocType that exists in the metadata is **not** available to the chatbot. Only DocTypes listed in `capability/policy.py` are, and only for users who may read them (role, User Permission, company, field permission level).
 
@@ -25,23 +25,24 @@ Editing, standard-report access and workflow actions are **not implemented for a
 | --- | --- | --- | --- | --- | --- | --- |
 | AI | 0 | 0 | 2 | 0 | 0 | 1 |
 | Accounting | 1 | 8 | 54 | 12 | 5 | 107 |
-| Assets | 0 | 2 | 11 | 0 | 1 | 12 |
+| Assets | 0 | 5 | 8 | 0 | 1 | 12 |
 | Bulk Transaction | 0 | 0 | 0 | 0 | 1 | 0 |
 | Buying | 0 | 4 | 5 | 0 | 0 | 11 |
-| CRM | 0 | 3 | 10 | 0 | 0 | 15 |
+| CRM | 0 | 4 | 9 | 0 | 0 | 15 |
 | Communication | 0 | 0 | 1 | 0 | 0 | 1 |
 | EDI | 0 | 0 | 2 | 0 | 0 | 0 |
 | ERPNext Integrations | 0 | 0 | 0 | 0 | 0 | 1 |
-| Frappe framework | 0 | 1 | 6 | 18 | 2 | 0 |
-| Maintenance | 0 | 0 | 2 | 0 | 0 | 3 |
-| Manufacturing | 0 | 4 | 11 | 0 | 1 | 31 |
+| Frappe framework | 0 | 2 | 5 | 18 | 2 | 0 |
+| HR (HRMS) | 0 | 8 | 82 | 7 | 1 | 59 |
+| Maintenance | 0 | 1 | 1 | 0 | 0 | 3 |
+| Manufacturing | 0 | 6 | 9 | 0 | 1 | 31 |
 | Portal | 0 | 0 | 0 | 0 | 0 | 2 |
-| Projects | 0 | 3 | 6 | 0 | 0 | 6 |
+| Projects | 0 | 4 | 5 | 0 | 0 | 6 |
 | Proposals | 0 | 0 | 1 | 0 | 0 | 0 |
-| Quality Management | 0 | 0 | 8 | 0 | 0 | 8 |
+| Quality Management | 0 | 2 | 6 | 0 | 0 | 8 |
 | Regional / localization | 0 | 0 | 1 | 0 | 3 | 1 |
 | Selling | 0 | 3 | 6 | 0 | 0 | 9 |
-| Setup | 0 | 6 | 19 | 1 | 0 | 14 |
+| Setup | 0 | 7 | 18 | 1 | 0 | 14 |
 | Stock | 0 | 15 | 23 | 1 | 0 | 36 |
 | Subcontracting | 0 | 2 | 2 | 0 | 0 | 9 |
 | Support | 0 | 2 | 3 | 0 | 0 | 6 |
@@ -58,39 +59,59 @@ Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L l
 | Accounting | Cost Center | T | I | I | I | n/a | I | n/a | - | - | - | - | - | required | data-backed: company, read |
 | Accounting | Dunning | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
 | Accounting | GL Entry | T | - | I | T | n/a | I | n/a | - | - | - | - | - | required | data-backed: aggregate, company, read |
-| Accounting | Journal Entry | T | I | T | I | T | n/a | n/a | - | - | - | - | - | required | data-backed: child, filter, read |
+| Accounting | Journal Entry | T | I | T | I | T | n/a | n/a | PT | - | - | - | - | required | data-backed: child, filter, read |
 | Accounting | Payment Entry | T | I | T | T | n/a | n/a | n/a | - | - | - | - | - | required | data-backed: aggregate, filter, read |
 | Accounting | Payment Request | I | I | I | I | n/a | n/a | n/a | - | - | - | - | - | required | smoke only |
 | Accounting | Purchase Invoice | T | T | T | I | I | I | n/a | PT | T | - | - | - | required | data-backed: company, details, filter, read |
 | Accounting | Sales Invoice | T | T | T | T | T | T | n/a | PT | T | - | - | - | required | data-backed: aggregate, child, company, details, filter, link, read |
 | Assets | Asset | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
 | Assets | Asset Category | I | I | I | I | n/a | n/a | n/a | - | - | - | - | - | shared | smoke only |
+| Assets | Asset Maintenance | I | I | I | - | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| Assets | Asset Movement | I | I | I | - | I | n/a | n/a | - | - | - | - | - | required | smoke only |
+| Assets | Asset Repair | I | I | I | I | n/a | I | n/a | - | - | - | - | - | optional | smoke only |
 | Buying | Purchase Order | I | I | I | I | I | I | n/a | PT | T | - | - | - | required | smoke only |
 | Buying | Request for Quotation | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
 | Buying | Supplier | T | I | I | I | n/a | I | T | PT | - | - | - | - | shared | data-backed: read, summary |
-| Buying | Supplier Quotation | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| Buying | Supplier Quotation | I | I | I | I | I | I | n/a | PT | - | - | - | - | required | smoke only |
+| CRM | Campaign | I | I | I | - | n/a | n/a | n/a | - | - | - | - | - | shared | smoke only |
 | CRM | Lead | T | I | I | I | n/a | I | n/a | PT | - | - | - | - | optional | data-backed: company, read |
-| CRM | Opportunity | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| CRM | Opportunity | I | I | I | I | I | I | n/a | PT | - | - | - | - | required | smoke only |
 | CRM | Prospect | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| Frappe framework | Address | I | I | I | - | n/a | n/a | n/a | - | - | - | - | - | shared | smoke only |
 | Frappe framework | Contact | I | I | I | I | n/a | n/a | n/a | - | - | - | - | - | shared | smoke only |
+| HR (HRMS) | Appraisal | I | I | I | - | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| HR (HRMS) | Attendance | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| HR (HRMS) | Employee Advance | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| HR (HRMS) | Expense Claim | T | T | I | T | I | I | n/a | PT | - | - | - | - | required | data-backed: aggregate, company, details, read |
+| HR (HRMS) | Leave Allocation | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| HR (HRMS) | Leave Application | I | I | I | I | n/a | I | n/a | PT | - | - | - | - | required | smoke only |
+| HR (HRMS) | Shift Assignment | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
+| HR (HRMS) | Training Event | I | I | I | - | n/a | n/a | n/a | - | - | - | - | - | optional | smoke only |
+| Maintenance | Maintenance Schedule | I | I | I | - | I | I | n/a | - | - | - | - | - | required | smoke only |
 | Manufacturing | BOM | I | T | I | I | I | I | n/a | - | T | - | - | - | required | data-backed: details |
 | Manufacturing | Job Card | I | I | I | I | n/a | I | n/a | - | - | - | - | - | required | smoke only |
 | Manufacturing | Production Plan | I | I | I | I | I | n/a | n/a | - | - | - | - | - | required | smoke only |
-| Manufacturing | Work Order | T | I | T | I | T | I | n/a | - | - | - | - | - | required | data-backed: child, filter, read |
-| Projects | Project | T | I | I | I | n/a | I | n/a | - | - | - | - | - | required | data-backed: company, read |
-| Projects | Task | T | I | I | T | n/a | I | n/a | - | - | - | - | - | optional | data-backed: aggregate, company, read |
-| Projects | Timesheet | I | I | I | I | I | I | n/a | - | - | - | - | - | required | smoke only |
+| Manufacturing | Routing | I | I | I | - | I | n/a | n/a | - | - | - | - | - | shared | smoke only |
+| Manufacturing | Work Order | T | I | T | I | T | I | n/a | PT | - | - | - | - | required | data-backed: child, filter, read |
+| Manufacturing | Workstation | I | I | I | - | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
+| Projects | Activity Type | I | I | I | - | n/a | n/a | n/a | - | - | - | - | - | shared | smoke only |
+| Projects | Project | T | I | I | I | n/a | I | n/a | PT | - | - | - | - | required | data-backed: company, read |
+| Projects | Task | T | I | T | T | n/a | I | n/a | PT | - | - | - | - | optional | data-backed: aggregate, company, filter, read |
+| Projects | Timesheet | I | I | I | I | I | I | n/a | PT | - | - | - | - | required | smoke only |
+| Quality Management | Quality Goal | I | I | I | - | I | I | n/a | - | - | - | - | - | shared | smoke only |
+| Quality Management | Quality Procedure | I | I | I | - | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
 | Selling | Customer | T | T | I | I | n/a | I | T | PT | - | - | - | - | shared | data-backed: company, details, read, summary |
 | Selling | Quotation | T | T | I | I | T | n/a | n/a | PT | T | - | - | - | required | data-backed: child, company, details, read |
 | Selling | Sales Order | T | I | T | I | I | I | n/a | PT | T | - | - | - | required | data-backed: filter, read, summary |
 | Setup | Brand | I | I | I | I | n/a | n/a | n/a | - | - | - | - | - | shared | smoke only |
 | Setup | Customer Group | I | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
-| Setup | Employee | T | I | T | I | n/a | n/a | n/a | - | - | - | - | - | required | data-backed: filter, read |
+| Setup | Employee | T | T | T | I | n/a | n/a | n/a | PT | - | - | - | - | required | data-backed: company, details, filter, read |
+| Setup | Holiday List | I | I | I | - | I | n/a | n/a | - | - | - | - | - | shared | smoke only |
 | Setup | Item Group | I | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
 | Setup | Supplier Group | I | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
 | Setup | Territory | T | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | data-backed: company, read |
 | Stock | Batch | I | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
-| Stock | Bin | T | - | T | T | n/a | I | n/a | - | - | - | - | - | optional | data-backed: aggregate, company, filter, read |
+| Stock | Bin | T | - | T | T | n/a | I | n/a | - | - | - | - | - | optional | data-backed: aggregate, company, filter, read, summary |
 | Stock | Delivery Note | I | I | I | I | I | I | n/a | PT | T | - | - | - | required | smoke only |
 | Stock | Item | T | T | I | I | n/a | I | n/a | PT | - | - | - | - | shared | data-backed: details, read |
 | Stock | Item Price | I | I | I | I | n/a | I | n/a | - | - | - | - | - | shared | smoke only |
@@ -202,10 +223,7 @@ Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L l
 | Asset Activity | Not implemented | priority Low |
 | Asset Capitalization | Not implemented | priority Low |
 | Asset Depreciation Schedule | Not implemented | priority Medium |
-| Asset Maintenance | Not implemented | priority Medium |
 | Asset Maintenance Team | Not implemented | priority Low |
-| Asset Movement | Not implemented | priority Medium |
-| Asset Repair | Not implemented | priority Medium |
 | Asset Shift Allocation | Not implemented | priority Low |
 | Asset Shift Factor | Not implemented | priority Low |
 | Asset Value Adjustment | Not implemented | priority Low |
@@ -232,7 +250,6 @@ Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L l
 | DocType | Status | Reason / priority |
 | --- | --- | --- |
 | Appointment | Not implemented | priority Low |
-| Campaign | Not implemented | priority Medium |
 | Competitor | Not implemented | priority Low |
 | Contract | Not implemented | priority Medium |
 | Contract Template | Not implemented | priority Low |
@@ -279,18 +296,111 @@ Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L l
 | Workflow | Blocked | workflow definitions: no workflow actions are supported |
 | Notification Log | Not applicable | system notifications |
 | Print Format | Not applicable | layout |
-| Address | Not implemented | personal addresses: needs a field review |
 | Currency | Not implemented | reference data; used through links only |
 | Event | Not implemented | calendar: needs an owner-scoped design |
 | Note | Not implemented | personal notes |
 | Report | Not implemented | report runner deferred, see the report blocker |
 | ToDo | Not implemented | personal tasks: needs an owner-scoped design |
 
+### HR (HRMS)
+
+| DocType | Status | Reason / priority |
+| --- | --- | --- |
+| Employee Checkin | Blocked | employees' geolocation; no company field to isolate companies (HRMS) |
+| Interview | Blocked | candidates' assessments; no company field (HRMS) |
+| Job Applicant | Blocked | candidates' personal data; no company field (HRMS) |
+| Payroll Entry | Blocked | payroll execution (HRMS) |
+| Salary Slip | Blocked | payroll data (HRMS) |
+| Salary Structure | Blocked | payroll data (HRMS) |
+| Salary Structure Assignment | Blocked | payroll data (HRMS) |
+| Vehicle Log | Not applicable | tool, log, setting or configuration |
+| Additional Salary | Not implemented | priority Low |
+| Appointment Letter | Not implemented | priority Low |
+| Appointment Letter Template | Not implemented | priority Low |
+| Appraisal Cycle | Not implemented | priority Low |
+| Appraisal Template | Not implemented | priority Low |
+| Arrear | Not implemented | priority Low |
+| Attendance Request | Not implemented | priority Low |
+| Compensatory Leave Request | Not implemented | priority Low |
+| Employee Benefit Application | Not implemented | priority Low |
+| Employee Benefit Claim | Not implemented | priority Low |
+| Employee Benefit Ledger | Not implemented | priority Low |
+| Employee Feedback Criteria | Not implemented | priority Low |
+| Employee Grade | Not implemented | priority Low |
+| Employee Grievance | Not implemented | priority Low |
+| Employee Health Insurance | Not implemented | priority Low |
+| Employee Incentive | Not implemented | priority Low |
+| Employee Onboarding | Not implemented | priority Low |
+| Employee Onboarding Template | Not implemented | priority Low |
+| Employee Other Income | Not implemented | priority Low |
+| Employee Performance Feedback | Not implemented | priority Low |
+| Employee Promotion | Not implemented | priority Low |
+| Employee Referral | Not implemented | priority Low |
+| Employee Separation | Not implemented | priority Low |
+| Employee Separation Template | Not implemented | priority Low |
+| Employee Skill Map | Not implemented | priority Low |
+| Employee Tax Exemption Category | Not implemented | priority Low |
+| Employee Tax Exemption Declaration | Not implemented | priority Low |
+| Employee Tax Exemption Proof Submission | Not implemented | priority Low |
+| Employee Tax Exemption Sub Category | Not implemented | priority Low |
+| Employee Transfer | Not implemented | priority Low |
+| Employment Type | Not implemented | priority Low |
+| Exit Interview | Not implemented | priority Low |
+| Expense Claim Type | Not implemented | priority Low |
+| Full and Final Statement | Not implemented | priority Low |
+| Goal | Not implemented | priority Low |
+| Gratuity | Not implemented | priority Low |
+| Gratuity Rule | Not implemented | priority Low |
+| Grievance Type | Not implemented | priority Low |
+| HR Telemetry Milestone | Not implemented | priority Low |
+| Holiday List Assignment | Not implemented | priority Low |
+| Identification Document Type | Not implemented | priority Low |
+| Income Tax Slab | Not implemented | priority Low |
+| Interest | Not implemented | priority Low |
+| Interview Feedback | Not implemented | priority Low |
+| Interview Type | Not implemented | priority Low |
+| Job Applicant Source | Not implemented | priority Low |
+| Job Offer | Not implemented | priority Low |
+| Job Offer Term Template | Not implemented | priority Low |
+| Job Opening | Not implemented | priority Low |
+| Job Opening Template | Not implemented | priority Low |
+| Job Requisition | Not implemented | priority Low |
+| KRA | Not implemented | priority Low |
+| Leave Adjustment | Not implemented | priority Low |
+| Leave Block List | Not implemented | priority Low |
+| Leave Encashment | Not implemented | priority Low |
+| Leave Ledger Entry | Not implemented | priority Low |
+| Leave Period | Not implemented | priority Low |
+| Leave Policy | Not implemented | priority Low |
+| Leave Policy Assignment | Not implemented | priority Low |
+| Leave Type | Not implemented | priority Low |
+| Offer Term | Not implemented | priority Low |
+| Overtime Slip | Not implemented | priority Low |
+| Overtime Type | Not implemented | priority Low |
+| PWA Notification | Not implemented | priority Low |
+| Payroll Correction | Not implemented | priority Low |
+| Payroll Period | Not implemented | priority Low |
+| Purpose of Travel | Not implemented | priority Low |
+| Retention Bonus | Not implemented | priority Low |
+| Salary Component | Not implemented | priority Low |
+| Salary Withholding | Not implemented | priority Low |
+| Shift Location | Not implemented | priority Low |
+| Shift Request | Not implemented | priority Low |
+| Shift Schedule | Not implemented | priority Low |
+| Shift Schedule Assignment | Not implemented | priority Low |
+| Shift Type | Not implemented | priority Low |
+| Skill | Not implemented | priority Low |
+| Staffing Plan | Not implemented | priority Low |
+| Training Feedback | Not implemented | priority Low |
+| Training Program | Not implemented | priority Low |
+| Training Result | Not implemented | priority Low |
+| Travel Request | Not implemented | priority Low |
+| Vehicle Service Item | Not implemented | priority Low |
+
 ### Maintenance
 
 | DocType | Status | Reason / priority |
 | --- | --- | --- |
-| Maintenance Schedule | Not implemented | priority Medium |
 | Maintenance Visit | Not implemented | priority Medium |
 
 ### Manufacturing
@@ -304,9 +414,7 @@ Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L l
 | Master Production Schedule | Not implemented | priority Low |
 | Operation | Not implemented | priority Low |
 | Plant Floor | Not implemented | priority Low |
-| Routing | Not implemented | priority Low |
 | Sales Forecast | Not implemented | priority Low |
-| Workstation | Not implemented | priority Medium |
 | Workstation Operating Component | Not implemented | priority Low |
 | Workstation Type | Not implemented | priority Low |
 
@@ -315,7 +423,6 @@ Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L l
 | DocType | Status | Reason / priority |
 | --- | --- | --- |
 | Activity Cost | Not implemented | priority Low |
-| Activity Type | Not implemented | priority Low |
 | Project Template | Not implemented | priority Low |
 | Project Type | Not implemented | priority Low |
 | Project Update | Not implemented | priority Low |
@@ -335,9 +442,7 @@ Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L l
 | Quality Action | Not implemented | priority Low |
 | Quality Feedback | Not implemented | priority Low |
 | Quality Feedback Template | Not implemented | priority Low |
-| Quality Goal | Not implemented | priority Medium |
 | Quality Meeting | Not implemented | priority Low |
-| Quality Procedure | Not implemented | priority Low |
 | Quality Review | Not implemented | priority Low |
 
 ### Regional / localization
@@ -374,7 +479,6 @@ Columns: R read/list, D details, F filter+sort, A aggregate, C child tables, L l
 | Driver | Not implemented | priority Low |
 | Email Digest | Not implemented | priority Low |
 | Employee Group | Not implemented | priority Low |
-| Holiday List | Not implemented | priority Low |
 | Incoterm | Not implemented | priority Low |
 | Party Type | Not implemented | priority Low |
 | Quotation Lost Reason | Not implemented | priority Low |

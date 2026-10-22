@@ -20,6 +20,7 @@ warehouse"), a change of document type ("I meant Purchase Receipt") and "start o
 this state instead of starting a new conversation.
 """
 
+import datetime
 import re
 import uuid
 
@@ -47,8 +48,12 @@ def F(
 	prompt=None,
 	skip_label=None,
 	when=None,
+	options=None,
+	positive=False,
 ):
-	"""when: {fieldname: (values...)}: the field exists on this form only while those fields have one of those values."""
+	"""when: {fieldname: (values...)}: the field exists on this form only while those fields have one of those values.
+	options: the choices of a select that isn't a field of the DocType (a Journal Entry row's Debit/Credit).
+	positive: a number must be greater than 0."""
 	return {
 		"fieldname": fieldname,
 		"label": label,
@@ -62,6 +67,8 @@ def F(
 		"prompt": prompt,
 		"skip_label": skip_label,
 		"when": when,
+		"options": options,
+		"positive": positive,
 	}
 
 
@@ -391,10 +398,349 @@ SPECS = {
 			),
 		],
 	},
+	# Saved immediately (no Draft state). Needs ERPNext's HR User / HR Manager create permission. The date of birth and gender
+	# are mandatory in ERPNext; they are only stored on the record, never shown by the chat's employee look-ups.
+	"Employee": {
+		"party": None,
+		"items": None,
+		"title": "first_name",
+		"fixed": {"status": "Active"},
+		"example": "date of joining",
+		"header": [
+			F("first_name", "First name", "data", prompt="What is the employee's first name?"),
+			F(
+				"last_name",
+				"Last name",
+				"data",
+				required=False,
+				ask=True,
+				prompt="What is the employee's last name?",
+				skip_label="Skip",
+			),
+			F("gender", "Gender", "link", doctype="Gender", prompt="What is the employee's gender?"),
+			F("date_of_birth", "Date of birth", "date", prompt="What is the employee's date of birth?"),
+			F("date_of_joining", "Date of joining", "date", prompt="When did (or will) the employee join?"),
+			COMPANY,
+			F(
+				"department",
+				"Department",
+				"link",
+				required=False,
+				ask=True,
+				doctype="Department",
+				filters={"company": "$company", "is_group": 0},
+				prompt="Which department?",
+				skip_label="Skip",
+			),
+			F(
+				"designation",
+				"Designation",
+				"link",
+				required=False,
+				ask=True,
+				doctype="Designation",
+				prompt="What is the employee's designation?",
+				skip_label="Skip",
+			),
+		],
+	},
+	# CRM opportunity for an existing customer (opportunities for leads or prospects are made from that record in ERPNext).
+	"Opportunity": {
+		"party": "party_name",
+		"items": None,
+		"title": "party_name",
+		"fixed": {"opportunity_from": "Customer"},
+		"example": "expected closing date",
+		"header": [
+			F(
+				"party_name",
+				"Customer",
+				"link",
+				doctype="Customer",
+				filters={"disabled": 0},
+				master="Customer",
+				prompt="Which customer is the opportunity with?",
+			),
+			COMPANY,
+			F("transaction_date", "Opportunity date", "date", default="today"),
+			F(
+				"expected_closing",
+				"Expected closing date",
+				"date",
+				required=False,
+				ask=True,
+				prompt="When do you expect to close it?",
+				skip_label="Skip",
+			),
+		],
+	},
+	"Project": {
+		"party": None,
+		"items": None,
+		"title": "project_name",
+		"example": "expected end date",
+		"header": [
+			F("project_name", "Project name", "data", prompt="What is the project called?"),
+			COMPANY,
+			F(
+				"customer",
+				"Customer",
+				"link",
+				required=False,
+				ask=True,
+				doctype="Customer",
+				filters={"disabled": 0},
+				prompt="Is it for a customer? Pick one or skip.",
+				skip_label="Skip",
+			),
+			F(
+				"expected_start_date",
+				"Expected start date",
+				"date",
+				required=False,
+				ask=True,
+				prompt="When should it start?",
+				skip_label="Skip",
+			),
+			F(
+				"expected_end_date",
+				"Expected end date",
+				"date",
+				required=False,
+				ask=True,
+				prompt="When should it end?",
+				skip_label="Skip",
+			),
+		],
+	},
+	"Task": {
+		"party": None,
+		"items": None,
+		"title": "subject",
+		"example": "expected end date",
+		"header": [
+			F("subject", "Subject", "data", prompt="What is the task? Give it a short subject."),
+			COMPANY,
+			F(
+				"project",
+				"Project",
+				"link",
+				required=False,
+				ask=True,
+				doctype="Project",
+				filters={"company": "$company", "status": "Open"},
+				prompt="Which project does it belong to?",
+				skip_label="No project",
+			),
+			F(
+				"exp_end_date",
+				"Expected end date",
+				"date",
+				required=False,
+				ask=True,
+				prompt="By when should it be done?",
+				skip_label="Skip",
+			),
+			F(
+				"description",
+				"Description",
+				"data",
+				required=False,
+				ask=True,
+				prompt="Describe the task.",
+				skip_label="Skip",
+			),
+		],
+	},
+	"Supplier Quotation": {
+		"party": "supplier",
+		"items": "buying",
+		"header": [
+			SUPPLIER,
+			COMPANY,
+			F("transaction_date", "Quotation date", "date", default="today"),
+			F("valid_till", "Valid till", "date", required=False),
+		],
+	},
+	# Draft for an item with a default BOM: ERPNext's own Work Order methods take the BOM's materials and operations, and the
+	# warehouses come from Manufacturing Settings. Never submitted (no material transfer, no production).
+	"Work Order": {
+		"party": None,
+		"items": None,
+		"derived": ("bom_no",),
+		"example": "quantity",
+		"header": [
+			F(
+				"production_item",
+				"Item to manufacture",
+				"link",
+				doctype="Item",
+				filters={"disabled": 0, "is_stock_item": 1, "has_variants": 0, "default_bom": ["is", "set"]},
+				prompt="Which item should be manufactured? (Only items with a default BOM can be used.)",
+			),
+			F(
+				"qty",
+				"Quantity to manufacture",
+				"number",
+				positive=True,
+				prompt="How many should be manufactured?",
+			),
+			COMPANY,
+		],
+	},
+	# HRMS. Draft only: the expense approver sanctions and HRMS/accounts pay it; nothing here approves, sanctions or pays.
+	"Expense Claim": {
+		"party": None,
+		"items": None,
+		"derived": ("expense_approver",),
+		"example": "posting date",
+		"header": [
+			F(
+				"employee",
+				"Employee",
+				"link",
+				doctype="Employee",
+				filters={"status": "Active"},
+				default="employee",
+				prompt="Which employee is the claim for?",
+			),
+			F("posting_date", "Posting date", "date", default="today"),
+		],
+		"rows": {
+			"table": "expenses",
+			"label": "expense",
+			"fields": [
+				F("expense_date", "Expense date", "date", prompt="On which date was the expense?"),
+				F(
+					"expense_type",
+					"Expense type",
+					"link",
+					doctype="Expense Claim Type",
+					prompt="What kind of expense is it?",
+				),
+				F("amount", "Amount", "number", positive=True, prompt="How much was it?"),
+				F(
+					"description",
+					"Description",
+					"data",
+					required=False,
+					ask=True,
+					prompt="Add a short description.",
+					skip_label="Skip",
+				),
+			],
+			"out": ("expense_date", "expense_type", "amount", "description"),
+		},
+	},
+	"Timesheet": {
+		"party": None,
+		"items": None,
+		"example": "employee",
+		"header": [
+			F(
+				"employee",
+				"Employee",
+				"link",
+				doctype="Employee",
+				filters={"status": "Active"},
+				default="employee",
+				prompt="Whose time is it?",
+			),
+			COMPANY,
+		],
+		"rows": {
+			"table": "time_logs",
+			"label": "time log",
+			"fields": [
+				F(
+					"activity_type",
+					"Activity type",
+					"link",
+					doctype="Activity Type",
+					filters={"disabled": 0},
+					prompt="Which activity?",
+				),
+				F(
+					"from_time",
+					"Start",
+					"datetime",
+					prompt="When did it start? (e.g. 2026-10-20 09:30)",
+				),
+				F("hours", "Hours", "number", positive=True, prompt="How many hours?"),
+				F(
+					"project",
+					"Project",
+					"link",
+					required=False,
+					ask=True,
+					doctype="Project",
+					filters={"company": "$company"},
+					prompt="For which project?",
+					skip_label="No project",
+				),
+			],
+			# to_time = start + hours (the user's own figures); ERPNext calculates the rest
+			"out": ("activity_type", "from_time", "to_time", "hours", "project"),
+		},
+	},
+	# Restricted Journal Entry (approved design): Draft only, existing non-group ledger accounts of the company in the company
+	# currency, no bank, cash, receivable, payable or stock accounts (so no party, payment or stock rows), debits equal to credits
+	# checked before the preview and again by ERPNext on save. Never submitted: nothing is posted to the ledger.
+	"Journal Entry": {
+		"party": None,
+		"items": None,
+		"fixed": {"voucher_type": "Journal Entry"},
+		"example": "posting date",
+		"header": [
+			COMPANY,
+			F("posting_date", "Posting date", "date", default="today"),
+			F(
+				"user_remark",
+				"Remark",
+				"data",
+				required=False,
+				ask=True,
+				prompt="What is the entry for? (a short remark)",
+				skip_label="Skip",
+			),
+		],
+		"rows": {
+			"table": "accounts",
+			"label": "line",
+			"min": 2,
+			"balanced": True,
+			"fields": [
+				F(
+					"account",
+					"Account",
+					"link",
+					doctype="Account",
+					filters={
+						"company": "$company",
+						"is_group": 0,
+						"disabled": 0,
+						"freeze_account": ["!=", "Yes"],
+						"account_currency": "$company_currency",
+						"account_type": ["not in", ["Bank", "Cash", "Receivable", "Payable", "Stock"]],
+					},
+					prompt="Which account?",
+				),
+				F(
+					"side",
+					"Debit or credit",
+					"select",
+					options=["Debit", "Credit"],
+					prompt="Is this line a debit or a credit?",
+				),
+				F("amount", "Amount", "number", positive=True, prompt="What amount?"),
+			],
+			"out": ("account", "debit_in_account_currency", "credit_in_account_currency"),
+		},
+	},
 }
 # Records ERPNext saves immediately (no Draft state): the confirmation says so. Only Customer, Supplier and Item can also be created
 # on the way from inside another form ("Create new ..."): that offer is driven by the `master` of a link field, not by this list.
-MASTERS = ("Customer", "Supplier", "Item", "Lead", "Issue")
+MASTERS = ("Customer", "Supplier", "Item", "Lead", "Issue", "Employee", "Opportunity", "Project", "Task")
 CREATABLE = tuple(SPECS)
 
 
@@ -403,6 +749,8 @@ def creatable():
 	return tuple(dt for dt in CREATABLE if dt not in hr.DOCTYPES or hr.installed())
 
 
+# HR forms an employee files for themself (see _filters).
+SELF_SERVICE = ("Leave Application", "Expense Claim", "Timesheet")
 ITEM_FILTERS = {
 	"selling": {"is_sales_item": 1},
 	"buying": {"is_purchase_item": 1},
@@ -448,6 +796,27 @@ DOCTYPE_ALIASES = {
 	"material issue": "Stock Entry",
 	"leave": "Leave Application",
 	"leave request": "Leave Application",
+	"staff": "Employee",
+	"staff member": "Employee",
+	"new hire": "Employee",
+	"deal": "Opportunity",
+	"sales opportunity": "Opportunity",
+	"sq": "Supplier Quotation",
+	"supplier quote": "Supplier Quotation",
+	"wo": "Work Order",
+	"production order": "Work Order",
+	"manufacturing order": "Work Order",
+	"expense": "Expense Claim",
+	"expenses": "Expense Claim",
+	"reimbursement": "Expense Claim",
+	"expense report": "Expense Claim",
+	"time sheet": "Timesheet",
+	"time log": "Timesheet",
+	"timelog": "Timesheet",
+	"je": "Journal Entry",
+	"jv": "Journal Entry",
+	"journal": "Journal Entry",
+	"journal voucher": "Journal Entry",
 }
 
 _DT_ALT = "|".join(
@@ -519,9 +888,20 @@ def match_doctype(text):
 	return None
 
 
+def not_creatable(doctype=None):
+	"""Why the chat can't create `doctype` (as typed or proposed by the model), and what it can create instead."""
+	from ai_erpnext.chat import capabilities
+
+	what = f"{doctype} records" if doctype else "that"
+	return (
+		f"I can't create {what} from the chat: I only create record types that have a reviewed form with its own "
+		f"checks and confirmation, and this isn't one of them. {capabilities.creation_sentence()}"
+	)
+
+
 def start(ctx, doctype, values=None, items=None, return_to=None, rows=None, intro=None):
 	if doctype not in SPECS:
-		ctx.say(f"I can't create {doctype} records from the chat. I can create: {', '.join(creatable())}.")
+		ctx.say(not_creatable(doctype))
 		return
 	if doctype not in creatable():
 		ctx.say(f"I can't create a {doctype}: {hr.NOT_INSTALLED}")
@@ -539,6 +919,9 @@ def start(ctx, doctype, values=None, items=None, return_to=None, rows=None, intr
 		"queued_items": [],
 		"items_done": False,
 		"return_to": return_to,
+		"rows": [],
+		"row_open": bool(spec.get("rows")),
+		"rows_done": not spec.get("rows"),
 	}
 	ctx.st.setdefault("forms", []).append(form)
 	for f in spec["header"]:
@@ -687,6 +1070,8 @@ def next_step(ctx):
 			if prefill:
 				return _ask_not_found(ctx, form, f, prefill["search"])
 			return _ask_field(ctx, form, f)
+	if not form.get("rows_done", True):
+		return _rows_step(ctx, form)
 	if spec["items"] and not form["items_done"]:
 		return _items_step(ctx, form)
 	if _requirements(ctx, form):
@@ -737,6 +1122,8 @@ def answer(ctx, pending, value, from_text):
 			ctx.say("Please choose “Add another item” or “No, that's all”.")
 			return _ask_more(ctx, form)
 		return next_step(ctx)
+	if kind == "form_more_rows":
+		return _answer_more_rows(ctx, form, value)
 	if kind == "form_confirm":
 		if value in ("__create__", "__retry__") or re.match(
 			r"^\s*(yes|y|ok|okay|confirm|create|go ahead|do it|sure|retry)\b", value or "", re.I
@@ -755,6 +1142,10 @@ def answer(ctx, pending, value, from_text):
 def correction(ctx, text):
 	"""Handle “change X to Y”, “row 2 qty 5”, “remove row 1”, “add item” while a form is open."""
 	form = ctx.st["forms"][-1]
+	if _row_spec(form):
+		handled = _row_correction(ctx, form, text)
+		if handled is not None:
+			return handled
 	m = re.match(r"^\s*(?:please\s+)?(?:remove|delete|drop)\s+(?:row|line|item)\s*#?(\d+)\s*$", text, re.I)
 	if m:
 		idx = int(m.group(1)) - 1
@@ -853,9 +1244,88 @@ def correction(ctx, text):
 	return False
 
 
+def _row_correction(ctx, form, text):
+	"""“remove row 2”, “add another expense”, “row 1 amount 300”, “change row 2 account to Rent”: True when handled."""
+	rs = _row_spec(form)
+	m = re.match(
+		r"^\s*(?:please\s+)?(?:remove|delete|drop)\s+(?:row|line|"
+		+ re.escape(rs["label"])
+		+ r")\s*#?(\d+)\s*$",
+		text,
+		re.I,
+	)
+	if m:
+		idx = int(m.group(1)) - 1
+		if not 0 <= idx < len(form["rows"]):
+			ctx.say("There's no such row.")
+			return True
+		removed = form["rows"].pop(idx)
+		ctx.say(f"Removed {rs['label']} {idx + 1} ({_row_summary(form, removed)}).")
+		form.update(rows_done=False, row_open=not form["rows"])
+		ctx.st["pending"] = None
+		return next_step(ctx) or True
+	if re.match(
+		r"^\s*(?:please\s+)?add\s+(?:another\s+|an?\s+|one\s+more\s+)?(?:row|line|"
+		+ re.escape(rs["label"])
+		+ r")\b",
+		text,
+		re.I,
+	):
+		form.update(rows_done=False, row_open=True)
+		ctx.st["pending"] = None
+		return next_step(ctx) or True
+	names = {n: f for f in rs["fields"] for n in (f["label"].lower(), f["fieldname"].replace("_", " "))}
+	row_re = (
+		r"^\s*(?:please\s+)?(?:change|set|update|make)?\s*(?:the\s+)?(?:row|line|"
+		+ re.escape(rs["label"])
+		+ r")\s*#?(\d+)"
+		r"(?:'s)?\s+"
+	)
+	m = re.match(
+		row_re
+		+ "("
+		+ "|".join(sorted((re.escape(n) for n in names), key=len, reverse=True))
+		+ r")\s*(?:to|as|=|:|is)?\s+(.+?)\s*$",
+		text,
+		re.I,
+	)
+	if not m:
+		if re.match(row_re + r"\S", text, re.I):
+			ctx.say(f"On a {rs['label']} I can change: {', '.join(x['label'] for x in rs['fields'])}.")
+			return True
+		return None
+	idx, f, value = int(m.group(1)) - 1, names[m.group(2).lower()], m.group(3)
+	if not 0 <= idx < len(form["rows"]):
+		ctx.say("There's no such row.")
+		return True
+	row, name = form["rows"][idx], f["fieldname"]
+	if f["type"] == "link":
+		status, found, display = _resolve_link(f, form, clean_text(value, 140), from_text=True)
+		if status != "ok":
+			ctx.say(
+				f"I couldn't find a single {f['label'].lower()} matching “{value}” that can be used here."
+			)
+			return True
+		row["values"][name], row["labels"][name] = found, _link_label(f, found, display)
+	else:
+		scratch = {"doctype": form["doctype"], "values": {}, "labels": {}}
+		error = _set(ctx, scratch, f, value, from_text=True)
+		if error:
+			ctx.say(error)
+			return True
+		row["values"][name], row["labels"][name] = scratch["values"][name], scratch["labels"][name]
+	ctx.say(f"Updated {rs['label']} {idx + 1}: {_row_summary(form, row)}.")
+	form.update(rows_done=False, row_open=False)
+	ctx.st["pending"] = None
+	return next_step(ctx) or True
+
+
 def _changeable(form):
 	labels = [f["label"] for f in _fields(form) if f["type"] != "select" or f["ask"]]
 	text = "You can change: " + ", ".join(labels)
+	rs = _row_spec(form)
+	if rs:
+		text += f"; and {rs['label']}s, e.g. “row 1 {rs['fields'][-1]['label'].lower()} …”, “remove row 1” or “add {rs['label']}”"
 	if SPECS[form["doctype"]]["items"]:
 		text += (
 			"; and item rows, e.g. “row 1 qty 5”, “row 1 rate 20”, “row 1 item …”"
@@ -942,7 +1412,7 @@ def _fields(form):
 		for f in SPECS[form["doctype"]]["header"]
 		if not f.get("when") or all(values.get(k) in allowed for k, allowed in f["when"].items())
 	]
-	return header + form.get("extra", [])
+	return header + form.get("extra", []) + _row_fields(form)
 
 
 def _field(doctype, fieldname, form=None):
@@ -993,11 +1463,28 @@ def _default(f, form):
 
 
 def _filters(f, form):
-	return {
-		k: (form["values"].get(v[1:]) if isinstance(v, str) and v.startswith("$") else v)
+	"""The field's filters with "$<field>" replaced by the form's value ("$company_currency": the company's currency).
+	A filter whose value isn't known yet is left out (the field is asked after the value it depends on)."""
+	values = dict(form["values"])
+	if values.get("company"):
+		values["company_currency"] = frappe.get_cached_value("Company", values["company"], "default_currency")
+	out = {
+		k: (values.get(v[1:]) if isinstance(v, str) and v.startswith("$") else v)
 		for k, v in (f.get("filters") or {}).items()
-		if not (isinstance(v, str) and v.startswith("$") and not form["values"].get(v[1:]))
+		if not (isinstance(v, str) and v.startswith("$") and not values.get(v[1:]))
 	}
+	if (
+		f.get("doctype") == "Employee"
+		and form["doctype"] in SELF_SERVICE
+		and not capability.sees_all_employees()
+	):
+		# Without an HR role, HR requests are made for one's own employee record only (ERPNext's Employee role could create
+		# them for any employee it can read when the site has no User Permissions).
+		out["name"] = [
+			"in",
+			frappe.get_all("Employee", filters={"user_id": frappe.session.user}, pluck="name") or [""],
+		]
+	return out
 
 
 def _suggestions(doctype, filters, limit=PAGE, offset=0):
@@ -1055,12 +1542,7 @@ def _ask_field(ctx, form, f, search=None, candidates=None, text=None, offset=0):
 			options = hr.to_date_options(form)
 	elif f["type"] == "select":
 		input_type = None
-		opts = [
-			o
-			for o in (frappe.get_meta(form["doctype"]).get_field(f["fieldname"]).options or "").split("\n")
-			if o
-		]
-		options = [{"label": o, "value": o} for o in opts]
+		options = [{"label": o, "value": o} for o in _select_options(form, f)]
 	elif f["type"] == "check":
 		input_type = None
 		options = [
@@ -1148,10 +1630,20 @@ def _set(ctx, form, f, raw, from_text):
 		number = parse_number(value)
 		if number is None:
 			return f"Please give the {f['label'].lower()} as a number."
+		if f.get("positive") and number <= 0:
+			return f"The {f['label'].lower()} must be greater than 0."
 		form["values"][name] = form["labels"][name] = number
 		return None
+	if f["type"] == "datetime":
+		parsed = _parse_datetime(value)
+		if not parsed:
+			return (
+				f"Please give the {f['label'].lower()} as YYYY-MM-DD HH:MM (24-hour), e.g. 2026-10-20 09:30."
+			)
+		form["values"][name] = form["labels"][name] = parsed
+		return None
 	if f["type"] == "select":
-		opts = [o for o in (frappe.get_meta(form["doctype"]).get_field(name).options or "").split("\n") if o]
+		opts = _select_options(form, f)
 		match = next((o for o in opts if o.lower() == value.lower()), None)
 		if not match:
 			return f"Please choose one of: {', '.join(opts)}."
@@ -1579,6 +2071,46 @@ def _requirements(ctx, form):
 			next_step(ctx)
 			return True
 
+	# 3b. Rows: every chosen record must still be usable, and the rows as a whole valid (minimum, balanced).
+	rs = _row_spec(form)
+	if rs:
+		for idx, row in enumerate(form["rows"], start=1):
+			for f in rs["fields"]:
+				value = row["values"].get(f["fieldname"])
+				if f["type"] == "link" and value not in (None, "") and not _link_ok(f, form, value):
+					form["rows"].pop(idx - 1)
+					form["rows_done"] = False
+					ctx.say(
+						f"{rs['label'].capitalize()} {idx}: {f['label'].lower()} “{value}” can't be used here, so I removed that {rs['label']}."
+					)
+					_ask_more_rows(ctx, form)
+					return True
+		problem = _rows_problem(form, final=True)
+		if problem:
+			form["rows_done"] = False
+			ctx.say(problem)
+			_ask_more_rows(ctx, form)
+			return True
+	if doctype == "Work Order":
+		bom = _derived(doctype, form["values"]).get("bom_no")
+		if not bom or not readable_exists("BOM", {"name": bom, "is_active": 1, "docstatus": 1}):
+			form["values"].pop("production_item", None)
+			form["labels"].pop("production_item", None)
+			form.setdefault("force_ask", []).append("production_item")
+			ctx.say(
+				"That item has no active, submitted default BOM you can read. Please choose another item."
+			)
+			next_step(ctx)
+			return True
+
+	# 3c. ERPNext's own validation of the document on an unsaved copy (balances, overlaps, dates, accounts...).
+	if doctype in PRECHECK:
+		check = _precheck(form)
+		if not check["ok"]:
+			_rejected(ctx, form, check["info"])
+			return True
+		form["computed"] = check["rows"]
+
 	# 4. HRMS's own rules (balance, overlapping leave, dates, holidays, approver...) on an unsaved copy.
 	if doctype == "Leave Application":
 		check = hr.precheck(_doc_dict(form))
@@ -1708,6 +2240,172 @@ def _answer_warehouse(ctx, form, pending, value, from_text):
 # ------------------------------------------------------------------------------------------------
 # Confirmation and creation
 # ------------------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------------------------
+# Generic rows (Expense Claim expenses, Timesheet time logs, Journal Entry lines)
+# ------------------------------------------------------------------------------------------------
+# A spec's "rows" declares one child table: its fields (asked one by one like header fields, with the same validation) and
+# "out", the only keys a row may have in the created document. While a row is being answered its fields are part of the form
+# under ROW_PREFIX, so the usual ask/answer/correction loop handles them; a complete row moves to form["rows"].
+ROW_PREFIX = "row__"
+MAX_ROWS = 20
+DATETIME_RE = re.compile(r"^\s*(?P<d>.+?)[\sT,]+(?:at\s+)?(?P<h>\d{1,2})[:.](?P<m>\d{2})\s*$", re.I)
+
+
+def _row_spec(form):
+	return SPECS[form["doctype"]].get("rows")
+
+
+def _row_fields(form):
+	"""The fields of the row being answered, or [] when no row is open."""
+	rs = _row_spec(form)
+	if not rs or form.get("rows_done") or not form.get("row_open"):
+		return []
+	return [dict(f, fieldname=ROW_PREFIX + f["fieldname"]) for f in rs["fields"]]
+
+
+def _select_options(form, f):
+	if f.get("options"):
+		return list(f["options"])
+	df = frappe.get_meta(form["doctype"]).get_field(f["fieldname"])
+	return [o for o in ((df.options if df else "") or "").split("\n") if o]
+
+
+def _parse_datetime(value):
+	"""“2026-10-20 09:30”, “today 14:00”, “20 October 2026 at 9:15” as 'YYYY-MM-DD HH:MM:00' (24-hour), or None.
+	A date without a time is not accepted: a start time is never made up."""
+	m = DATETIME_RE.match(value or "")
+	if not m:
+		return None
+	day = m.group("d").strip().lower()
+	relative = {"today": 0, "tomorrow": 1, "yesterday": -1}.get(day)
+	if relative is not None:
+		date = str(add_days(nowdate(), relative))
+	else:
+		parsed = parse_date(m.group("d"))
+		if not parsed.ok:
+			return None
+		date = parsed.value
+	hour, minute = int(m.group("h")), int(m.group("m"))
+	if hour > 23 or minute > 59:
+		return None
+	return f"{date} {hour:02d}:{minute:02d}:00"
+
+
+def _rows_step(ctx, form):
+	"""Every field of the open row is answered: keep the row, then ask whether there is another."""
+	rs = _row_spec(form)
+	if form.get("row_open"):
+		values, labels = {}, {}
+		for f in rs["fields"]:
+			key = ROW_PREFIX + f["fieldname"]
+			values[f["fieldname"]] = form["values"].pop(key, None)
+			labels[f["fieldname"]] = form["labels"].pop(key, None)
+			if key in form.get("skipped", []):
+				form["skipped"].remove(key)
+		form["rows"].append({"values": values, "labels": labels})
+		form["row_open"] = False
+	if len(form["rows"]) >= MAX_ROWS:
+		ctx.say(f"That's {MAX_ROWS} {rs['label']}s, the most I add from the chat.")
+		return _answer_more_rows(ctx, form, "__done__")
+	return _ask_more_rows(ctx, form)
+
+
+def _ask_more_rows(ctx, form):
+	rs = _row_spec(form)
+	n = len(form["rows"])
+	text = f"{rs['label'].capitalize()} {n} added." if n else ""
+	problem = _rows_problem(form, final=False)
+	if problem:
+		text += f" {problem}"
+	ctx.ask(
+		"form_more_rows",
+		(text + f" Add another {rs['label']}?").strip(),
+		options=[
+			{"label": f"Add another {rs['label']}", "value": "__more__"},
+			{"label": "No, that's all", "value": "__done__", "style": "secondary"},
+		],
+	)
+
+
+def _answer_more_rows(ctx, form, value):
+	if value == "__more__" or re.search(r"\b(yes|add|another|more)\b", value or "", re.I):
+		form["row_open"] = True
+		return next_step(ctx)
+	if value == "__done__" or re.search(r"\b(no|done|that'?s all|finish|nothing)\b", value or "", re.I):
+		problem = _rows_problem(form, final=True)
+		if problem:
+			ctx.say(problem)
+			return _ask_more_rows(ctx, form)
+		form["rows_done"] = True
+		return next_step(ctx)
+	ctx.say(f"Please choose “Add another {_row_spec(form)['label']}” or “No, that's all”.")
+	return _ask_more_rows(ctx, form)
+
+
+def _je_totals(form):
+	debit = sum(flt(r["values"]["amount"]) for r in form["rows"] if r["values"].get("side") == "Debit")
+	credit = sum(flt(r["values"]["amount"]) for r in form["rows"] if r["values"].get("side") == "Credit")
+	return flt(debit, 2), flt(credit, 2)
+
+
+def _rows_problem(form, final):
+	"""Why the rows can't be used as they are (too few, debits and credits differ), or None."""
+	rs = _row_spec(form)
+	minimum = rs.get("min", 1)
+	if final and len(form["rows"]) < minimum:
+		return f"A {form['doctype']} needs at least {minimum} {rs['label']}s."
+	if rs.get("balanced") and form["rows"]:
+		debit, credit = _je_totals(form)
+		if debit != credit:
+			return (
+				f"Debits ({debit}) and credits ({credit}) differ by {flt(abs(debit - credit), 2)}; "
+				"they must be equal. Add a line, or change or remove one (e.g. “remove row 2”)."
+			)
+		if final and not debit:
+			return "The entry has no amounts."
+	return None
+
+
+def _row_out(form, values):
+	"""One row of the created document, with exactly the spec's "out" keys (values the user gave or simple arithmetic on them)."""
+	doctype = form["doctype"]
+	if doctype == "Journal Entry":
+		amount = flt(values["amount"])
+		out = {
+			"account": values["account"],
+			"debit_in_account_currency": amount if values["side"] == "Debit" else 0,
+			"credit_in_account_currency": amount if values["side"] == "Credit" else 0,
+		}
+	elif doctype == "Timesheet":
+		start = frappe.utils.get_datetime(values["from_time"])
+		end = start + datetime.timedelta(hours=flt(values["hours"]))
+		out = dict(values, to_time=end.strftime("%Y-%m-%d %H:%M:%S"))
+	else:
+		out = dict(values)
+	return {k: v for k, v in out.items() if k in _row_spec(form)["out"] and v not in (None, "")}
+
+
+def _row_summary(form, row):
+	rs = _row_spec(form)
+	parts = [
+		str(row["labels"].get(f["fieldname"]) or row["values"].get(f["fieldname"])) for f in rs["fields"]
+	]
+	return " · ".join(p for p in parts if p not in ("None", ""))
+
+
+def _derived(doctype, values):
+	"""Values the server fills from records the user already chose, exactly as ERPNext's own form would."""
+	if doctype == "Leave Application":
+		return hr.derived_values(values)
+	if doctype == "Expense Claim" and values.get("employee"):
+		approver = frappe.db.get_value("Employee", values["employee"], "expense_approver")
+		return {"expense_approver": approver} if approver else {}
+	if doctype == "Work Order" and values.get("production_item"):
+		bom = frappe.db.get_value("Item", values["production_item"], "default_bom")
+		return {"bom_no": bom} if bom else {}
+	return {}
+
+
 def _ask_confirm(ctx, form):
 	spec, doctype = SPECS[form["doctype"]], form["doctype"]
 	rows = [
@@ -1720,6 +2418,13 @@ def _ask_confirm(ctx, form):
 		"title": f"New {doctype}" + ("" if doctype in MASTERS else " (Draft)"),
 		"rows": rows,
 	}
+	rs = spec.get("rows")
+	if rs:
+		card["rows"] += [
+			{"label": f"{rs['label'].capitalize()} {i}", "value": _row_summary(form, r)}
+			for i, r in enumerate(form["rows"], start=1)
+		]
+	card["rows"] += form.get("computed") or []  # figures ERPNext calculated on the unsaved copy (_precheck)
 	if form.get("check"):  # figures HRMS calculated for this application (hr.precheck)
 		card["rows"] += hr.preview_rows(form["check"])
 		if form["check"].get("notes"):
@@ -1777,7 +2482,7 @@ def _ask_confirm(ctx, form):
 		+ " You can still change anything, e.g. “change "
 		+ (spec["party"] or spec["header"][0]["fieldname"]).replace("_", " ")
 		+ " to …”"
-		+ (" or “row 1 qty 5”." if spec["items"] else ".")
+		+ (" or “row 1 qty 5”." if spec["items"] else " or “remove row 1”." if spec.get("rows") else ".")
 	)
 	ctx.ask(
 		"form_confirm",
@@ -1799,15 +2504,19 @@ def _doc_dict(form, check=False):
 		{f["fieldname"] for f in _fields(form)},
 		{f["fieldname"] for f in spec["header"] if f.get("when")},
 	)
-	values = {k: v for k, v in form["values"].items() if k in applicable or k not in conditional}
+	values = {
+		k: v
+		for k, v in form["values"].items()
+		if (k in applicable or k not in conditional) and not k.startswith(ROW_PREFIX)
+	}
 	# Applied to stock rows below. Passing it as the header value would make ERPNext copy it
 	# onto rows that don't need a warehouse (services, non-stock items).
 	values.pop("set_warehouse", None)
 	if form["doctype"] == "Item" and not values.get("item_name"):
 		values["item_name"] = values.get("item_code")
-	doc = {"doctype": form["doctype"], **values, **spec.get("fixed", {})}
-	if form["doctype"] == "Leave Application":
-		doc.update(hr.derived_values(values))
+	doc = {"doctype": form["doctype"], **values, **spec.get("fixed", {}), **_derived(form["doctype"], values)}
+	if spec.get("rows"):
+		doc[spec["rows"]["table"]] = [_row_out(form, r["values"]) for r in form["rows"]]
 	if (
 		form["doctype"] in ("Sales Invoice", "Purchase Invoice", "Stock Entry")
 		and values.get("posting_date")
@@ -1851,6 +2560,7 @@ def _create(ctx, form):
 		doc = frappe.get_doc(doc_dict)
 		doc.flags.ignore_mandatory = False
 		doc.docstatus = 0
+		_before_insert(doc)
 		doc.insert()  # standard permissions + ERPNext validation; never submit()
 		if doc.meta.is_submittable and doc.docstatus != 0:
 			raise frappe.ValidationError("Created documents must stay Draft")
@@ -1914,9 +2624,16 @@ def _create(ctx, form):
 		or doc.get("party_name")
 		or doc.get("customer")
 		or doc.get("supplier")
+		or (f"{doc.employee_name} ({doc.employee})" if doc.get("employee") else None)
+		or doc.get("production_item")
 	)
 	date = doc.get("posting_date") or doc.get("transaction_date")
 	status = "Draft" if doc.docstatus == 0 else "Submitted"
+	figures = [
+		{"label": label, "value": _display_value(doc, field)}
+		for field, label in COMPUTED.get(doctype, ())
+		if doc.get(field) not in (None, "") and field not in ("company",)
+	]
 	ctx.say(
 		f"Your {doctype} draft has been created successfully. Open it to review and submit it yourself in ERPNext."
 		+ (("\nERPNext notes: " + " ".join(notes)) if notes else ""),
@@ -1928,8 +2645,8 @@ def _create(ctx, form):
 			"action_label": f"Open {doctype}",
 			"rows": [
 				{"label": "ID", "value": doc.name},
-				{"label": "Party", "value": party},
-				{"label": "Date", "value": str(date)},
+				*([{"label": "Party", "value": party}] if party else []),
+				*([{"label": "Date", "value": str(date)}] if date else []),
 				*(
 					[
 						{
@@ -1940,10 +2657,95 @@ def _create(ctx, form):
 					if doc.meta.has_field("grand_total")
 					else []
 				),
+				*figures,
 				{"label": "Status", "value": status},
 			],
 		},
 	)
+
+
+# Types whose document ERPNext validates on an unsaved copy before the preview (_precheck), with the figures it calculates.
+PRECHECK = ("Employee", "Work Order", "Expense Claim", "Timesheet", "Journal Entry")
+COMPUTED = {
+	"Employee": (("employee_name", "Full name"),),
+	"Work Order": (
+		("bom_no", "BOM (the item's default)"),
+		("planned_start_date", "Planned start (ERPNext default)"),
+		("wip_warehouse", "Work-in-progress warehouse"),
+		("fg_warehouse", "Finished goods warehouse"),
+	),
+	"Expense Claim": (
+		("company", "Company"),
+		("total_claimed_amount", "Total claimed"),
+		("expense_approver", "Expense approver"),
+	),
+	"Timesheet": (("total_hours", "Total hours"),),
+	"Journal Entry": (("total_debit", "Total debit"), ("total_credit", "Total credit")),
+}
+
+
+def _before_insert(doc):
+	"""ERPNext's own preparation that its form runs before the first save."""
+	if doc.doctype == "Work Order":
+		doc._set_defaults()  # insert() would only apply them later
+		doc.get_items_and_operations_from_bom()  # the BOM's materials and operations, as ERPNext's make_work_order does
+
+
+def _precheck(form):
+	"""Run ERPNext's validation on an unsaved copy inside a savepoint that is always rolled back, so nothing is written;
+	insert() remains the final authority. {"ok": True, "rows": [figures for the preview]} or {"ok": False, "info": explain()}."""
+	import copy
+
+	doctype = form["doctype"]
+	frappe.local.message_log = []
+	frappe.db.savepoint("ai_chat_form_check")
+	try:
+		# the steps of Document.insert() up to validation, without before_insert hooks and without writing
+		doc = frappe.get_doc(copy.deepcopy(_doc_dict(form)))
+		doc.docstatus = 0
+		doc._action = "save"
+		doc.set("__islocal", True)
+		doc._set_defaults()
+		_before_insert(doc)
+		doc.set_user_and_timestamp()
+		doc._validate_links()
+		doc.set_new_name()  # naming series, and controllers that compare a value with the record's own name
+		doc.set_parent_in_children()
+		if not frappe.has_permission(doctype, "create", doc):
+			raise frappe.PermissionError(f"You don't have permission to create this {doctype}.")
+		if doc.meta.has_field("company") and doc.get("company"):
+			from ai_erpnext.chat.queries import usable_companies
+
+			if doc.company not in usable_companies(doctype):
+				raise frappe.PermissionError(f"You can't create a {doctype} for {doc.company}.")
+		doc.flags.in_insert = True
+		doc.run_method("before_validate")
+		doc.run_method("validate")
+		doc._validate_mandatory()
+		rows = [
+			{"label": label, "value": _display_value(doc, field)}
+			for field, label in COMPUTED.get(doctype, ())
+			if doc.get(field) not in (None, "")
+		]
+		return {"ok": True, "rows": rows}
+	except Exception as e:
+		return {"ok": False, "info": requirements.explain(e, doctype)}
+	finally:
+		frappe.db.rollback(save_point="ai_chat_form_check")
+		frappe.local.message_log = []
+
+
+def _display_value(doc, fieldname):
+	value = doc.get(fieldname)
+	df = doc.meta.get_field(fieldname)
+	if df and df.fieldtype == "Currency":
+		currency = doc.get("currency") or (
+			frappe.get_cached_value("Company", doc.company, "default_currency") if doc.get("company") else ""
+		)
+		return f"{flt(value, 2)} {currency}".strip()
+	if df and df.fieldtype == "Float":
+		return str(flt(value, 2))  # hours, quantities: no currency
+	return str(value)
 
 
 def _rejected(ctx, form, info):

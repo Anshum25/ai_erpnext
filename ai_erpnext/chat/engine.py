@@ -17,7 +17,7 @@ from frappe import _
 from frappe.utils import flt, nowdate, strip_html
 
 from ai_erpnext.capability.access import readable_exists
-from ai_erpnext.chat import forms, history, hr, masters, page_context
+from ai_erpnext.chat import capabilities, forms, history, hr, masters, page_context
 from ai_erpnext.chat import session as S
 from ai_erpnext.constants import FieldStatus
 from ai_erpnext.mapping.adapters import DocumentAdapter
@@ -39,9 +39,8 @@ HELP = (
 	"• Look up your data (read-only): e.g. “Show me the last 10 Sales Invoices”, “List overdue invoices”, "
 	"“How much sales did we make this month?”, “Find customer ABC”.\n"
 	"• Create records by answering a few questions: e.g. “Create a purchase invoice”, “New sales order”, “Create customer”. "
-	"I can create Sales/Purchase Invoices, Sales/Purchase Orders, Quotations, Delivery Notes, Purchase Receipts (as Drafts), "
-	"Customers, Suppliers, Items, Leads and Issues.\n"
-	"• Create a draft from a document image (attach it with the paperclip): invoices, credit and debit notes, orders, quotations, "
+	"{creatable}\n"
+	"• Create a draft from a document image or a one-page PDF (attach it with the paperclip): invoices, credit and debit notes, orders, quotations, "
 	"delivery documents, goods receipts, material requests and bills of materials. I work out what it is for your company from "
 	"who issued it and who it is addressed to.\n\n"
 	"While we work on a document you can say “change customer to …”, “set posting date to 2026-10-15”, "
@@ -423,7 +422,7 @@ def _on_text(ctx, text):
 	if RESTART_RE.match(text):
 		return _restart(ctx)
 	if HELP_RE.match(text):
-		ctx.say(HELP + (HR_HELP if hr.installed() else ""))
+		ctx.say(HELP.format(creatable=capabilities.creation_sentence()) + (HR_HELP if hr.installed() else ""))
 		return _reask_if_pending(ctx)
 	if RETRY_RE.match(text) and ctx.st.get("entry"):
 		return _retry(ctx)
@@ -618,7 +617,7 @@ def _general(ctx, text):
 	elif mode == "create":
 		doctype = forms.match_doctype(plan.get("doctype") or "")
 		if not doctype:
-			ctx.say(f"I can't create that from the chat. I can create: {', '.join(forms.creatable())}.")
+			ctx.say(forms.not_creatable(clean_text(plan.get("doctype"), 60)))
 			return
 		values, items = _page_prefill(
 			ctx,
@@ -638,8 +637,10 @@ def _general(ctx, text):
 				"when it is, the form will first have to be saved or discarded and reloaded. Nothing you typed in the form was saved by me.",
 			)
 		ctx.say(
-			(plan.get("reply") or "I can't do that yet.") + " From the chat I can only create new records of "
-			f"{', '.join(forms.creatable())} after you confirm (transactions only as Drafts); I never submit, cancel, delete or pay."
+			(plan.get("reply") or "I can't do that yet.")
+			+ " From the chat I can only create new records, after you confirm. "
+			+ capabilities.creation_sentence()
+			+ f" I never {', '.join(capabilities.NEVER)}."
 		)
 	elif mode == "open":
 		_open_result(ctx, plan.get("index"))
@@ -1098,13 +1099,13 @@ def _attachment(file_url):
 	f = rows[0]
 	ext = (f.file_name or "").rsplit(".", 1)[-1].lower()
 	if ext == "pdf":
+		return _pdf_attachment(f)
+	if ext not in IMAGE_EXTENSIONS:
 		return {
 			**f,
 			"ok": False,
-			"error": "PDF files aren't supported yet. Please upload a JPG, PNG or WEBP image of the invoice.",
+			"error": "Please upload a JPG, PNG or WEBP image, or a one-page PDF, of the document.",
 		}
-	if ext not in IMAGE_EXTENSIONS:
-		return {**f, "ok": False, "error": "Please upload a JPG, PNG or WEBP image of the invoice."}
 	if (f.file_size or 0) > MAX_IMAGE_BYTES:
 		return {**f, "ok": False, "error": "That image is larger than 10 MB. Please upload a smaller image."}
 	from ai_erpnext.pipeline.controller import image_problem
@@ -1120,6 +1121,38 @@ def _attachment(file_url):
 	if problem:
 		return {**f, "ok": False, "error": problem}
 	return {**f, "ok": True}
+
+
+def _pdf_attachment(f):
+	"""A single-page PDF continues as a PNG of its page (a new private file of the same user): see pipeline/pdf.py."""
+	from ai_erpnext.pipeline import pdf
+
+	if (f.file_size or 0) > pdf.MAX_PDF_BYTES:
+		return {**f, "ok": False, "error": "That PDF is larger than 10 MB. Please attach a smaller file."}
+	try:
+		content = frappe.get_doc("File", f.name).get_content(encodings=())
+	except Exception:
+		frappe.local.message_log = []
+		content = None
+	problem = pdf.problem(content)
+	if problem:
+		return {**f, "ok": False, "error": problem}
+	stem = (f.file_name or "document").rsplit(".", 1)[0][:100]
+	page = frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": f"{stem}-page-1.png",
+			"content": pdf.render(content),
+			"is_private": 1,
+		}
+	).insert()
+	return {
+		"name": page.name,
+		"file_name": f.file_name,  # shown as the user's own attachment
+		"file_url": page.file_url,  # what is read
+		"file_size": page.file_size,
+		"ok": True,
+	}
 
 
 def _start_extraction(ctx, file_url):

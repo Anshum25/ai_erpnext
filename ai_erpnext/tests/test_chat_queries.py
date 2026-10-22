@@ -141,7 +141,7 @@ class TestChatQueries(IntegrationTestCase):
 		r, _ = self.ask(
 			"Delete all draft invoices", {"mode": "unsupported", "reply": "I can't delete records."}
 		)
-		self.assertIn("I never submit, cancel, delete or pay", self.last(r)["text"])
+		self.assertIn("I never submit, cancel, amend, delete, pay", self.last(r)["text"])
 
 	# ---- lookups -----------------------------------------------------------------------------
 	def test_customer_details_lookup(self):

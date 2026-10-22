@@ -71,8 +71,10 @@ VERIFIED = {
 	"Lead": {"read", "company"},
 	"Project": {"read", "company"},
 	"Issue": {"read", "company"},
-	"Task": {"read", "aggregate", "company"},
-	"Bin": {"read", "filter", "aggregate", "company"},
+	"Task": {"read", "filter", "aggregate", "company"},  # "my open tasks": test_chat_query_extras
+	"Bin": {"read", "filter", "aggregate", "company", "summary"},  # below_reorder: test_chat_query_extras
+	# employee scope for employee, approver and HR users (test_chat_hr_forms)
+	"Expense Claim": {"read", "details", "aggregate", "company"},
 }
 CREATE_TESTED = {
 	"Sales Invoice",
@@ -90,6 +92,16 @@ CREATE_TESTED = {
 	"Material Request",
 	"Stock Entry",
 	"Leave Application",  # test_chat_hr (HRMS sites only)
+	# test_chat_new_forms (2026-10-22): persisted record and values asserted for each
+	"Employee",
+	"Opportunity",
+	"Project",
+	"Task",
+	"Supplier Quotation",
+	"Work Order",
+	"Timesheet",
+	"Journal Entry",
+	"Expense Claim",  # test_chat_hr_forms (HRMS sites only)
 }
 # Target DocTypes an image becomes, each with an end-to-end test of the persisted Draft (tests/test_document_direction.py).
 IMAGE_TESTED = {
@@ -127,6 +139,12 @@ BLOCKED_REASONS = {
 	"Subscription": "recurring document creation",
 	"Auto Repeat": "recurring document creation",
 	"Salary Slip": "payroll data (HRMS)",
+	"Salary Structure": "payroll data (HRMS)",
+	"Salary Structure Assignment": "payroll data (HRMS)",
+	"Payroll Entry": "payroll execution (HRMS)",
+	"Employee Checkin": "employees' geolocation; no company field to isolate companies (HRMS)",
+	"Job Applicant": "candidates' personal data; no company field (HRMS)",
+	"Interview": "candidates' assessments; no company field (HRMS)",
 }
 
 # DocTypes that are tools, logs, settings or configuration rather than business data.
@@ -203,7 +221,7 @@ PRIORITY = {
 # Framework (Frappe core) DocTypes that matter for a business assistant. Everything else of the framework is system plumbing.
 FRAMEWORK = {
 	"Contact": ("Implemented", "shared business master data"),
-	"Address": (NOT_IMPLEMENTED, "personal addresses: needs a field review"),
+	"Address": ("Implemented", "shared master data; reviewed field list (no links to other records)"),
 	"Currency": (NOT_IMPLEMENTED, "reference data; used through links only"),
 	"User": (BLOCKED, "accounts and credentials"),
 	"Role": (BLOCKED, "permission model"),
@@ -244,6 +262,13 @@ REQUESTED_MODULES = {
 	"Assets": "Assets",
 	"Subcontracting": "Subcontracting",
 	"Regional": "Regional / localization",
+	"HR": "HR (HRMS)",
+	"Leaves": "HR (HRMS)",
+	"Expenses": "HR (HRMS)",
+	"Shift and Attendance": "HR (HRMS)",
+	"Performance": "HR (HRMS)",
+	"Recruitment": "HR (HRMS)",
+	"Payroll": "HR (HRMS)",
 }
 
 REPORT_BLOCKER = (
@@ -395,7 +420,19 @@ def build():
 			else:
 				framework_other += 1
 			continue
-		if r.name in P.REGISTRY:
+		if r.name in P.REGISTRY and not C.is_queryable(r.name):
+			# in the policy, but not usable on this site (its optional app is missing): say so, claim nothing
+			entries.append(
+				{
+					"doctype": r.name,
+					"module": r.module,
+					"app": app,
+					"group": _group(r.module),
+					"status": BLOCKED,
+					"reason": C.unavailable_reason(r.name),
+				}
+			)
+		elif r.name in P.REGISTRY:
 			caps = capabilities_of(r.name)
 			entries.append(
 				{

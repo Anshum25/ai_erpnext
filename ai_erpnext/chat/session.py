@@ -82,7 +82,10 @@ def _usable(doc):
 
 def history(limit=HISTORY_LIMIT):
 	"""The user's own conversations that can still be opened (metadata only, newest first).
-	Conversations nobody wrote in yet (a page opened and left) are not listed."""
+	Conversations nobody wrote in yet (a page opened and left) are not listed. A user who may no longer use the chat gets
+	an empty list (as in _owned)."""
+	if not frappe.has_permission(DOCTYPE, "read"):
+		return []
 	cutoff = add_days(now_datetime(), -EXPIRY_DAYS)
 	rows = frappe.get_all(
 		DOCTYPE,

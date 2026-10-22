@@ -23,6 +23,7 @@ from ai_erpnext.chat import llm
 from ai_erpnext.tests.test_chat_router_retry import FakeProvider
 
 BASELINE_SYSTEM_CHARS = 21387
+BASELINE_DOCTYPES = 54
 TARGET_EST_TOKENS = 2500  # chars/4: an estimate, no tokenizer for qwen is installed
 SAMPLES = (
 	"how are you?",
@@ -55,22 +56,27 @@ class TestPromptSize(IntegrationTestCase):
 			self.assertLessEqual(len(system) // 4, TARGET_EST_TOKENS, text)
 			self.assertLessEqual(len(detailed), llm.MAX_DETAILED, text)
 
-	def test_the_fully_described_schema_is_still_smaller_than_before(self):
+	def test_the_fully_described_schema_is_still_smaller_per_doctype_than_before(self):
+		# The full schema is never sent (at most MAX_DETAILED DocTypes are described per message, see the test above); the
+		# baseline described its 54 DocTypes in BASELINE_SYSTEM_CHARS. More DocTypes may be registered, but each one's
+		# description must stay at least 20% more compact than the baseline's average.
+		queryable = [dt for dt in P.REGISTRY if llm.capability.is_queryable(dt)]
 		everything = llm.SYSTEM.format(
 			today="2026-10-16",
 			presets="|".join(llm.DATE_PRESETS),
 			sorts="|".join(llm.SORTS),
 			creatable="x",
+			hr_create=llm.HR_CREATE,
 			schema=llm._schema(),
 			others="-",
 		)
-		self.assertLess(len(everything), BASELINE_SYSTEM_CHARS * 0.8)
+		self.assertLess(len(everything) / len(queryable), BASELINE_SYSTEM_CHARS / BASELINE_DOCTYPES * 0.8)
 
 	def test_no_doctype_or_operation_disappears_from_any_prompt(self):
 		operations = {op for spec in P.REGISTRY.values() for op in spec.operations}
 		for text in SAMPLES:
 			system, detailed = system_for(text)
-			for dt in P.REGISTRY:
+			for dt in llm.capability.queryable_doctypes():
 				self.assertIn(dt, system, f"{dt} missing from the prompt for {text!r}")
 			for op in operations:
 				self.assertIn(op, system, f"operation {op} missing for {text!r}")
