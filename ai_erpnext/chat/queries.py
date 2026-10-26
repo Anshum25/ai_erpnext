@@ -193,7 +193,7 @@ def validate(plan):
 		"doctype": doctype,
 		"auto": auto,
 		"operation": op,
-		"company": _match_company(doctype, filters.get("company")) if doctype else None,
+		"company": None,  # resolved below: an ambiguous name becomes a question bound to this plan
 		"party": clean_text(filters.get("party"), 140) if spec and spec.party_field else None,
 		"search": clean_text(filters.get("search"), 140),
 		"name": clean_text(filters.get("name"), 140),
@@ -221,6 +221,11 @@ def validate(plan):
 			for k in ("party", *(spec.search_fields if spec else ()), spec.title if spec else "")
 		]
 		q["search"] = next((v for v in named if v), None) if not q["party"] else None
+	if doctype:
+		# HR plans are completed by hr.validate afterwards, so an ambiguous company is a plain question there
+		q["company"] = _match_company(
+			doctype, filters.get("company"), plan=None if op in hr.OPERATIONS else q
+		)
 	if op in hr.OPERATIONS:
 		return hr.validate(plan, q, filters)
 	ds = clean_text(filters.get("docstatus"), 20)
@@ -482,28 +487,69 @@ def usable_companies(doctype=None):
 	return frappe.get_all("Company", pluck="name", order_by="name asc", limit=0)
 
 
-def _match_company(doctype, value):
+MAX_COMPANIES_LISTED = 10
+
+
+def match_usable_company(doctype, value):
+	"""The user's usable companies a typed name means: [one] when it is unambiguous, several when it could be any of them,
+	[] when none. Only companies the user may use are ever compared, so nothing about other companies is revealed.
+
+	Exact first (name, company name or abbreviation; case, punctuation and spacing ignored), then every typed word as
+	the start of a word of the company's name ("nivasync" -> "Nivasync Infotech Pvt Ltd")."""
+	wanted = normalize_name(value)
+	allowed = usable_companies(doctype)
+	if not wanted or not allowed:
+		return []
+	# names and abbreviations of companies already known to be usable (not sensitive): get_all, so unrelated
+	# User Permissions on Company records (e.g. its default warehouse) can't hide them
+	rows = frappe.get_all(
+		"Company", filters={"name": ["in", allowed]}, fields=["name", "company_name", "abbr"], limit=0
+	)
+	exact = [
+		r.name
+		for r in rows
+		if wanted in {normalize_name(r.name), normalize_name(r.company_name), normalize_name(r.abbr)}
+	]
+	if exact:
+		return sorted(set(exact))
+	words = wanted.split()
+	partial = []
+	for r in rows:
+		name_words = set(normalize_name(r.name).split()) | set(normalize_name(r.company_name).split())
+		if all(any(w.startswith(t) for w in name_words) for t in words):
+			partial.append(r.name)
+	return sorted(set(partial))
+
+
+def _match_company(doctype, value, plan=None):
 	value = clean_text(value, 140)
 	if not value:
 		return None
 	if not has_company(doctype):
 		return None  # masters such as Customer or Item are shared by all companies
-	allowed = usable_companies(doctype)
-	if allowed:
-		# names and abbreviations of companies already known to be usable (not sensitive): get_all, so unrelated
-		# User Permissions on Company records (e.g. its default warehouse) can't hide them
-		rows = frappe.get_all(
-			"Company", filters={"name": ["in", allowed]}, fields=["name", "company_name", "abbr"], limit=0
+	found = match_usable_company(doctype, value)
+	if len(found) == 1:
+		return found[0]
+	if found and plan is None:
+		raise QueryError(
+			f"“{value}” matches several of your companies: {', '.join(found[:MAX_COMPANIES_LISTED])}. Please name one."
 		)
-		match = [
-			r.name
-			for r in rows
-			if value.lower() in (r.name.lower(), (r.company_name or "").lower(), (r.abbr or "").lower())
-		]
-		if len(match) == 1:
-			return match[0]
-	# Same answer whether the company doesn't exist or isn't permitted: nothing leaks.
-	raise QueryError(f"I couldn't find a company “{value}” that you have access to.")
+	if found:
+		raise QueryClarify(
+			f"“{value}” matches several of your companies. Which one do you mean?",
+			options=[{"label": c, "value": c} for c in found[:MAX_COMPANIES_LISTED]],
+			kind="company",
+			plan=plan,
+		)
+	# Same answer whether the company doesn't exist or isn't permitted: only the user's own companies are named.
+	allowed = usable_companies(doctype)
+	shown = ", ".join(allowed[:MAX_COMPANIES_LISTED]) + (
+		" and more" if len(allowed) > MAX_COMPANIES_LISTED else ""
+	)
+	raise QueryError(
+		f"I couldn't find a company “{value}” that you have access to."
+		+ (f" Your companies: {shown}. Leave the company out to search all of them." if allowed else "")
+	)
 
 
 def _company_filter(q):
@@ -847,6 +893,11 @@ def _list(q):
 		summary = f"{total} {what} match; here are the first {len(rows)}"
 	else:
 		summary = f"I found {len(rows)} {what}"
+	overdue = None
+	if q["operation"] == "unpaid" and "due_date" in fields:
+		# overdue invoices are the unpaid ones already due: counted over the whole result and marked per row
+		overdue = _total(doctype, [*filters, ["due_date", "<", nowdate()]], or_filters)
+		summary += f"; {overdue} of them {'is' if overdue == 1 else 'are'} overdue (due before {nowdate()})"
 	if q.get("requested_limit") and has_more:
 		summary += (
 			f". You asked for {q['requested_limit']}, but I show at most {MAX_PAGE} per message; use “Show more” "
@@ -868,6 +919,10 @@ def _list(q):
 	]
 	if link:
 		columns += _attach_link(doctype, link, rows, table_rows, q)
+	if overdue is not None:
+		columns.append({"key": "_overdue", "label": "Overdue", "type": "text"})
+		for row, r in zip(table_rows, rows, strict=True):
+			row["_overdue"] = "Yes" if r.get("due_date") and str(r["due_date"]) < nowdate() else ""
 	card = {
 		"type": "table",
 		"title": doctype,

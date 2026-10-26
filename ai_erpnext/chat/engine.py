@@ -63,7 +63,7 @@ ERP_TOPIC_RE = re.compile(
 	r"jinja|workflows?|invoices?|orders?|items?|customers?|suppliers?|stock|ledgers?|accounts?|employees?|hrms)\b",
 	re.I,
 )
-GREETING = "Hi! Ask me about ERPNext, look up your data, create records step by step (e.g. “create purchase invoice”), or attach a document image."
+GREETING = "Hi! Ask me about SKYDOTERP, look up your data, create records step by step (e.g. “create purchase invoice”), or attach a document image."
 
 # A caption asking for a payment: the image is still read, but nothing is ever paid (only Drafts are created).
 PAYMENT_CAPTION_RE = re.compile(
@@ -1027,7 +1027,7 @@ def _retarget(q):
 
 def _query_clarify(ctx, c, attempts):
 	"""Turn a lookup clarification into a question bound to the lookup, so the reply completes it."""
-	if c.kind not in ("target", "pick", "period") or not c.plan or _operation_in_progress(ctx):
+	if c.kind not in ("target", "pick", "period", "company") or not c.plan or _operation_in_progress(ctx):
 		# Plain question (or an invoice/form question is open): no state; record names stay in the buttons/text.
 		labels = [o["label"] if isinstance(o, dict) else o for o in c.options]
 		suggestions = [o for o in c.options if isinstance(o, str)] or None
@@ -1094,6 +1094,17 @@ def _answer_query(ctx, pending, value, from_text):
 		ctx.say("OK, I've stopped that lookup.")
 		return
 	kind = pending["kind"]
+	if kind == "query_company":
+		# the reply names one of the user's companies: the same lookup continues with it (filters and DocType kept)
+		try:
+			q["company"] = queries._match_company(q["doctype"], answer_term(value) or value, plan=q)
+		except queries.QueryClarify as c:
+			if attempts < MAX_QUERY_ATTEMPTS:
+				return _query_clarify(ctx, c, attempts + 1)
+			return ctx.say(c.question.split(" Which")[0] + " Please ask again with the company's full name.")
+		except queries.QueryError as e:
+			return ctx.say(str(e))
+		return _run_query(ctx, None, prepared=q, attempts=attempts)
 	if kind == "query_period":
 		if value not in queries.DATE_PRESETS:
 			return _general(ctx, value)  # a period in other words: let the router read it

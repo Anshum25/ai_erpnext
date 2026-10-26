@@ -84,15 +84,36 @@ _DOCTYPE_ALT = "|".join(
 	sorted({re.escape(n) for dt in REGISTRY for n in (dt.lower(), _PLURALS[dt])}, key=len, reverse=True)
 )
 _DOCTYPES = {n: dt for dt in REGISTRY for n in (dt.lower(), _PLURALS[dt])}
+# Usual abbreviations, for list and count requests only ("show unpaid si"). Not used for record names, where "so" or "pr"
+# can be part of a person's name.
+ABBREVIATIONS = {
+	"si": "Sales Invoice",
+	"pi": "Purchase Invoice",
+	"so": "Sales Order",
+	"po": "Purchase Order",
+	"dn": "Delivery Note",
+	"pr": "Purchase Receipt",
+	"grn": "Purchase Receipt",
+}
+ABBREVIATIONS = {k: v for k, v in ABBREVIATIONS.items() if v in REGISTRY}
+_LIST_DT_ALT = "|".join(
+	sorted(
+		{*(n for n in _DOCTYPE_ALT.split("|")), *(re.escape(a) + "s?" for a in ABBREVIATIONS)},
+		key=len,
+		reverse=True,
+	)
+)
 
 # "my" is a filter (chat.queries._mine), never a filler word: "my tasks" are not all tasks.
 LIST_RE = re.compile(
 	r"^\s*(?:please\s+)?(?:(?:show|list|display|get|give)(?:\s+me)?\s+)?(?:(?P<mine>my)\s+|(?:the|all|all\s+the)\s+)?"
 	r"(?:(?P<sort>last|latest|recent|newest|oldest|first)\s+)?(?P<limit>\d[\d,]{0,8}\s+)?"
-	r"(?:(?P<state>draft|submitted|cancelled|overdue|unpaid)\s+)?"
+	r"(?:(?P<state>draft|submitted|cancelled|overdue|unpaid)(?:\s+(?:and|or|&|/)\s+(?P<state2>overdue|unpaid))?\s+)?"
 	r"(?:(?P<status>open|pending|completed|closed|active|approved|rejected)\s+)?(?P<dt>"
-	+ _DOCTYPE_ALT
+	+ _LIST_DT_ALT
 	+ ")"
+	# "for <company>": only taken as a company when it names one of the user's companies (else a customer, for the router)
+	+ r"(?:\s+(?:for|of|in|at)\s+(?:the\s+)?(?:company\s+)?(?P<company>[^?!]{2,80}?))?"
 	+ _END,
 	re.I,
 )
@@ -398,11 +419,25 @@ def field_question(text):
 	return {"mode": "query", "query": query}
 
 
+def _doctype(word):
+	word = word.lower()
+	return _DOCTYPES.get(word) or ABBREVIATIONS.get(word) or ABBREVIATIONS.get(word.rstrip("s"))
+
+
 def _query(m, operation):
-	doctype = _DOCTYPES[m.group("dt").lower()]
+	doctype = _doctype(m.group("dt"))
 	spec = REGISTRY[doctype]
 	state = (m.group("state") or "").lower()
+	if state and (m.groupdict().get("state2") or "").lower() not in ("", state):
+		state = "unpaid"  # "unpaid and overdue": every unpaid one, with the overdue ones counted and marked
 	query = {"doctype": doctype, "operation": operation, "filters": {}}
+	company = (m.groupdict().get("company") or "").strip()
+	if company:
+		from ai_erpnext.chat.queries import has_company, match_usable_company
+
+		if not (has_company(doctype) and match_usable_company(doctype, company)):
+			return None  # "invoices for Amit": a customer, not a company; the router reads it
+		query["filters"]["company"] = company  # resolved (or asked about, if ambiguous) by chat.queries
 	pay = (m.groupdict().get("pay") or m.groupdict().get("pay2") or "").lower()
 	if pay:
 		if doctype not in ("Sales Invoice", "Purchase Invoice"):
