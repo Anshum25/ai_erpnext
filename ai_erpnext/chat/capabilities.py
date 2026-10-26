@@ -491,6 +491,35 @@ def _module_abilities(doctypes):
 	return (text + ".") if text else "I can't work with these documents in the chat yet."
 
 
+# Named first when the chat says what it can look up; the rest are counted, not listed (the full list is too long to read).
+LOOKUP_EXAMPLES = (
+	"Sales Invoice",
+	"Purchase Invoice",
+	"Sales Order",
+	"Purchase Order",
+	"Quotation",
+	"Delivery Note",
+	"Customer",
+	"Supplier",
+	"Item",
+	"Employee",
+)
+
+
+def lookup_summary():
+	"""One short, accurate sentence on what can be looked up on this site (from the live query policy)."""
+	from ai_erpnext.capability import service as C
+
+	names = C.queryable_doctypes()
+	examples = [dt for dt in LOOKUP_EXAMPLES if dt in names]
+	rest = len(names) - len(examples)
+	return (
+		f"I can look up {', '.join(examples)}"
+		+ (f" and {rest} other kinds of records" if rest > 0 else "")
+		+ ", and tell you which companies you can use. Say “help” for examples."
+	)
+
+
 def capability_summary():
 	"""For the router prompt: what the assistant itself can and cannot do."""
 	from ai_erpnext.capability import service as C

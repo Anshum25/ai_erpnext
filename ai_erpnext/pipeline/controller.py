@@ -172,6 +172,13 @@ def run_ai_pipeline(doc_name):
 		doc.status = "Failed"
 		doc.error_log = SAFE_GENERIC_ERROR
 
+	# Cancelled in the chat while the provider was working (the entry is no longer Pending): the
+	# result is not stored, so a cancelled workflow can't come back. A locking read sees the
+	# latest committed status, not this job's snapshot from before the call.
+	if frappe.db.get_value("AI Document Entry", doc.name, "status", for_update=True) != "Pending":
+		logger.info(f"AI-PIPELINE discarded doc={doc.name} reason=no_longer_pending")
+		return
+
 	# The job runs as the user who queued it, and that user's write access was checked when
 	# the Pending entry was saved (or retried). ignore_permissions only covers this system
 	# write of the result fields; validation still runs. The status is never "Pending" here,

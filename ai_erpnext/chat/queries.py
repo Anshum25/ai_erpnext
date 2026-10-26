@@ -175,9 +175,9 @@ def validate(plan):
 		and (not raw_doctype or raw_doctype.lower() in ("auto", "any", "record", "party", "contact person"))
 	)
 	if not doctype and not auto:
-		raise QueryError(
-			f"I can't look up “{raw_doctype or 'that'}” yet. I can search: {', '.join(capability.queryable_doctypes())}."
-		)
+		from ai_erpnext.chat.capabilities import lookup_summary
+
+		raise QueryError(f"I can't look up “{raw_doctype or 'that'}” records. {lookup_summary()}")
 	if doctype and not capability.is_queryable(doctype):
 		raise QueryError(
 			capability.unavailable_reason(doctype)
@@ -203,6 +203,8 @@ def validate(plan):
 		"payment": None,
 		"sort": plan.get("sort") if plan.get("sort") in SORTS else "newest",
 		"limit": max(1, min(MAX_PAGE, int(flt(plan.get("limit")) or PAGE_SIZE))),
+		# more than one message shows: capped above, and the reply says so (never silently replaced)
+		"requested_limit": int(flt(plan.get("limit"))) if flt(plan.get("limit")) > MAX_PAGE else None,
 		"offset": max(0, min(MAX_OFFSET, int(flt(plan.get("offset"))))),
 		"fields": None,
 		"want": None,
@@ -828,6 +830,8 @@ def _list(q):
 	what = {"overdue": f"overdue {doctype}s", "unpaid": f"unpaid {doctype}s"}.get(
 		q["operation"], f"{doctype} records"
 	)
+	# a page of a longer list says how many match in all, so a page is never mistaken for the whole result
+	total = _total(doctype, filters, or_filters) if has_more or q["offset"] else len(rows)
 	if not rows:
 		return {
 			"text": f"I found no {what}"
@@ -837,11 +841,19 @@ def _list(q):
 			"titles": [],
 		}
 	start = q["offset"] + 1
-	summary = (
-		f"I found {len(rows)}{'+' if has_more else ''} {what}"
-		if not q["offset"]
-		else f"Showing {what} {start}–{q['offset'] + len(rows)}"
-	)
+	if q["offset"]:
+		summary = f"Showing {what} {start}–{q['offset'] + len(rows)} of {total}"
+	elif has_more:
+		summary = f"{total} {what} match; here are the first {len(rows)}"
+	else:
+		summary = f"I found {len(rows)} {what}"
+	if q.get("requested_limit") and has_more:
+		summary += (
+			f". You asked for {q['requested_limit']}, but I show at most {MAX_PAGE} per message; use “Show more” "
+			"for the next ones, or open the list in ERPNext to see or export all of them"
+		)
+	elif q.get("requested_limit"):
+		summary += f", which is all of them (you asked for up to {q['requested_limit']})"
 	columns = _columns(
 		doctype,
 		[
@@ -864,14 +876,40 @@ def _list(q):
 		"rows": table_rows,
 		"note": "From your ERPNext data. "
 		+ ("Filters: " + "; ".join(notes) + ". " if notes else "")
-		+ f"Sorted {q['sort']} first.",
+		+ f"Sorted {q['sort']} first."
+		+ (f" Showing {len(rows)} of {total} matching records." if has_more or q["offset"] else ""),
 		"has_more": has_more,
 	}
+	route = _list_route(doctype, filters, or_filters) if has_more else None
+	if route:
+		card["list_route"] = route
 	return {
 		"text": summary + ".",
 		"card": card,
 		"names": [r["name"] for r in rows],
 		"titles": [str(r.get(spec.title) or "") for r in rows],
+	}
+
+
+def _total(doctype, filters, or_filters):
+	"""How many records match the filters (the same permission-aware query, counted)."""
+	rows = frappe.get_list(
+		doctype, filters=filters, or_filters=or_filters or None, fields=[{"COUNT": "*", "as": "n"}]
+	)
+	return int(rows[0]["n"]) if rows else 0
+
+
+def _list_route(doctype, filters, or_filters):
+	"""The ERPNext list with the same filters ("Open in ERPNext"), when the list view can express them exactly: no OR
+	conditions and one condition per field. The list view applies the user's permissions itself."""
+	fields = [f[0] for f in filters]
+	if or_filters or len(fields) != len(set(fields)) or any(len(f) != 3 for f in filters):
+		return None
+	if any(op in ("in", "not in") and f != "company" for f, op, _value in filters):
+		return None  # record IDs chosen on the server (employee scope, child-row matches) are never sent to the browser
+	return {
+		"doctype": doctype,
+		"filters": {f: (value if op == "=" else [op, value]) for f, op, value in filters},
 	}
 
 

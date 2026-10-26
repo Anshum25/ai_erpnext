@@ -570,3 +570,62 @@ class TestChatHR(IntegrationTestCase):
 			self.assertIn("isn't installed", self.texts(r))
 			self.assertIsNone(self.pending())
 			self.assertNotIn("Leave Application", capabilities.capability_summary())
+
+	# 16. manual QA 2026-10-26: "how many leave balance i have?" -------------------------------------
+	def test_reported_phrasing_resolves_the_logged_in_users_own_employee(self):
+		self.assertEqual(
+			shortcuts.match("how many leave balance i have?")["query"],
+			{"doctype": "Employee", "operation": "leave_balance", "filters": {"self": True}},
+		)
+		self.as_user("emp")
+		r = self.say("how many leave balance i have?")
+		self.route.assert_not_called()  # deterministic: no AI call decides whose balance this is
+		self.assertEqual(self.balance_row(r)["remaining"], 8)
+		self.assertIn(self.e1, json.dumps(r["messages"]))
+
+	def test_missing_employee_mapping_explains_the_fix_and_never_falls_back(self):
+		from hrms.hr.doctype.leave_application import leave_application
+
+		self.as_user("hr")  # may read employees, but no Employee record has this user in User ID
+		with mock.patch.object(leave_application, "get_leave_details") as details:
+			r = self.say("how many leave balance i have?")
+		details.assert_not_called()  # no balance of any other employee is looked up
+		text = self.texts(r)
+		self.assertIn(f"Your user ({self.users['hr']}) isn't linked to an Employee record", text)
+		self.assertIn("“User ID” field of your Employee record", text)
+		self.assertIn("leave balance for <employee name or ID>", text)  # the follow-up this user can use
+		self.assertIsNone(self.card(r, "table"))
+		r = self.say(
+			f"leave balance for {self.e1}"
+		)  # the explicit follow-up works with the user's own permissions
+		self.assertEqual(self.balance_row(r)["remaining"], 8)
+
+	def test_linked_but_unreadable_employee_is_reported_without_bypassing_permissions(self):
+		from hrms.hr.doctype.leave_application import leave_application
+
+		self.as_user("emp")  # linked to e1; the permission-aware lookup is made to find nothing
+		with (
+			mock.patch.object(hr, "my_employees", return_value=[]),
+			mock.patch.object(leave_application, "get_leave_details") as details,
+		):
+			r = self.say("show my leave balance")
+		details.assert_not_called()
+		self.assertIn("linked to an Employee record, but you don't have permission to read it", self.texts(r))
+		self.assertIsNone(self.card(r, "table"))
+		self.assertNotIn(self.e1, json.dumps(r["messages"]))  # not even the ID of the unreadable record
+
+	def test_missing_allocation_or_leave_types_is_not_a_zero_balance(self):
+		self.as_user("other")  # e4: an employee without any Leave Allocation
+		text = self.texts(self.say("how many leave balance i have?"))
+		self.assertIn("has no leave allocations covering", text)
+		self.assertNotIn("0 day(s)", text)
+		with mock.patch.object(hr, "_leave_types", return_value=[]):
+			text = self.texts(self.say("show my leave balance"))
+		self.assertIn("HRMS has no Leave Types", text)
+		self.assertNotIn("0 day(s)", text)
+
+	def test_without_hrms_my_leave_balance_says_so(self):
+		with mock.patch.object(hr, "installed", return_value=False):
+			r = self.say("how many leave balance i have?")
+		self.assertIn("isn't installed", self.texts(r))
+		self.assertIsNone(self.card(r, "table"))

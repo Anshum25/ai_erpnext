@@ -24,7 +24,7 @@ from ai_erpnext.chat import hr
 from ai_erpnext.chat.queries import DATE_PRESETS, REGISTRY, SORTS
 from ai_erpnext.mapping.normalize import clean_text
 
-MODES = ("chat", "query", "open", "more", "clarify", "create", "unsupported")
+MODES = ("chat", "query", "open", "more", "clarify", "create", "unsupported", "off_topic")
 HISTORY_MESSAGES = 8
 # 200 chars per message keeps enough context for follow-up questions while reducing
 # per-call token use. Each saved char here reduces input tokens by ~0.25.
@@ -204,11 +204,12 @@ def _schema(doctypes=None):
 
 
 SYSTEM = """You route messages for an assistant inside ERPNext. Today is {today}. Reply with ONE JSON object in one of these modes.
-chat: greetings, ERPNext concepts and how-to, an error shown earlier, summarising the conversation. {{"mode":"chat","reply":"<at most 150 words>"}}
+chat: greetings, thanks, a short work-appropriate joke, ERPNext and business topics (accounting, sales, buying, stock, HR, ERPNext setup and customisation), this assistant, an error shown earlier, summarising the conversation. {{"mode":"chat","reply":"<at most 150 words>"}}
+off_topic: anything else (cooking, general programming, trivia, health, homework...). {{"mode":"off_topic"}} Never answer it.
   Never state this company's data in a reply (IDs, counts, totals, balances, names); use query for that. Never say you created, changed, submitted, paid or ran anything: only the server does that and reports it.
 query: live ERPNext data; never answer with data yourself.
   {{"mode":"query","query":{{"doctype":"","operation":"","filters":{{"company":"","party":"","status":"","search":"","name":"","docstatus":"draft|submitted|cancelled","payment":"unpaid|overdue","mine":true}},"date":{{"preset":"{presets}","from":"YYYY-MM-DD","to":"YYYY-MM-DD","field":"document_date|created"}},"fields":[],"sort":"{sorts}","limit":10}}}}
-  Omit unused keys. filters.company only when a company is named; date.field is document_date unless the user says created. "last/latest N X" = sort newest, limit N, no date.
+  Omit unused keys. limit = the number asked for. "my/our company" = doctype Company. filters.company only when a company is named; date.field is document_date unless the user says created. "last/latest N X" = sort newest, limit N, no date.
   operation: list | count | details (one record: filters.name or filters.search exactly as written; "fields" = what was asked in plain words, e.g. ["mobile"], ["items"], ["taxes"], ["outstanding"], ["status"]) | aggregate | child_rows | summary (a customer's or supplier's orders and invoices; filters.search) | overdue | unpaid | sales_summary (sales totals for a period) | outstanding_by_customer | outstanding_by_supplier | leave_balance | attendance | compare (Sales/Purchase Invoice totals of two periods: "date" and "compare_to", both {{"preset"}} or {{"from","to"}}) | below_reorder (doctype Bin: items at or below their re-order level). doctype "auto" = a person or company of unknown type.
   "my X" = filters.mine true (never drop it); status "open" = not yet finished.
   Employees: doctype Employee; filters.self=true for the user's own ("my") record, else filters.search = the employee as written. leave_balance (+filters.leave_type if named; date only if a period is named) and attendance (date = the period) are about one employee.
@@ -216,7 +217,7 @@ query: live ERPNext data; never answer with data yourself.
   Optional parts, only with the fields, tables and links listed below, never SQL:
   "where":[{{"field":"","op":"=|!=|>|<|>=|<=|in|like|between","value":""}}]; "aggregate":{{"fn":"count|sum|avg|min|max","field":"","group_by":"","period":"month|year"}} (period needs date; group_by and period may combine);
   "child":{{"table":"","where":[],"fields":[]}} (child_rows lists the rows; with list/count it finds records having such a row); "link":{{"field":"","fields":[]}} (list only, one related record per row); "overdue_days":N (invoices overdue by more than N days).
-  Follow-ups ("only the unpaid ones") start from previous_query and change only what was asked.
+  Follow-ups that clearly refer to the previous results ("only the unpaid ones", "20 of them") start from previous_query and change only what was asked; any other message starts fresh, without its DocType or filters. Records of no named kind ("show 100 records") = clarify which.
 open: a row of the previous results {{"mode":"open","index":3}}. more: the next page {{"mode":"more"}}.
 clarify: an essential detail is missing (which customer, which period) {{"mode":"clarify","question":""}}. Never clarify to collect details of a record to create: use create.
 create: a NEW record of: {creatable}. {{"mode":"create","doctype":"","values":{{"party":"","posting_date":"YYYY-MM-DD"}},"items":[{{"item":"","qty":0,"rate":0}}]}}
@@ -309,6 +310,7 @@ def router_context(last_query, page=None):
 	last_query = last_query or {}
 	plan = dict(last_query.get("plan") or {})
 	plan.pop("all_states", None)
+	plan.pop("requested_limit", None)
 	if plan.get("where"):  # record IDs picked from the page (selected rows) stay on the server
 		plan["where"] = [
 			w for w in plan["where"] if not (isinstance(w, (list, tuple)) and w and w[0] == "name")

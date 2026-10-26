@@ -8,7 +8,10 @@
 // ones (from this or another browser) are reopened only when picked from the history. Other
 // pages' conversations are never changed. The server checks ownership on every request. Each
 // request remembers which conversation it was for: a late response for another one is ignored.
+// While a workflow runs (a guided form, a document image) a Cancel bar above the composer cancels it through the server,
+// also while another request is still running; every question of the workflow has its own Cancel too.
 import { collectPageContext, snapshotForm } from "./ai_page_context.js";
+import { cancelControl, insertBeforeId, isStale, questionChoices } from "./ai_chat_state.js";
 
 $(document).ready(function () {
 	if (!window.frappe || !frappe.boot || !frappe.boot.user || frappe.boot.user.name === "Guest")
@@ -131,6 +134,10 @@ $(document).ready(function () {
 	.ai-send { width: 38px; height: 38px; border-radius: 10px; border: none; background: var(--gray-900, #171717); color: #fff; display: grid; place-items: center; cursor: pointer; flex-shrink: 0; }
 	.ai-send:disabled { opacity: .4; cursor: not-allowed; }
 	.ai-hint { font-size: 11px; color: var(--text-muted, #6b7280); margin-top: 4px; }
+	.ai-workflow { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border-color, #e5e7eb); background: var(--card-bg, #fff); font-size: 12.5px; }
+	.ai-workflow[hidden] { display: none; }
+	.ai-workflow-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted, #6b7280); }
+	.ai-workflow .ai-opt { flex-shrink: 0; }
 	.ai-source { font-size: 10.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted, #6b7280); }
 	.ai-source.erpnext { color: var(--blue-600, #2563eb); }
 	.ai-link { color: var(--blue-600, #2563eb); background: none; border: none; padding: 0; cursor: pointer; text-decoration: underline; font: inherit; text-align: left; }
@@ -168,6 +175,10 @@ $(document).ready(function () {
 			</header>
 			<div class="ai-history" role="region" aria-label="Previous conversations" hidden></div>
 			<div class="ai-log" id="ai-chat-body" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation" tabindex="0"></div>
+			<div class="ai-workflow" role="region" aria-label="Task in progress" hidden>
+				<span class="ai-workflow-label"></span>
+				<button type="button" class="ai-opt secondary" data-act="cancel-workflow">Cancel</button>
+			</div>
 			<form class="ai-composer" novalidate>
 				<div class="ai-attach" hidden>
 					<img alt="" />
@@ -198,16 +209,22 @@ $(document).ready(function () {
 		$send = $root.find(".ai-send"),
 		$file = $root.find(".ai-file");
 	const $attach = $root.find(".ai-attach"),
-		$history = $root.find(".ai-history");
+		$history = $root.find(".ai-history"),
+		$workflow = $root.find(".ai-workflow");
 
 	// gen changes whenever another conversation is shown; responses of an older gen are dropped.
+	// seq numbers requests; appliedSeq is the newest one whose state (question, workflow, busy) is shown.
 	const S = {
 		session: null,
 		gen: 0,
 		lastId: 0,
 		pendingId: null,
+		workflow: null,
 		busy: false,
 		sending: false,
+		inflight: 0,
+		seq: 0,
+		appliedSeq: 0,
 		loaded: false,
 		pollTimer: null,
 		pollStarted: 0,
@@ -256,8 +273,8 @@ $(document).ready(function () {
 		call(
 			"new_conversation",
 			{},
-			(r) => {
-				apply(r);
+			(r, seq) => {
+				apply(r, seq);
 				$input.trigger("focus");
 			},
 			null
@@ -276,6 +293,8 @@ $(document).ready(function () {
 			S.pollTimer = null;
 		}
 		S.busy = false;
+		S.workflow = null;
+		renderWorkflow();
 		resetLog();
 	}
 	function hideHistory() {
@@ -323,27 +342,32 @@ $(document).ready(function () {
 
 	// ---------------------------------------------------------------- server calls
 	function call(method, args, ok, retryPayload, failed) {
-		const gen = S.gen;
+		const gen = S.gen,
+			seq = ++S.seq;
+		S.inflight += 1;
 		S.sending = true;
 		updateComposer();
 		showTyping(true);
+		const done = () => {
+			S.inflight -= 1;
+			S.sending = S.inflight > 0; // a Cancel may have been sent while another request was running
+			showTyping(S.sending);
+			updateComposer();
+		};
 		frappe.call({
 			method: API + method,
 			args,
 			type: "POST",
 			callback: (r) => {
-				S.sending = false;
-				showTyping(false);
-				updateComposer();
+				done();
 				if (gen !== S.gen) return; // another conversation is shown now
-				if (r.message) ok(r.message);
+				if (r.message) ok(r.message, seq);
 			},
 			error: () => {
-				S.sending = false;
-				showTyping(false);
-				updateComposer();
+				done();
 				if (failed) failed();
 				if (gen !== S.gen) return;
+				renderWorkflow(); // a Cancel that didn't go through can be pressed again
 				systemNote(
 					"The request didn't go through.",
 					retryPayload ? () => send(retryPayload) : null
@@ -357,12 +381,12 @@ $(document).ready(function () {
 		call(
 			"get_session",
 			{ session: S.session },
-			(r) => {
+			(r, seq) => {
 				S.loading = false;
 				S.loaded = true;
 				resetLog();
 				S.session = null;
-				apply(r);
+				apply(r, seq);
 				restoreAttachment();
 			},
 			null,
@@ -393,7 +417,7 @@ $(document).ready(function () {
 		}
 		call("send_message", payload, apply, payload);
 	}
-	function apply(r) {
+	function apply(r, seq) {
 		if (r.closed) {
 			// That conversation has expired: nothing was sent. Start a new one and give the typed text
 			// back instead of posting it to some other conversation.
@@ -403,8 +427,8 @@ $(document).ready(function () {
 			call(
 				"get_session",
 				{},
-				(x) => {
-					apply(x);
+				(x, seq) => {
+					apply(x, seq);
 					systemNote(
 						"That conversation has expired, so your message wasn't sent. A new conversation was started; the old one is no longer available."
 					);
@@ -421,11 +445,38 @@ $(document).ready(function () {
 		if (S.session && r.session !== S.session) resetLog();
 		S.session = r.session;
 		(r.messages || []).forEach(renderMessage);
+		if (seq !== undefined && isStale(seq, S.appliedSeq)) {
+			// an older request answered after a newer one: its messages are shown, its state is out of date
+			refreshQuestions();
+			return;
+		}
+		if (seq !== undefined) S.appliedSeq = seq;
 		S.pendingId = r.pending_id;
+		S.workflow = r.workflow || null;
+		renderWorkflow();
 		refreshQuestions();
 		setBusy(r.busy);
 		scrollToEnd();
 	}
+	function renderWorkflow() {
+		const control = cancelControl(S.workflow);
+		$workflow.prop("hidden", !control);
+		if (!control) return;
+		$workflow.find(".ai-workflow-label").text(control.text);
+		$workflow
+			.find('[data-act="cancel-workflow"]')
+			.text(control.label)
+			.attr("aria-label", control.ariaLabel)
+			.prop("disabled", false);
+	}
+	// Cancel works while another request is running: the server handles requests of a conversation one at a time, and
+	// state is only taken from the newest response (apply).
+	$root.on("click", '[data-act="cancel-workflow"]', function () {
+		const control = cancelControl(S.workflow);
+		if (!control) return;
+		$(this).prop("disabled", true); // one request per click; the server answers a repeated Cancel with "nothing to cancel"
+		send({ action: JSON.stringify(control.action), client_id: uid() });
+	});
 	function setBusy(busy) {
 		S.busy = !!busy;
 		if (S.busy && !S.pollTimer) {
@@ -446,14 +497,15 @@ $(document).ready(function () {
 				return;
 			}
 			const gen = S.gen,
-				session = S.session;
+				session = S.session,
+				seq = ++S.seq;
 			frappe.call({
 				method: API + "poll",
 				type: "POST",
 				args: { session, since: S.lastId },
 				callback: (r) => {
 					if (gen !== S.gen || !r.message || r.message.session !== session) return; // a newer conversation is shown
-					apply(r.message);
+					apply(r.message, seq);
 					if (S.busy && !S.pollTimer) schedulePoll();
 				},
 				error: () => {
@@ -500,8 +552,7 @@ $(document).ready(function () {
 		scrollToEnd();
 	}
 	function renderMessage(m) {
-		if (m.id <= S.lastId) return;
-		S.lastId = m.id;
+		if ($log.children(`[data-mid="${Number(m.id)}"]`).length) return; // already shown
 		const $row = $(
 			`<div class="ai-row ai-${m.role === "user" ? "user" : "assistant"}" data-mid="${
 				m.id
@@ -525,7 +576,21 @@ $(document).ready(function () {
 		if (m.suggestions && m.suggestions.length) $row.append(renderSuggestions(m.suggestions));
 		if (m.question) $row.append(renderQuestion(m.question, m.links));
 		else if (m.links) $row.append(renderLinks(m.links));
-		$log.append($row);
+		if (m.id > S.lastId) {
+			S.lastId = m.id;
+			$log.append($row);
+			return;
+		}
+		// a late message of an earlier request: in its place, not dropped
+		const shown = $log
+			.children("[data-mid]")
+			.map(function () {
+				return Number($(this).attr("data-mid"));
+			})
+			.get();
+		const before = insertBeforeId(shown, m.id);
+		if (before === null) $log.append($row);
+		else $log.children(`[data-mid="${before}"]`).before($row);
 	}
 	function pill(status) {
 		const map = { ok: ["✓", "Matched"], warn: ["!", "Check"], error: ["✗", "Needs input"] };
@@ -710,15 +775,16 @@ $(document).ready(function () {
 	function renderQuestion(q, links) {
 		const $q = $(`<div class="ai-question" data-qid="${esc(q.id)}"></div>`);
 		if (links) $q.append(renderLinks(links));
-		if (q.options && q.options.length) {
+		const choices = questionChoices(q); // its answers, then its Cancel
+		if (choices.length) {
 			const $opts = $(
 				'<div class="ai-options" role="group" aria-label="Choose an answer"></div>'
 			);
-			q.options.forEach((o) => {
+			choices.forEach((o) => {
 				$opts.append(
 					$(
 						`<button type="button" class="ai-opt ${
-							o.style === "secondary" ? "secondary" : ""
+							o.secondary ? "secondary" : ""
 						}">${esc(o.label)}</button>`
 					).on("click", function () {
 						answer(q.id, o.value, o.label);

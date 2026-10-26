@@ -36,9 +36,18 @@ from ai_erpnext.mapping.normalize import clean_text, normalize_name, parse_date
 OPERATIONS = ("leave_balance", "attendance")
 DOCTYPES = ("Leave Application", "Expense Claim")  # creatable HR DocTypes (they need HRMS)
 NOT_INSTALLED = "Leave and attendance data come from the HRMS app, which isn't installed on this site."
-NO_EMPLOYEE = (
-	"Your user account isn't linked to an Employee record that you can access, so I don't know who “my” is. "
-	"Ask HR to set your user on your Employee record, or tell me the employee's name or ID."
+NOT_LINKED = (
+	"Your user ({user}) isn't linked to an Employee record, so I can't tell whose leave or attendance “my” means. "
+	"HR can link it by entering your user in the “User ID” field of your Employee record."
+)
+LINKED_NOT_READABLE = (
+	"Your user is linked to an Employee record, but you don't have permission to read it, so I can't use it. Ask your "
+	"administrator to give you access to your own Employee record (for example the Employee role); I never look it up with "
+	"more rights than your own."
+)
+NO_LEAVE_TYPES = (
+	"HRMS has no Leave Types that you can see, so no leave can have been allocated yet. HR sets up Leave Types first, "
+	"then allocates leave with a Leave Allocation or a Leave Policy Assignment."
 )
 MAX_ATTENDANCE_ROWS = 62
 MAX_PERIOD_DAYS = 366
@@ -89,7 +98,7 @@ def self_employee(q):
 	rows = my_employees()
 	active = [r for r in rows if r.status == "Active"] or rows
 	if not active:
-		raise queries.QueryError(NO_EMPLOYEE)
+		raise queries.QueryError(no_employee_reason())
 	if len(active) > 1:
 		raise queries.QueryClarify(
 			"Your user is linked to more than one employee. Which one do you mean?",
@@ -101,6 +110,25 @@ def self_employee(q):
 			],
 		)
 	return active[0].name
+
+
+def no_employee_reason():
+	"""Why “my” can't be resolved: no Employee is linked to the user, or one is but the user may not read it.
+
+	Only the user's own link is checked (with get_all, which reveals nothing about other employees); it is never used to
+	show data: every lookup still runs with the user's own permissions."""
+	user = frappe.session.user
+	if user != "Guest" and frappe.get_all("Employee", filters={"user_id": user}, pluck="name", limit=1):
+		return LINKED_NOT_READABLE
+	text = NOT_LINKED.format(user=user)
+	if frappe.has_permission("Employee", "read"):
+		text += (
+			" Meanwhile you can ask about a specific employee, for example “leave balance for <employee name or ID>”, "
+			"or “find employee <name>” to look up the ID."
+		)
+	else:
+		text += " Until then I can't show your leave balance."
+	return text
 
 
 def _target(q):
@@ -250,6 +278,8 @@ def leave_balance(q):
 			)
 			return dict(result, text=reason)
 		balances = {wanted: balances[wanted]}
+	if not balances and not _leave_types():
+		return dict(result, text=NO_LEAVE_TYPES)
 	if not balances:
 		return dict(
 			result,
@@ -567,6 +597,12 @@ HOW_MANY_RE = re.compile(
 	r"(?:\s+(?:left|remaining|available|pending))?(?:\s+(?:for|of)\s+(?P<target2>.+?))?" + _TAIL,
 	re.I,
 )
+# "how many leave balance i have?", "how much leave do I have left"
+HOW_MANY_MINE_RE = re.compile(
+	r"^\s*(?:please\s+)?how\s+(?:many|much)\s+(?:(?P<type>[a-z]+(?:\s+[a-z]+)?)\s+)?leaves?(?:\s+(?:balances?|days?))?"
+	r"\s+(?:do\s+|have\s+)?i\s+(?:have|got|get)(?:\s+(?:left|remaining|available))?" + _TAIL,
+	re.I,
+)
 ATTENDANCE_RE = re.compile(
 	_ASK + r"(?:(?P<my>my)\s+)?attendance(?:\s+(?:records?|summary|report|details))?"
 	r"(?:\s+(?:for|of)\s+(?P<target>.+?))?" + _TAIL,
@@ -702,7 +738,7 @@ def _split_period(target, period_text):
 def match(text):
 	"""A plan for an HR question the wording makes unambiguous, or None (the router model decides)."""
 	text = text or ""
-	for regex in (LEAVE_BALANCE_RE, HOW_MANY_RE, POSSESSIVE_BALANCE_RE):
+	for regex in (LEAVE_BALANCE_RE, HOW_MANY_RE, HOW_MANY_MINE_RE, POSSESSIVE_BALANCE_RE):
 		m = regex.match(text)
 		if m:
 			g = m.groupdict()

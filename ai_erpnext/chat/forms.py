@@ -29,7 +29,7 @@ from frappe.utils import add_days, flt, getdate, nowdate, strip_html
 
 from ai_erpnext.capability import service as capability
 from ai_erpnext.capability.access import readable_exists, readable_names
-from ai_erpnext.chat import hr, requirements
+from ai_erpnext.chat import hr, requirements, workflow
 from ai_erpnext.mapping.customer import CustomerMatcher
 from ai_erpnext.mapping.item import ItemMatcher
 from ai_erpnext.mapping.normalize import clean_text, normalize_name, parse_date, parse_number
@@ -857,6 +857,18 @@ QTY_AND_RATE_RE = re.compile(
 	r"(?:rate\s*|price\s*)?(?:of\s*)?(?P<r>\d[\d,]*(?:\.\d+)?)\s*(?:each|per\s+unit|/\s*unit)?\s*$",
 	re.I,
 )
+# A reply that rejects the records offered ("no", "none of these"): not a name to search for (and never one to create).
+NONE_RE = re.compile(
+	r"^\s*(?:no|nope|nah|none|neither|not\s+(?:these|those|them|any(?:\s+of\s+(?:these|them|those))?)"
+	r"|none\s+of\s+(?:these|them|those|the\s+above)|no\s+(?:one|match)\s+(?:here|of\s+these))(?:,?\s+thanks?)?\s*[.!]*\s*$",
+	re.I,
+)
+# Typed instead of pressing "Create new ...": the explicit choice, optionally with the name ("create new customer Rahul").
+CREATE_NEW_TEXT_RE = re.compile(
+	r"^\s*(?:yes,?\s+)?(?:please\s+)?(?:create|add|make)\s+(?:a\s+|it\s+as\s+a\s+)?new(?:\s+one)?"
+	r"(?:\s+(?P<what>customer|supplier|item|lead|employee|project)(?:\s+(?:called\s+|named\s+)?(?P<name>.+?))?)?\s*[.!]*\s*$",
+	re.I,
+)
 
 
 def answer_term(text):
@@ -899,7 +911,8 @@ def not_creatable(doctype=None):
 	)
 
 
-def start(ctx, doctype, values=None, items=None, return_to=None, rows=None, intro=None):
+def start(ctx, doctype, values=None, items=None, return_to=None, rows=None, intro=None, keep_workflow=False):
+	"""keep_workflow: the same workflow goes on with another form (a switch of document type, "start over")."""
 	if doctype not in SPECS:
 		ctx.say(not_creatable(doctype))
 		return
@@ -923,6 +936,8 @@ def start(ctx, doctype, values=None, items=None, return_to=None, rows=None, intr
 		"row_open": bool(spec.get("rows")),
 		"rows_done": not spec.get("rows"),
 	}
+	if not ctx.st.get("forms") and not keep_workflow:
+		workflow.begin(ctx, "form")
 	ctx.st.setdefault("forms", []).append(form)
 	for f in spec["header"]:
 		default = _default(f, form)
@@ -985,10 +1000,24 @@ def start(ctx, doctype, values=None, items=None, return_to=None, rows=None, intr
 
 
 def cancel(ctx):
+	"""Cancel the whole workflow (every open form). Records created on the way stay and are named."""
 	forms = ctx.st.get("forms") or []
+	created = list((workflow.current(ctx) or {}).get("created") or [])
 	ctx.st["forms"] = []
 	ctx.st["pending"] = None
-	ctx.say(f"Cancelled{' the ' + forms[0]['doctype'] if forms else ''}. Nothing was created.")
+	ctx.say(
+		workflow.cancelled_text(forms[0]["doctype"] if forms else None, created),
+		links=workflow.links(created) or None,
+	)
+
+
+def _cancel_option(ctx):
+	"""The form's own Cancel choice. In a record created on the way (a new customer for the invoice) it only goes back to
+	the outer document, and says so; the question's separate Cancel (engine.Ctx.ask) cancels everything."""
+	forms = ctx.st.get("forms") or []
+	if len(forms) > 1:
+		return {"label": f"Back to the {forms[-2]['doctype']}", "value": "__cancel__", "style": "secondary"}
+	return {"label": "Cancel", "value": "__cancel__", "style": "secondary"}
 
 
 def switch(ctx, text):
@@ -1028,6 +1057,7 @@ def switch(ctx, text):
 	start(
 		ctx,
 		new,
+		keep_workflow=True,
 		values=values,
 		rows=rows,
 		intro=f"Switched to a {'new ' if new in MASTERS else ''}{new}"
@@ -1048,7 +1078,12 @@ def restart(ctx):
 	doctype = ctx.st["forms"][0]["doctype"]
 	ctx.st["forms"] = []
 	ctx.st["pending"] = None
-	return start(ctx, doctype, intro=f"Starting the {doctype} again from the beginning. Nothing was created.")
+	return start(
+		ctx,
+		doctype,
+		intro=f"Starting the {doctype} again from the beginning. Nothing was created.",
+		keep_workflow=True,
+	)
 
 
 def next_step(ctx):
@@ -1101,6 +1136,14 @@ def answer(ctx, pending, value, from_text):
 			return _start_master(ctx, form, field["master"], pending.get("search") or "", {"field": key})
 		if value == "__more__" and field["type"] == "link":
 			return _ask_field(ctx, form, field, offset=int(pending.get("offset") or 0) + PAGE)
+		if from_text and field["type"] == "link" and NONE_RE.match(value or ""):
+			return _none_of_these(ctx, form, field, pending)
+		new = CREATE_NEW_TEXT_RE.match(value or "") if from_text and field["type"] == "link" else None
+		if new and field.get("master") and _can_create(field["master"]):
+			what = (new.group("what") or "").lower()
+			if not what or what == field["master"].lower():
+				name = clean_text(new.group("name"), 140) or pending.get("search") or ""
+				return _start_master(ctx, form, field["master"], name, {"field": key})
 		if from_text and field["type"] == "link":
 			value = answer_term(value) or value
 		error = _set(ctx, form, field, value, from_text=from_text)
@@ -1564,7 +1607,7 @@ def _ask_field(ctx, form, f, search=None, candidates=None, text=None, offset=0):
 	if not f["required"] and f.get("skip_label"):
 		options.append({"label": f["skip_label"], "value": "__skip__", "style": "secondary"})
 	prompt = text or f.get("prompt") or f"Which {f['label'].lower()} should I use?"
-	if f["type"] == "link" and input_type == "text" and not candidates:
+	if f["type"] == "link" and input_type == "text" and not candidates and not text:
 		creatable = f.get("master") and _can_create(f["master"])
 		if options:
 			prompt += (
@@ -1584,10 +1627,39 @@ def _ask_field(ctx, form, f, search=None, candidates=None, text=None, offset=0):
 		ctx.st["pending"]["search"] = search
 
 
+def creates_new_for(ctx, pending, text):
+	"""“create new customer” typed while a Customer question is open: the explicit “Create new” answer, not a new request."""
+	if not (active(ctx) and pending and pending.get("kind") == "form_field"):
+		return False
+	m = CREATE_NEW_TEXT_RE.match(text or "")
+	if not m:
+		return False
+	form = ctx.st["forms"][-1]
+	f = _field(form["doctype"], pending.get("key"), form)
+	what = (m.group("what") or "").lower()
+	return bool(f and f.get("master") and (not what or what == f["master"].lower()))
+
+
+def _none_of_these(ctx, form, f, pending):
+	"""“no” to the records offered: ask again, saying what the choices are; nothing is searched for or created."""
+	what = (f.get("master") or f["label"]).lower()
+	search = pending.get("search")
+	creatable = f.get("master") and _can_create(f["master"])
+	text = (
+		f"OK, none of these. Type the {what}'s name (or part of it) to search"
+		+ (f", choose “Create new {what}” to add a new one" if creatable else "")
+		+ ", or press Cancel to stop."
+	)
+	_ask_field(ctx, form, f, search=search, text=text)
+
+
 def _ask_not_found(ctx, form, f, value):
 	"""No record matches what the user typed: offer existing records and, separately, "Create new"."""
 	if f.get("master") and _can_create(f["master"]):
-		text = f"I couldn't find a {f['master'].lower()} called “{value}”. Pick an existing one, type another name, or create “{value}” as a new {f['master'].lower()}."
+		text = (
+			f"I couldn't find a {f['master'].lower()} called “{value}”. Choose an existing {f['master'].lower()} below, "
+			f"type another name to search, or choose “Create new {f['master'].lower()}” to add “{value}” as a new one."
+		)
 	else:
 		text = f"I couldn't find a {f['label'].lower()} called “{value}”. Pick one or type another name."
 	_ask_field(ctx, form, f, search=value, text=text)
@@ -2201,10 +2273,7 @@ def _ask_warehouse(ctx, form, rows, candidates=None, text=None):
 		return ctx.ask(
 			"form_confirm",
 			"Nothing was created yet.",
-			options=[
-				{"label": "Retry", "value": "__retry__"},
-				{"label": "Cancel", "value": "__cancel__", "style": "secondary"},
-			],
+			options=[{"label": "Retry", "value": "__retry__"}, _cancel_option(ctx)],
 		)
 	prompt = text or (
 		requirements.WAREHOUSE_RULES[form["doctype"]].format(items=which)
@@ -2487,10 +2556,7 @@ def _ask_confirm(ctx, form):
 	ctx.ask(
 		"form_confirm",
 		text,
-		options=[
-			{"label": label, "value": "__create__"},
-			{"label": "Cancel", "value": "__cancel__", "style": "secondary"},
-		],
+		options=[{"label": label, "value": "__create__"}, _cancel_option(ctx)],
 		card=card,
 	)
 
@@ -2573,6 +2639,10 @@ def _create(ctx, form):
 
 	ctx.st["forms"].pop()
 	ctx.st["pending"] = None
+	if ctx.st["forms"]:  # made on the way: it stays if the outer document is cancelled
+		workflow.note_created(ctx, doctype, doc.name)
+	else:
+		workflow.finish(ctx, doctype, doc.name)
 	ctx.st["last_created"] = {
 		"doctype": doctype,
 		"name": doc.name,
@@ -2813,8 +2883,5 @@ def _failed(ctx, form, reason, who="ERPNext"):
 	ctx.ask(
 		"form_confirm",
 		f"Nothing was created. You can change a value (for example “change {example} to …”), retry, or cancel.",
-		options=[
-			{"label": "Retry", "value": "__retry__"},
-			{"label": "Cancel", "value": "__cancel__", "style": "secondary"},
-		],
+		options=[{"label": "Retry", "value": "__retry__"}, _cancel_option(ctx)],
 	)

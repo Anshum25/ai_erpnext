@@ -36,7 +36,20 @@ THANKS_RE = re.compile(
 	+ _END,
 	re.I,
 )
-MORE_RE = re.compile(r"^\s*(show\s+more|more|next|next\s+page|load\s+more|see\s+more)" + _END, re.I)
+MORE_RE = re.compile(
+	r"^\s*(show\s+more|more|next|next\s+page|load\s+more|see\s+more)(?:\s+(?:records|results|rows|entries))?"
+	+ _END,
+	re.I,
+)
+# Records of no named kind that don't refer back to earlier results ("show 100000 records", "list all entries"): which records
+# is asked, never guessed from the previous query (a different topic must not inherit its DocType or filters).
+GENERIC_RECORDS_RE = re.compile(
+	r"^\s*(?:please\s+)?(?:(?P<verb>show|list|display|get|give|fetch|find|load)(?:\s+me)?\s+)?(?:all\s+(?:the\s+)?|the\s+|every\s+)?"
+	r"(?:(?:first|last|latest|recent|newest|oldest|top)\s+)?(?P<limit>\d[\d,]*\s+)?(?:(?:first|last|latest|recent|newest|oldest|top)\s+)?"
+	r"(?:records?|entries|entry|rows?|data|documents?|everything|results?)" + _END,
+	re.I,
+)
+RECORDS_QUESTION = "Which records would you like to see: customers, invoices, orders, or something else?"
 ORDINALS = {
 	"first": 1,
 	"second": 2,
@@ -75,7 +88,7 @@ _DOCTYPES = {n: dt for dt in REGISTRY for n in (dt.lower(), _PLURALS[dt])}
 # "my" is a filter (chat.queries._mine), never a filler word: "my tasks" are not all tasks.
 LIST_RE = re.compile(
 	r"^\s*(?:please\s+)?(?:(?:show|list|display|get|give)(?:\s+me)?\s+)?(?:(?P<mine>my)\s+|(?:the|all|all\s+the)\s+)?"
-	r"(?:(?P<sort>last|latest|recent|newest|oldest|first)\s+)?(?P<limit>\d{1,2}\s+)?"
+	r"(?:(?P<sort>last|latest|recent|newest|oldest|first)\s+)?(?P<limit>\d[\d,]{0,8}\s+)?"
 	r"(?:(?P<state>draft|submitted|cancelled|overdue|unpaid)\s+)?"
 	r"(?:(?P<status>open|pending|completed|closed|active|approved|rejected)\s+)?(?P<dt>"
 	+ _DOCTYPE_ALT
@@ -279,6 +292,14 @@ def match(text, last_query=None):
 		return {"mode": "chat", "reply": THANKS_REPLY}
 	if MORE_RE.match(text) and last_query:
 		return {"mode": "more"}
+	m = GENERIC_RECORDS_RE.match(text)
+	if m and (m.group("verb") or m.group("limit")):
+		limit = int(re.sub(r"\D", "", m.group("limit") or "") or 0)
+		return {"mode": "records", "limit": limit or None}
+	from ai_erpnext.chat import company
+
+	if company.asks(text):
+		return {"mode": "company"}
 	m = OPEN_RE.match(text)
 	if m and last_query and last_query.get("names"):
 		n = m.group("n").lower()
@@ -401,5 +422,6 @@ def _query(m, operation):
 		sort = (m.groupdict().get("sort") or "").lower()
 		query["sort"] = "oldest" if sort in ("oldest", "first") else "newest"
 		if m.groupdict().get("limit"):
-			query["limit"] = int(m.group("limit"))
+			# capped (and the cap explained) by chat.queries
+			query["limit"] = int(re.sub(r"\D", "", m.group("limit")))
 	return {"mode": "query", "query": query}

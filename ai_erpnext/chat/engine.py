@@ -17,7 +17,7 @@ from frappe import _
 from frappe.utils import flt, nowdate, strip_html
 
 from ai_erpnext.capability.access import readable_exists
-from ai_erpnext.chat import capabilities, forms, history, hr, masters, page_context
+from ai_erpnext.chat import capabilities, forms, history, hr, masters, page_context, workflow
 from ai_erpnext.chat import session as S
 from ai_erpnext.constants import FieldStatus
 from ai_erpnext.mapping.adapters import DocumentAdapter
@@ -37,7 +37,8 @@ HELP = (
 	"I can help in three ways:\n"
 	"• Chat: ask me about ERPNext concepts and processes, e.g. “Explain what a Sales Invoice is”.\n"
 	"• Look up your data (read-only): e.g. “Show me the last 10 Sales Invoices”, “List overdue invoices”, "
-	"“How much sales did we make this month?”, “Find customer ABC”.\n"
+	"“How much sales did we make this month?”, “Find customer ABC”, “What is my company?”. I show up to 20 records per message "
+	"(“Show more” continues).\n"
 	"• Create records by answering a few questions: e.g. “Create a purchase invoice”, “New sales order”, “Create customer”. "
 	"{creatable}\n"
 	"• Create a draft from a document image or a one-page PDF (attach it with the paperclip): invoices, credit and debit notes, orders, quotations, "
@@ -50,6 +51,18 @@ HR_HELP = (
 	"\n\nHR (HRMS): “show my leave balance”, “leave balance for <employee>”, “my attendance this month”, “find employee "
 	"<name>”, and “apply for leave” to create a Leave Application as a Draft (never submitted or approved by me)."
 )
+# The reply to a question outside ERPNext and business (a recipe, general programming): fixed text, never the model's answer.
+OFF_TOPIC = (
+	"I'm your ERPNext assistant, so I only help with ERPNext and your business: looking up your data, creating records, "
+	"and explaining ERPNext and business processes (accounting, sales, buying, stock, HR). That question is outside what "
+	"I can help with here. Say “help” for examples."
+)
+# A model answer with code is only shown for a question about ERPNext/Frappe or business data (customisation, reports...).
+ERP_TOPIC_RE = re.compile(
+	r"\b(?:erp(?:next)?|frappe|doctypes?|server\s+scripts?|client\s+scripts?|custom\s+fields?|reports?|print\s+formats?|"
+	r"jinja|workflows?|invoices?|orders?|items?|customers?|suppliers?|stock|ledgers?|accounts?|employees?|hrms)\b",
+	re.I,
+)
 GREETING = "Hi! Ask me about ERPNext, look up your data, create records step by step (e.g. “create purchase invoice”), or attach a document image."
 
 # A caption asking for a payment: the image is still read, but nothing is ever paid (only Drafts are created).
@@ -57,7 +70,29 @@ PAYMENT_CAPTION_RE = re.compile(
 	r"\b(?:pay|record|make|post|process)\s+(?:a\s+|the\s+)?payments?\b|\bpayment\s+entry\b|\bpay\s+(?:this|it|the)\b",
 	re.I,
 )
-CANCEL_RE = re.compile(r"^\s*(cancel|stop|abort|discard|never\s*mind|forget it)\b", re.I)
+# Asking to stop what is in progress: the whole message ("cancel", "cancel this", "stop creating it", "cancel the sales
+# invoice", "never mind", "I changed my mind", common typos). Handled without an AI call (engine._cancel). A message naming
+# a record ID ("cancel ACC-SINV-2026-00001") never matches: that is about an ERPNext document, which the chat never cancels.
+_CANCEL_LEAD = r"^\s*(?:(?:please|ok|okay|no|actually|just|oh|sorry),?\s+)*"
+_CANCEL_VERB = r"(?:cancel+|cancle|canlce|cancal|cansel|stop|abort|discard|quit|exit)"
+_CANCEL_OTHER = (
+	r"never\s*mind|forget\s+(?:it|about\s+it)|(?:i\s+(?:have\s+|'ve\s+)?)?changed\s+my\s+mind"
+	r"|i\s+(?:don'?t|do\s+not)\s+want\s+(?:it|this|that|to\s+(?:create|continue|make)\s+(?:it|this|that))(?:\s+any\s*more)?"
+)
+_CANCEL_TAIL = r"(?:,?\s+(?:please|thanks|thank\s+you))?\s*[.!]*\s*$"
+CANCEL_RE = re.compile(
+	_CANCEL_LEAD + r"(?:" + _CANCEL_VERB + r"(?:\s+[a-z']+){0,5}|" + _CANCEL_OTHER + r")" + _CANCEL_TAIL, re.I
+)
+# The same request naming nothing else: with nothing in progress it is answered as such, never routed as a document request.
+BARE_CANCEL_RE = re.compile(
+	_CANCEL_LEAD
+	+ r"(?:"
+	+ _CANCEL_VERB
+	+ r"(?:\s+(?:it|this|that|this\s+one|now|everything|all|creating(?:\s+(?:it|this|that))?"
+	r"|the\s+(?:creation|process|workflow|form|draft|request|task)))?|" + _CANCEL_OTHER + r")" + _CANCEL_TAIL,
+	re.I,
+)
+CANCELLED_EXTRACTION = "Cancelled in the chat before it was read; nothing was created."
 RESTART_RE = re.compile(
 	r"^\s*(?:please\s+)?(?:start\s+(?:over|again|from\s+scratch)|restart|begin\s+again|reset)\b", re.I
 )
@@ -212,19 +247,36 @@ class Ctx:
 		)
 		self.answering_sig = None  # several questions in one reply: only the first can be a repeat
 		self.st["ask_sig"] = {"sig": sig, "count": count}
+		cancel = self._cancel_choice(kind, options)
 		if count >= LOOP_THRESHOLD:
 			from ai_erpnext.ai.errors import get_ai_logger
 
 			get_ai_logger().warning(f"AI-CHAT loop_detected kind={kind} repeats={count}")
 			text = LOOP_RECOVERY.format(question=text)
-			if not any(o.get("value") == "__cancel__" for o in options):
+			if not cancel and not any(o.get("value") == "__cancel__" for o in options):
 				options.append({"label": "Cancel", "value": "__cancel__", "style": "secondary"})
 		q = {"id": uuid.uuid4().hex[:12], "kind": kind, "key": key, "options": options, "input": input}
+		if cancel:
+			q["cancel"] = cancel
 		self.st["pending"] = q
 		self.say(text, question={k: v for k, v in q.items() if k != "key"}, **extra)
 		return q
 
+	def _cancel_choice(self, kind, options):
+		"""The Cancel shown with every question of a workflow (and of a lookup), in the same choice area as its options,
+		unless the question already offers one. "__cancel_all__" always cancels the whole workflow, also from a question of
+		a record created on the way (whose own "__cancel__" only goes back to the outer document)."""
+		if any(str(o.get("label") or "").strip().lower() == "cancel" for o in options):
+			return None
+		if kind.startswith("query_"):
+			return {"label": "Cancel", "value": "__cancel__"}
+		if workflow.kind(self.st):
+			return {"label": "Cancel", "value": "__cancel_all__"}
+		return None
+
 	def save(self):
+		workflow.sync(self)
+		workflow.current(self)  # a workflow from before workflows had ids gets one, stored with the state
 		S.save(self.doc, self.msgs, self.st)
 
 	def payload(self, since=None):
@@ -235,6 +287,7 @@ class Ctx:
 			"messages": history.recheck([m for m in self.msgs if m["id"] > since], self.loaded_seq),
 			"busy": self.st.get("phase") == "extracting",
 			"pending_id": pending["id"] if pending else None,
+			"workflow": workflow.describe(self),  # the Cancel control of the workflow in progress, if any
 		}
 
 
@@ -286,6 +339,9 @@ def handle_message(ctx, text=None, file_url=None, action=None, client_id=None, c
 		if command == "more":
 			ctx.user("Show more")
 			return _more(ctx)
+		if command == "cancel":  # the Cancel control of a workflow, bound to that workflow's id
+			ctx.user("Cancel")
+			return _cancel(ctx, workflow_id=clean_text(action.get("workflow_id"), 40) or None)
 		if command == "say":  # suggestion buttons send ordinary text
 			text = clean_text(action.get("value"), MAX_TEXT)
 			if text:
@@ -396,7 +452,7 @@ def _on_image(ctx, attachment, text):
 		ctx.st["queued_file"] = attachment["file_url"]
 		ctx.ask(
 			"replace_operation",
-			"You're still working on another document. Do you want to set it aside and start on this new one?",
+			"You're still working on another document. Do you want to cancel it and start on this new one?",
 			options=[
 				{"label": "Start the new document", "value": "__new__"},
 				{"label": "Keep working on the current one", "value": "__keep__"},
@@ -413,11 +469,15 @@ def _on_action(ctx, action):
 		if pending:
 			_reask(ctx)
 		return
+	if action.get("value") == "__cancel_all__":
+		return _cancel(ctx)
 	return _answer(ctx, pending, clean_text(action.get("value"), 200), from_text=False)
 
 
 def _on_text(ctx, text):
-	if CANCEL_RE.match(text):
+	if CANCEL_RE.match(text) and (
+		workflow.kind(ctx.st) or ctx.st.get("pending") or BARE_CANCEL_RE.match(text)
+	):
 		return _cancel(ctx)
 	if RESTART_RE.match(text):
 		return _restart(ctx)
@@ -484,7 +544,10 @@ def _on_text(ctx, text):
 			or hr.APPLY_RE.match(text)
 			or shortcuts.field_question(text)
 			or (ctx.page and page_context.classify(text, ctx.page))
-		) and not (pending["kind"] in search_kinds and re.match(r"^\s*(find|search)\b", text, re.I))
+		) and not (
+			(pending["kind"] in search_kinds and re.match(r"^\s*(find|search)\b", text, re.I))
+			or forms.creates_new_for(ctx, pending, text)
+		)
 		if not is_general:
 			return _answer(ctx, pending, text, from_text=True)
 		_general(ctx, text)
@@ -530,7 +593,7 @@ def _reask_if_pending(ctx):
 # --------------------------------------------------------------------------------------------
 def _general(ctx, text):
 	from ai_erpnext.ai.errors import AIProviderError
-	from ai_erpnext.chat import capabilities, claims, llm, shortcuts
+	from ai_erpnext.chat import capabilities, claims, company, llm, shortcuts
 
 	# Questions about the page the user has open (“explain this invoice”, “compare the selected orders”) are answered from server data.
 	if page_context.answer(ctx, text):
@@ -584,7 +647,16 @@ def _general(ctx, text):
 	if mode == "chat" and via == "model" and page_context.asks_for_open_record(text, ctx.page):
 		# The model can't see the open form and says so; the record's saved data is the answer the user asked for.
 		return page_context.explain_open_record(ctx)
-	if mode == "chat":
+	if (
+		mode == "chat"
+		and via == "model"
+		and "```" in (plan.get("reply") or "")
+		and not ERP_TOPIC_RE.search(text)
+	):
+		mode = "off_topic"  # general programming help, whatever the model decided
+	if mode == "off_topic":
+		ctx.say(OFF_TOPIC)
+	elif mode == "chat":
 		reply = plan.get("reply") or "How can I help?"
 		if via == "model":
 			reply = claims.guard(reply, text, "chat")  # model text never states data or completed actions
@@ -646,8 +718,15 @@ def _general(ctx, text):
 		_open_result(ctx, plan.get("index"))
 	elif mode == "more":
 		_more(ctx)
+	elif mode == "records":
+		_which_records(ctx, plan.get("limit"))
+	elif mode == "company":
+		_company(ctx)
 	elif mode == "query":
 		query = plan.get("query")
+		if isinstance(query, dict) and company.is_company_doctype(query.get("doctype")):
+			# "my company" planned as a Company query: answered from the user's own companies
+			return _company(ctx)
 		if isinstance(query, dict) and query.get("ref") == OPEN_RECORD:
 			query = _open_record_query(ctx, query)
 			if query is None:
@@ -656,6 +735,33 @@ def _general(ctx, text):
 			query = _resolve_ref(ctx, query)
 		_run_query(ctx, query)
 		_unapplied_page_filters(ctx, query)
+
+
+def _which_records(ctx, limit=None):
+	"""Records of no named kind ("show 100000 records"): ask which, never reuse the previous query's DocType or filters."""
+	from ai_erpnext.chat import queries, shortcuts
+
+	# a new topic: a reply such as "invoices" must not inherit the earlier filters
+	ctx.st["last_query"] = None
+	text = shortcuts.RECORDS_QUESTION
+	if limit and limit > queries.MAX_PAGE:
+		text += (
+			f" Note: I show at most {queries.MAX_PAGE} records per message (you asked for {limit}); "
+			"use “Show more” for the next ones, or open the list in ERPNext to see or export all of them."
+		)
+	ctx.say(
+		text, suggestions=["Show customers", "Show sales invoices", "Show sales orders"], source="clarify"
+	)
+
+
+def _company(ctx):
+	from ai_erpnext.chat import company
+
+	answer = company.answer()
+	if answer["names"]:
+		ctx.say(answer["text"], source="erpnext", ref={"doctype": "Company", "names": answer["names"]})
+	else:
+		ctx.say(answer["text"])
 
 
 def _start_form(ctx, doctype, values=None, items=None):
@@ -1020,7 +1126,7 @@ def _more(ctx):
 	):
 		ctx.say("There's no list to continue. Ask me for some records first.")
 		return
-	q = dict(last["plan"], offset=last["plan"]["offset"] + last["plan"]["limit"])
+	q = dict(last["plan"], offset=last["plan"]["offset"] + last["plan"]["limit"], requested_limit=None)
 	if q["offset"] > 500:
 		ctx.say("That's as far as I can page in the chat. Please open the list in ERPNext for more.")
 		return
@@ -1172,24 +1278,58 @@ def _start_extraction(ctx, file_url):
 		}
 	)
 	ctx.doc.active_entry = entry.name
+	workflow.begin(ctx, "image")
 	ctx.say("Thanks. I'm reading the invoice now; this usually takes a few seconds.")
 
 
-def _cancel(ctx):
+def _cancel(ctx, workflow_id=None):
+	"""Cancel the workflow (or lookup question) in progress. Deterministic, no AI call, and idempotent: a repeated Cancel finds
+	nothing in progress and says so. workflow_id: from the Cancel control; one of a workflow that already ended (finished,
+	cancelled or replaced) never cancels the current one. Only collected answers are discarded: records created on the way
+	stay and are named (chat/workflow.py)."""
 	ctx.st["ask_sig"] = ctx.answering_sig = None
+	wf = workflow.current(ctx)
+	if workflow_id and wf and wf["id"] != workflow_id:
+		ctx.say(
+			"That Cancel belonged to an earlier task, which has already ended. The current one is unchanged."
+		)
+		return _reask_if_pending(ctx)
+	ctx.st["queued_file"] = None  # an image waiting to replace the cancelled work is dropped with it
 	pending = ctx.st.get("pending")
-	if pending and pending["kind"].startswith("query_"):
+	if not wf and pending and pending["kind"].startswith("query_"):
 		ctx.st["pending"] = None
 		ctx.say("OK, I've stopped that lookup.")
 		return
-	if forms.active(ctx):
+	if wf and wf["kind"] == "form":
 		return forms.cancel(ctx)
-	if not ctx.st.get("entry") or ctx.st.get("phase") in (None, "done", "cancelled"):
-		ctx.st["pending"] = None
-		ctx.say("There's nothing in progress to cancel.")
+	if wf:
+		created = list(wf.get("created") or [])
+		_stop_extraction(ctx)
+		ctx.st.update({"phase": "cancelled", "pending": None, "master": None})
+		ctx.say(
+			workflow.cancelled_text(None, created) + " Attach another document whenever you're ready.",
+			links=workflow.links(created) or None,
+		)
 		return
-	ctx.st.update({"phase": "cancelled", "pending": None, "master": None})
-	ctx.say("Cancelled. Nothing was created. Attach another invoice whenever you're ready.")
+	ctx.st["pending"] = None
+	users = [m["id"] for m in ctx.msgs if m["role"] == "user"]
+	done = workflow.finished_text(ctx, users[-2] if len(users) > 1 else 0)
+	if done:
+		ctx.say(done, links=workflow.links([ctx.st["finished"]]))
+		return
+	ctx.say("There's nothing in progress to cancel.")
+
+
+def _stop_extraction(ctx):
+	"""A cancelled image workflow whose document is still being read: an extraction job that hasn't started must not run.
+	The job skips entries that are no longer Pending, and one already running doesn't store its result (pipeline/controller.py)."""
+	if ctx.st.get("phase") != "extracting":
+		return
+	entry = _entry(ctx)
+	if entry and entry.status == "Pending" and not entry.created_document:
+		entry.status = "Failed"
+		entry.error_log = CANCELLED_EXTRACTION
+		entry.save()
 
 
 def _restart(ctx):
@@ -2033,6 +2173,13 @@ def _answer_master_choice(ctx, key, value, from_text):
 	is_item = key.startswith("item_") or key == "bom_item"
 	results = load_json(entry.mapping_results, {}) or {}
 	res = results.get(key) or {}
+	if from_text and forms.NONE_RE.match(value or ""):
+		# "no" to the records offered is not a name to search for (nor to create)
+		ctx.say(
+			f"OK, none of these. Type the {'item' if is_item else key}'s name (or part of it) to search, choose "
+			"“Create new …” to add a new one, or press Cancel to stop."
+		)
+		return advance(ctx)
 	if value == "__create__" or (
 		from_text
 		and CREATE_NEW_RE.search(value)
@@ -2230,6 +2377,7 @@ def _answer_master(ctx, pending, value):
 			ctx.say(f"ERPNext didn't accept the {draft['doctype'].lower()}: {_safe_error(e)}")
 			return _master_next(ctx)
 		ctx.st["master"] = None
+		workflow.note_created(ctx, draft["doctype"], name)
 		ctx.say(
 			f"{draft['doctype']} {name} created.",
 			card={
@@ -2270,6 +2418,7 @@ def _create_document(ctx):
 	notes = forms.erpnext_notes()
 	if notes:
 		ctx.say("ERPNext notes: " + " ".join(notes))
+	workflow.finish(ctx, doc.doctype, doc.name)
 	ctx.st.update({"phase": "done", "pending": None, "created": {"doctype": doc.doctype, "name": doc.name}})
 	status = "Draft" if doc.docstatus == 0 else ("Submitted" if doc.docstatus == 1 else "Cancelled")
 	label = result.get("label") or doc.doctype

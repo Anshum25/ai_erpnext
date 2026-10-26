@@ -366,7 +366,8 @@ class TestChatGuided(IntegrationTestCase):
 		last = self.last(r)
 		self.assertIn("I still don't have a value I can use here", last["text"])
 		self.assertIn("How many of AIG Bottle?", last["text"])  # says what is still missing
-		self.assertIn("__cancel__", [o["value"] for o in last["question"]["options"]])
+		# the way out: every question of a workflow carries its Cancel (chat/workflow.py)
+		self.assertEqual(last["question"]["cancel"], {"label": "Cancel", "value": "__cancel_all__"})
 		self.assertEqual(self.pending()["key"], "qty")  # nothing was discarded
 		r = self.say("3")
 		self.assertEqual(self.form()["draft_item"]["qty"], 3)
